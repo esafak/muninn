@@ -105,6 +105,11 @@ export const Quartermaster = Rpc.define({
       input: z.object({ directory: z.string(), branch: z.string() }),
       output: z.object({ runs: z.array(RunEntity), prs: z.array(PullEntity) }),
     },
+    /** Build identity of the loaded server part, for the GUI's debug footer. */
+    debug: {
+      input: z.object({}),
+      output: z.object({ server: z.string(), directory: z.string() }),
+    },
   },
   events: {},
 })

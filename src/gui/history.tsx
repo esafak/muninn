@@ -18,6 +18,8 @@ export interface HistoryProps {
   unresolved: Accessor<number>
   /** The last refresh failure, shown so hydration problems are never silent. */
   error: Accessor<string | null>
+  /** Build + pill-gate diagnostics, rendered as the panel footer. */
+  debug: Accessor<string>
   sessionReady: Accessor<boolean>
   onOpen: (url: string) => void
 }
@@ -159,6 +161,7 @@ export const History = (props: HistoryProps) => {
           )}
         </For>
       </Show>
+      <div class="qm-debug">{props.debug()}</div>
     </div>
   )
 }

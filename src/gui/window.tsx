@@ -30,6 +30,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     authenticated: false,
     unresolved: 0,
     error: null as string | null,
+    debug: null as string | null,
   })
   const DAY_MS = 24 * 60 * 60 * 1000
   // Hydrated entities, seeded from the durable cache (global stores load before
@@ -160,6 +161,9 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     } catch (error) {
       setMeta("error", error instanceof Error ? error.message : String(error))
     }
+
+    const dbg = await client.rpc(Quartermaster).debug({}).catch(() => null)
+    setMeta("debug", dbg ? `srv ${dbg.server}` : "srv ?")
   }
 
   // Session (or its directory) changed: re-read everything.
@@ -217,6 +221,13 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     chain.runs.some((run) => run.status === "queued" || run.status === "running" || run.status === "failed") ||
     (chain.pr === undefined && chain.issue?.state === "open") ||
     (chain.pr === undefined && chain.issue === undefined && Date.now() - chain.updatedAt < DAY_MS)
+
+  // Diagnostics footer: which builds are loaded, and the pill-gate state at a glance.
+  const debugLine = () => {
+    const gate = session()?.id === meta.sessionID ? "session ✓" : "session ✗"
+    const liveCount = chains().filter((chain) => live(chain)).length
+    return `qm gui ${__QM_BUILD__}${meta.debug ? ` · ${meta.debug}` : " · srv ?"} · ${chains().length} chains · ${liveCount} live · pill gate: ${gate}`
+  }
 
   ctx.add(ComposerPill, {
     id: "links",
@@ -323,6 +334,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
             authenticated={() => meta.authenticated}
             unresolved={() => meta.unresolved}
             error={() => meta.error}
+            debug={debugLine}
             sessionReady={sessionReady}
             onOpen={open}
           />
@@ -444,6 +456,12 @@ const STYLES = `
 }
 .qm-foot-ago { margin-left: auto; }
 .qm-empty { color: var(--v2-text-text-faint); font-size: 11px; padding: 6px 4px; }
+.qm-debug {
+  flex: none; padding: 6px 12px 0;
+  font-family: var(--v2-font-family-code); font-size: 9.5px;
+  color: var(--v2-text-text-faint);
+  border-top: 1px dashed var(--v2-border-border-muted);
+}
 .qm-spin {
   width: 11px; height: 11px; border-radius: 50%; flex: none;
   border: 1.5px solid var(--v2-border-border-strong); border-top-color: var(--v2-text-text-accent);

@@ -5,12 +5,29 @@
  * Providers register here; dispatch is by claimed host.
  */
 
-import { Plugin } from "@opencode/plugin"
+import { Credential, Plugin } from "@opencode/plugin"
 import { github } from "./providers/github"
 import type { Ref, RepoRef } from "./model"
 import type { SourceProvider } from "./providers/types"
 import { readRemote } from "./remote"
 import { Quartermaster } from "./rpc"
+import { execFile } from "node:child_process"
+import { promisify } from "node:util"
+
+const exec = promisify(execFile)
+/** The plugin directory on disk (…/src), for stamping the server build. */
+const pluginRoot = new URL("..", import.meta.url).pathname
+
+let serverSha: string | undefined
+const serverBuild = async (): Promise<string> => {
+  if (serverSha) return serverSha
+  try {
+    serverSha = (await exec("git", ["-C", pluginRoot, "rev-parse", "--short", "HEAD"], { timeout: 5_000 })).stdout.trim()
+  } catch {
+    serverSha = "unknown"
+  }
+  return serverSha
+}
 
 /** Every source provider Quartermaster ships. GitLab and friends join this array. */
 const sources: readonly SourceProvider[] = [github]
@@ -72,6 +89,7 @@ export default Plugin.define({
         const result = await source.branchRuns(repo, input.branch, () => source.auth(ctx)).catch(() => ({ runs: [], prs: [] }))
         return { runs: result.runs, prs: result.prs }
       },
+      debug: async () => ({ server: await serverBuild(), directory: pluginRoot }),
     })
   },
 })
