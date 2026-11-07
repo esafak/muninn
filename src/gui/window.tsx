@@ -1,6 +1,6 @@
 import { createEffect, createMemo, createSignal, onCleanup, Show } from "solid-js"
 import { createStore } from "solid-js/store"
-import { ComposerPill, Panel, createKeyed, type Plugin } from "@opencode/plugin/gui"
+import { ComposerPill, MenuItem, Panel, createKeyed, type Plugin } from "@opencode/plugin/gui"
 import { associate } from "../associate"
 import { scan, textToScan } from "../extract"
 import type { Chain, Entity, RepoRef, RunEntity } from "../model"
@@ -174,6 +174,22 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
         }),
       }
     },
+  })
+
+  // Launcher: the side region's + menu lists Quartermaster so the tab can be opened.
+  ctx.add(MenuItem, (): MenuItem => {
+    const current = ctx.sessions.current()
+
+    return {
+      menu: "session.panel",
+      id: "open",
+      title: ctx.t("tab.title"),
+      icon: pillIcon(meta.provider),
+      opened: !!current && ctx.layout.state(`${ctx.id}:history`, current) !== "closed",
+      run: () => {
+        if (current) ctx.layout.open(`${ctx.id}:history`, current)
+      },
+    }
   })
 
   // ── Component 2: the history panel in the side region ───────────────────
