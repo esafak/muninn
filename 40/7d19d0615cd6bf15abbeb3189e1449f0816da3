@@ -1,0 +1,24 @@
+src/env.d.ts
+  h_ea91e2db23540f 1-3
+src/gui/history.tsx
+  h_ea91e2db23540f 21-22,164
+src/gui/window.tsx
+  h_ea91e2db23540f 33,164-166,225-231,337,459-464
+src/index.ts
+  h_ea91e2db23540f 8,14-30,92
+src/rpc.ts
+  h_ea91e2db23540f 108-112
+vite.config.ts
+  h_ea91e2db23540f 1,5-12,15
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "407d19d0615cd6bf15abbeb3189e1449f0816da3",
+  "prompts": {},
+  "humans": {
+    "h_ea91e2db23540f": {
+      "author": "Emre Şafak <3928300+esafak@users.noreply.github.com>"
+    }
+  }
+}
