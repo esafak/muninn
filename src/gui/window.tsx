@@ -477,7 +477,9 @@ const STYLES = `
   font-family: var(--v2-font-family-code); font-size: 9.5px;
   color: var(--v2-text-text-faint);
   border-top: 1px dashed var(--v2-border-border-muted);
+  user-select: text; cursor: pointer;
 }
+.qm-debug:hover { color: var(--v2-text-text-muted); }
 .qm-spin {
   width: 11px; height: 11px; border-radius: 50%; flex: none;
   border: 1.5px solid var(--v2-border-border-strong); border-top-color: var(--v2-text-text-accent);
