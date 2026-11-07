@@ -4,7 +4,7 @@ import { ComposerPill, MenuItem, Panel, createKeyed, type Plugin } from "@openco
 import { associate } from "../associate"
 import { scan, textToScan } from "../extract"
 import type { Chain, Entity, RepoRef, RunEntity } from "../model"
-import { chainTone, repoKey } from "../model"
+import { chainTone, refKey, repoKey } from "../model"
 import { githubLexicon } from "../providers/github/lexicon"
 import { Quartermaster } from "../rpc"
 import type { definition } from "./definition"
@@ -29,7 +29,23 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     authenticated: false,
     unresolved: 0,
   })
-  const [entities, setEntities] = createStore<Record<string, Entity>>({})
+  // Hydrated entities, seeded from the durable cache (global stores load before
+  // setup) and written through on every merge, so session reopen renders instantly.
+  // The store's decoded type is the readonly flavor of model.Entity — we only ever
+  // read through it here.
+  const cached = (): Record<string, Entity> => ctx.stores.cache.value.entries as Record<string, Entity>
+  const [entities, setEntities] = createStore<Record<string, Entity>>(cached())
+
+  const merge = (hydrated: readonly Entity[]) => {
+    setEntities((previous) => {
+      const next = { ...previous }
+      for (const entity of hydrated) next[entityKey(entity)] = entity
+      return next
+    })
+    ctx.stores.cache.update((draft) => {
+      for (const entity of hydrated) draft.entries[entityKey(entity)] = entity
+    })
+  }
   const [runs, setRuns] = createStore<Record<string, readonly RunEntity[]>>({})
   const [chains, setChains] = createSignal<readonly Chain[]>([])
   const [sessionReady, setSessionReady] = createSignal(false)
@@ -48,7 +64,12 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
 
   const rechain = () => {
     const repo = meta.repo
-    setChains(associate(Object.values(entities), repo ? (runs[repoKey(repo)] ?? []) : []))
+    // Chains are session-associated: only entities this session's transcript
+    // references join, joined against the (global, durable) entity cache.
+    const relevant = refs()
+      .map((ref) => entities[refKey(ref)])
+      .filter((entity): entity is Entity => entity !== undefined)
+    setChains(associate(relevant, repo ? (runs[repoKey(repo)] ?? []) : []))
   }
 
   const open = (url: string) => ctx.system.openExternal(url)
@@ -77,11 +98,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     const found = refs()
     if (found.length > 0) {
       const { entities: hydrated, unresolved } = await client.rpc(Quartermaster).hydrate({ directory: current.directory, refs: found })
-      setEntities((previous) => {
-        const next = { ...previous }
-        for (const entity of hydrated) next[entityKey(entity)] = entity
-        return next
-      })
+      merge(hydrated)
       setMeta("unresolved", unresolved.length)
     }
     if (branch) {
@@ -95,7 +112,9 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
   createKeyed(
     () => `${session()?.key ?? ""}\n${session()?.directory ?? ""}`,
     () => {
-      setEntities({})
+      // Entities persist across sessions (they are repo-keyed): reseed from the
+      // durable cache rather than clearing.
+      setEntities(cached())
       setRuns({})
       setChains([])
       setSessionReady(false)
@@ -116,11 +135,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
         .rpc(Quartermaster)
         .hydrate({ directory: current.directory, refs: found })
         .then(({ entities: hydrated, unresolved }) => {
-          setEntities((previous) => {
-            const next = { ...previous }
-            for (const entity of hydrated) next[entityKey(entity)] = entity
-            return next
-          })
+          merge(hydrated)
           setMeta("unresolved", unresolved.length)
           rechain()
         })
