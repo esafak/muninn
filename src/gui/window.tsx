@@ -31,6 +31,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     unresolved: 0,
     error: null as string | null,
     debug: null as string | null,
+    stats: null as string | null,
   })
   const DAY_MS = 24 * 60 * 60 * 1000
   // Hydrated entities, seeded from the durable cache (global stores load before
@@ -145,11 +146,13 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
 
       const found = refs()
       if (found.length > 0) {
-        const { entities: hydrated, unresolved } = await client
-          .rpc(Quartermaster)
-          .hydrate({ directory: current.directory, refs: found })
-        merge(hydrated)
-        setMeta("unresolved", unresolved.length)
+        const result = await client.rpc(Quartermaster).hydrate({ directory: current.directory, refs: found })
+        merge(result.entities)
+        setMeta("unresolved", result.unresolved.length)
+        const byKind = new Map<string, number>()
+        for (const entity of result.entities) byKind.set(entity.kind, (byKind.get(entity.kind) ?? 0) + 1)
+        const breakdown = [...byKind].map(([kind, count]) => `${count} ${kind}`).join(", ") || "none"
+        setMeta("stats", `${found.length} refs → ${result.entities.length} hydrated (${breakdown}) · ${result.unresolved.length} unresolved`)
       }
       if (branch) {
         const { runs: branchRuns, prs } = await client.rpc(Quartermaster).branchRuns({ directory: current.directory, branch })
@@ -236,7 +239,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
           : list[0]!.runs[0]
             ? `run #${list[0]!.runs[0].id}`
             : "off"
-    return `qm gui ${__QM_BUILD__}${meta.debug ? ` · ${meta.debug}` : " · srv ?"} · gate ${gate} · chains ${chains().length} · live ${list.length} · pill: ${pill}`
+    return `qm gui ${__QM_BUILD__}${meta.debug ? ` · ${meta.debug}` : " · srv ?"} · gate ${gate} · chains ${chains().length} · live ${list.length} · pill: ${pill}${meta.stats ? ` · ${meta.stats}` : ""}`
   }
 
   ctx.add(ComposerPill, {
