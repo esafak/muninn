@@ -7,6 +7,8 @@ import type { definition } from "./definition"
 import { Mark } from "./marks"
 import { CancelledGlyph, CheckGlyph, CrossGlyph, IssueGlyph, MergedGlyph, PullGlyph, QueuedGlyph } from "./icons"
 
+const DAY_MS = 24 * 60 * 60 * 1000
+
 export interface HistoryProps {
   chains: Accessor<readonly Chain[]>
   repo: Accessor<RepoRef | null>
@@ -40,6 +42,17 @@ export const History = (props: HistoryProps) => {
     if (next.has(key)) next.delete(key)
     else next.add(key)
     setExpanded(next)
+  }
+
+  const [copied, setCopied] = createSignal<string | null>(null)
+  const copyTimer = { id: undefined as ReturnType<typeof setTimeout> | undefined }
+  /** Copies an id on click without triggering the row's open action, flashing ✓. */
+  const copyId = (event: MouseEvent, text: string, key: string) => {
+    event.stopPropagation()
+    void ctx.system.copy(text).catch(() => undefined)
+    setCopied(key)
+    clearTimeout(copyTimer.id)
+    copyTimer.id = setTimeout(() => setCopied(null), 900)
   }
 
   return (
@@ -82,7 +95,7 @@ export const History = (props: HistoryProps) => {
               <Show when={index() === 0 || !sameDay(props.chains()[index() - 1]!.updatedAt, chain.updatedAt)}>
                 <div class="qm-day">{dayLabel(chain.updatedAt)}</div>
               </Show>
-              <div class="qm-chain" data-tone={chainTone(chain)}>
+              <div class="qm-chain" data-tone={chainTone(chain)} data-stale={Date.now() - chain.updatedAt > DAY_MS}>
                 <Show when={chain.issue}>
                   {(issue) => (
                     <div class="qm-row" onClick={() => props.onOpen(issue().url)}>
@@ -92,7 +105,14 @@ export const History = (props: HistoryProps) => {
                       <span class="qm-kind" data-state={`issue-${issue().state}`} title={ctx.t(`state.${issue().state}`)}>
                         <IssueGlyph closed={issue().state === "closed"} />
                       </span>
-                      <span class="qm-id">#{issue().number}</span>
+                      <span
+                        class="qm-id"
+                        classList={{ copied: copied() === `i${chain.key}` }}
+                        title="Click to copy"
+                        onClick={(event) => copyId(event, `#${issue().number}`, `i${chain.key}`)}
+                      >
+                        {copied() === `i${chain.key}` ? "✓" : `#${issue().number}`}
+                      </span>
                       <span class="qm-title">{issue().title}</span>
                     </div>
                   )}
@@ -109,7 +129,14 @@ export const History = (props: HistoryProps) => {
                           <MergedGlyph />
                         </Show>
                       </span>
-                      <span class="qm-id">#{pull().number}</span>
+                      <span
+                        class="qm-id"
+                        classList={{ copied: copied() === `p${chain.key}` }}
+                        title="Click to copy"
+                        onClick={(event) => copyId(event, `#${pull().number}`, `p${chain.key}`)}
+                      >
+                        {copied() === `p${chain.key}` ? "✓" : `#${pull().number}`}
+                      </span>
                       <span class="qm-title">{pull().title}</span>
                     </div>
                   )}
@@ -117,7 +144,16 @@ export const History = (props: HistoryProps) => {
 
                 <For each={chain.runs}>
                   {(run) => (
-                    <RunRow run={run} chainKey={chain.key} expanded={expanded} onToggle={toggle} onOpen={props.onOpen} label={ctx.t} />
+                    <RunRow
+                      run={run}
+                      chainKey={chain.key}
+                      expanded={expanded}
+                      onToggle={toggle}
+                      onOpen={props.onOpen}
+                      copy={copyId}
+                      copied={copied}
+                      label={ctx.t}
+                    />
                   )}
                 </For>
 
@@ -141,9 +177,12 @@ const RunRow = (props: {
   expanded: Accessor<ReadonlySet<string>>
   onToggle: (key: string) => void
   onOpen: (url: string) => void
+  copy: (event: MouseEvent, text: string, key: string) => void
+  copied: Accessor<string | null>
   label: (key: string) => string
 }): JSX.Element => {
   const key = () => `${props.chainKey}#${props.run.id}`
+  const copied = () => props.copied() === `r${key()}`
 
   return (
     <>
@@ -152,7 +191,16 @@ const RunRow = (props: {
           <StatusGlyph status={props.run.status} />
         </span>
         <span class="qm-title">
-          run #{props.run.id} · {props.run.name}
+          run{" "}
+          <span
+            class="qm-id"
+            classList={{ copied: copied() }}
+            title="Click to copy"
+            onClick={(event) => props.copy(event, String(props.run.id), `r${key()}`)}
+          >
+            {copied() ? "✓" : `#${props.run.id}`}
+          </span>{" "}
+          · {props.run.name}
         </span>
         <span class="qm-meta">{time(props.run.updatedAt)}</span>
         <span

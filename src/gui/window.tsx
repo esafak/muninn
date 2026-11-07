@@ -1,6 +1,6 @@
 import { createEffect, createMemo, createSignal, onCleanup, Show } from "solid-js"
 import { createStore } from "solid-js/store"
-import { ComposerPill, MenuItem, Panel, createKeyed, type Plugin } from "@opencode/plugin/gui"
+import { ComposerPill, MenuItem, Panel, createKeyed, type IconName, type Plugin } from "@opencode/plugin/gui"
 import { associate } from "../associate"
 import { scan, textToScan } from "../extract"
 import type { Chain, Entity, RepoRef, RunEntity } from "../model"
@@ -211,35 +211,49 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
 
       const worst = list.find((chain) => chainTone(chain) === "danger") ?? list[0]!
       const primary = worst.pr ?? worst.issue
-      const failing = worst.runs.find((run) => run.status === "failed")
 
       return {
         icon: pillIcon(meta.provider),
         label: primary
-          ? `#${primary.number} ${failing ? ctx.t("state.failed") : ctx.t(`state.${worst.pr ? worst.pr.state : worst.issue!.state}`)}`
+          ? `#${primary.number} ${primary.title}`
           : `run #${worst.runs[0]!.id} · ${ctx.t(`state.${worst.runs[0]!.status}`)}`,
         tone: chainTone(worst),
         title: ctx.t("pill.title"),
-        rows: list.slice(0, 5).map((chain) => {
+        rows: list.slice(0, 3).flatMap((chain) => {
           const entity = chain.pr ?? chain.issue
-          const run = chain.runs[0]
-          return {
-            id: chain.key,
-            label: entity
-              ? `#${entity.number} ${entity.title}`
-              : `run #${run!.id} ${run!.name} · ${ctx.t(`state.${run!.status}`)}`,
-            icon:
-              run?.status === "failed"
-                ? "circle-xmark"
-                : run?.status === "running"
-                  ? "outline-rotate-clockwise"
-                  : run?.status === "succeeded"
-                    ? "check"
-                    : pillIcon(meta.provider),
-            tone: chainTone(chain),
-            detail: chain.pr ? chain.pr.headBranch : undefined,
-            run: () => open((entity ?? run)?.url ?? ""),
-          }
+          const rows: {
+            id: string
+            label: string
+            icon: IconName
+            tone?: "success" | "warning" | "danger"
+            detail?: string
+            run: () => void
+          }[] = []
+          if (entity)
+            rows.push({
+              id: `${chain.key}:entity`,
+              label: `#${entity.number} ${entity.title}`,
+              icon: pillIcon(meta.provider),
+              tone: chainTone(chain),
+              detail: chain.pr ? chain.pr.headBranch : undefined,
+              run: () => open(entity.url),
+            })
+          for (const run of chain.runs.slice(0, 2))
+            rows.push({
+              id: `${chain.key}:run${run.id}`,
+              label: `run #${run.id} · ${ctx.t(`state.${run.status}`)}`,
+              icon:
+                run.status === "failed"
+                  ? "circle-xmark"
+                  : run.status === "running"
+                    ? "outline-rotate-clockwise"
+                    : run.status === "succeeded"
+                      ? "check"
+                      : pillIcon(meta.provider),
+              detail: run.name,
+              run: () => open(run.url),
+            })
+          return rows
         }),
       }
     },
@@ -344,7 +358,9 @@ const STYLES = `
 .qm-kind[data-state="pr-draft"] { color: var(--v2-icon-icon-faint); }
 .qm-kind[data-state="pr-merged"], .qm-kind[data-state="issue-closed"] { color: var(--v2-text-text-accent); }
 .qm-kind[data-state="pr-closed"] { color: var(--v2-state-fg-danger); }
-.qm-id { font-family: var(--v2-font-family-code); font-size: 11.5px; font-weight: 600; flex: none; }
+.qm-id { font-family: var(--v2-font-family-code); font-size: 11.5px; font-weight: 600; flex: none; cursor: copy; }
+.qm-id.copied { color: var(--v2-state-fg-success); }
+.qm-chain[data-stale="true"] { opacity: .55; }
 .qm-title { flex: 1; min-width: 0; font-size: 12px; color: var(--v2-text-text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .qm-meta { flex: none; font-size: 10.5px; color: var(--v2-text-text-faint); font-family: var(--v2-font-family-code); }
 .qm-state { display: inline-flex; align-items: center; gap: 4px; flex: none; font-size: 10.5px; font-family: var(--v2-font-family-code); }
