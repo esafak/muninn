@@ -68,8 +68,9 @@ export default Plugin.define({
       branchRuns: async (input) => {
         const repo = await readRemote(input.directory)
         const source = sourceFor(repo?.host)
-        if (!repo || !source) return { runs: [] }
-        return { runs: await source.branchRuns(repo, input.branch, () => source.auth(ctx)).catch(() => []) }
+        if (!repo || !source) return { runs: [], prs: [] }
+        const result = await source.branchRuns(repo, input.branch, () => source.auth(ctx)).catch(() => ({ runs: [], prs: [] }))
+        return { runs: result.runs, prs: result.prs }
       },
     })
   },

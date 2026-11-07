@@ -13,8 +13,6 @@ import { promisify } from "node:util"
 const exec = promisify(execFile)
 
 const API = "https://api.github.com"
-/** How long a hydrated entity is served from cache, in milliseconds. Keeps polling cheap. */
-const TTL_MS = 45_000
 
 // ── REST ────────────────────────────────────────────────────────────────────
 
@@ -125,17 +123,33 @@ const mergeMethods = (repo: RepoJson): MergeSettings => {
   return { methods, default: fallback, deleteBranchByDefault: repo.delete_branch_on_merge }
 }
 
-// ── Hydration ───────────────────────────────────────────────────────────────
+// ── Caching ─────────────────────────────────────────────────────────────────
+// Three tiers, by how the underlying fact changes:
+// - entity snapshots (statuses, titles) change fast — short TTL;
+// - branch → open-PR membership changes when PRs merge or close — medium TTL;
+// - run id → PR association and repo merge policy are effectively immutable —
+//   cached for the life of the process, never re-queried once learned.
+
+const ENTITY_TTL_MS = 45_000
+const BRANCH_PR_TTL_MS = 5 * 60_000
+const MERGE_TTL_MS = 10 * 60_000
 
 const cache = new Map<string, { at: number; entity?: Entity }>()
 
 const cached = async (key: string, load: () => Promise<Entity | undefined>): Promise<Entity | undefined> => {
   const hit = cache.get(key)
-  if (hit && Date.now() - hit.at < TTL_MS) return hit.entity
+  if (hit && Date.now() - hit.at < ENTITY_TTL_MS) return hit.entity
   const entity = await load()
   cache.set(key, { at: Date.now(), entity })
   return entity
 }
+
+/** run id → PR numbers. An association learned once is a fact forever. */
+const runPullsCache = new Map<string, number[]>()
+
+const branchPullsCache = new Map<string, { at: number; prs: PullEntity[] }>()
+
+const mergeSettingsCache = new Map<string, { at: number; settings?: MergeSettings }>()
 
 const hydrateOne = async (ref: Ref & { repo: RepoRef }, auth: Auth): Promise<Entity | undefined> => {
   const base = `/repos/${ref.repo.owner}/${ref.repo.repo}`
@@ -159,23 +173,43 @@ const hydrateOne = async (ref: Ref & { repo: RepoRef }, auth: Auth): Promise<Ent
   return entity
 }
 
+const toPullEntity = (repo: RepoRef, pull: PullJson): PullEntity => ({
+  kind: "pr",
+  provider: "github",
+  repo,
+  number: pull.number,
+  title: pull.title,
+  state: pull.merged_at ? "merged" : pull.draft ? "draft" : pull.state,
+  headBranch: pull.head.ref,
+  baseBranch: pull.base.ref,
+  closes: closingIssues(pull.body),
+  headSha: pull.head.sha,
+  url: pull.html_url,
+  updatedAt: epoch(pull.updated_at),
+})
+
 const hydratePull = async (repo: RepoRef, number: number, auth: Auth): Promise<PullEntity | undefined> => {
   const pull = await request<PullJson>(`/repos/${repo.owner}/${repo.repo}/pulls/${number}`, auth)
   if (!pull) return undefined
-  return {
-    kind: "pr",
-    provider: "github",
-    repo,
-    number: pull.number,
-    title: pull.title,
-    state: pull.merged_at ? "merged" : pull.draft ? "draft" : pull.state,
-    headBranch: pull.head.ref,
-    baseBranch: pull.base.ref,
-    closes: closingIssues(pull.body),
-    headSha: pull.head.sha,
-    url: pull.html_url,
-    updatedAt: epoch(pull.updated_at),
-  }
+  return toPullEntity(repo, pull)
+}
+
+/**
+ * Open PRs whose head matches `branch` — the association for push-triggered runs,
+ * whose pull_requests array comes back empty.
+ */
+const pullsForBranch = async (repo: RepoRef, branch: string, auth: Auth): Promise<PullEntity[]> => {
+  const key = `${repo.owner}/${repo.repo}:${branch}`
+  const hit = branchPullsCache.get(key)
+  if (hit && Date.now() - hit.at < BRANCH_PR_TTL_MS) return hit.prs
+
+  const pulls = await request<PullJson[]>(
+    `/repos/${repo.owner}/${repo.repo}/pulls?head=${encodeURIComponent(`${repo.owner}:${branch}`)}&state=open&per_page=5`,
+    auth,
+  )
+  const prs = (pulls ?? []).map((pull) => toPullEntity(repo, pull))
+  branchPullsCache.set(key, { at: Date.now(), prs })
+  return prs
 }
 
 const runEntity = async (repo: RepoRef, run: RunJson, auth: Auth, withChecks: boolean): Promise<RunEntity> => {
@@ -265,8 +299,14 @@ export const github: SourceProvider = {
   auth: (ctx) => resolveToken(ctx as Plugin.Context),
 
   mergeSettings: async (repo, auth) => {
+    const key = `merge:${repo.owner}/${repo.repo}`
+    const hit = mergeSettingsCache.get(key)
+    if (hit && Date.now() - hit.at < MERGE_TTL_MS) return hit.settings
+
     const json = await request<RepoJson>(`/repos/${repo.owner}/${repo.repo}`, auth)
-    return json ? mergeMethods(json) : undefined
+    const settings = json ? mergeMethods(json) : undefined
+    mergeSettingsCache.set(key, { at: Date.now(), settings })
+    return settings
   },
 
   hydrate: async (refs, _sessionRepo, auth) => {
@@ -289,12 +329,21 @@ export const github: SourceProvider = {
       else unresolved.push(result.ref)
     }
 
-    // Runs belong to pull requests the session may never have mentioned; hydrate
-    // those too, so the association is visible.
+    // Runs belong to pull requests the session may never have mentioned. The
+    // association is an immutable fact: pull_requests from the run payload, else
+    // learned once from the head branch (push runs report it empty) and kept in
+    // runPullsCache forever after.
     const related = new Map<string, Ref & { repo: RepoRef }>()
     for (const entity of entities) {
       if (entity.kind !== "run") continue
-      for (const number of entity.pullRequests) {
+      const runKey = `${entity.repo.owner}/${entity.repo.repo}:${entity.id}`
+      let numbers = entity.pullRequests.length > 0 ? entity.pullRequests : runPullsCache.get(runKey)
+      if (!numbers) {
+        const prs = await pullsForBranch(entity.repo, entity.headBranch, auth).catch(() => [])
+        numbers = prs.map((pr) => pr.number)
+        runPullsCache.set(runKey, numbers)
+      }
+      for (const number of numbers) {
         const key = `${entity.repo.owner}/${entity.repo.repo}#${number}`
         if (![...unique.values()].some((ref) => ref.repo.owner === entity.repo.owner && ref.repo.repo === entity.repo.repo && ref.number === number))
           related.set(key, { kind: "pr", number, repo: entity.repo })
@@ -317,6 +366,10 @@ export const github: SourceProvider = {
       `/repos/${repo.owner}/${repo.repo}/actions/runs?branch=${encodeURIComponent(branch)}&per_page=8`,
       auth,
     )
-    return await Promise.all((runs?.workflow_runs ?? []).map((run) => runEntity(repo, run, auth, true)))
+    const runEntities = await Promise.all((runs?.workflow_runs ?? []).map((run) => runEntity(repo, run, auth, true)))
+    // Branch runs are push-triggered: their pull_requests array comes back empty,
+    // so query the branch's open PRs and let the GUI associate by head SHA.
+    const prs = await pullsForBranch(repo, branch, auth).catch(() => [] as PullEntity[])
+    return { runs: runEntities, prs }
   },
 }

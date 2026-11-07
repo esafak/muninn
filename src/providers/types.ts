@@ -5,7 +5,7 @@
  * generic kinds, statuses, and this interface's outputs.
  */
 
-import type { Entity, Ref, RepoRef, RunEntity } from "../model"
+import type { Entity, PullEntity, Ref, RepoRef, RunEntity } from "../model"
 
 export type MergeMethod = "merge" | "squash" | "rebase"
 
@@ -39,6 +39,6 @@ export interface SourceProvider {
   mergeSettings: (repo: RepoRef, auth: Auth) => Promise<MergeSettings | undefined>
   /** Hydrates references into entities; everything not hydrated is reported unresolved. */
   hydrate: (refs: readonly (Ref & { repo: RepoRef })[], sessionRepo: RepoRef | undefined, auth: Auth) => Promise<Hydration>
-  /** Recent runs of one branch — the standalone cards of the history panel. */
-  branchRuns: (repo: RepoRef, branch: string, auth: Auth) => Promise<RunEntity[]>
+  /** Recent runs of one branch plus the branch's open PRs, for GUI-side association. */
+  branchRuns: (repo: RepoRef, branch: string, auth: Auth) => Promise<{ runs: RunEntity[]; prs: PullEntity[] }>
 }

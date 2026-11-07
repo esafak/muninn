@@ -1,6 +1,7 @@
 import { createEffect, createMemo, createSignal, onCleanup, Show } from "solid-js"
+import type { JSX } from "solid-js"
 import { createStore } from "solid-js/store"
-import { ComposerPill, MenuItem, Panel, createKeyed, type IconName, type Plugin } from "@opencode/plugin/gui"
+import { ComposerPill, MenuItem, Panel, SettingsPage, createKeyed, usePlugin, type IconName, type Plugin } from "@opencode/plugin/gui"
 import { associate } from "../associate"
 import { scan, textToScan } from "../extract"
 import type { Chain, Entity, RepoRef, RunEntity } from "../model"
@@ -30,11 +31,20 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     unresolved: 0,
     error: null as string | null,
   })
+  const DAY_MS = 24 * 60 * 60 * 1000
   // Hydrated entities, seeded from the durable cache (global stores load before
   // setup) and written through on every merge, so session reopen renders instantly.
-  // The store's decoded type is the readonly flavor of model.Entity — we only ever
-  // read through it here.
-  const cached = (): Record<string, Entity> => ctx.stores.cache.value.entries as Record<string, Entity>
+  // Entries live for the configured retention days, then the lifecycle prunes them.
+  const retentionMs = () => Math.max(1, Math.round(ctx.stores.settings.value.retentionDays)) * DAY_MS
+  const cached = (): Record<string, Entity> => {
+    // The store decodes the readonly flavor; entities are only ever read here.
+    const entries = ctx.stores.cache.value.entries as Record<string, Entity>
+    const { at } = ctx.stores.cache.value
+    const cutoff = Date.now() - retentionMs()
+    const fresh: Record<string, Entity> = {}
+    for (const [key, entity] of Object.entries(entries)) if ((at[key] ?? 0) > cutoff) fresh[key] = entity
+    return fresh
+  }
   const [entities, setEntities] = createStore<Record<string, Entity>>(cached())
 
   const merge = (hydrated: readonly Entity[]) => {
@@ -44,7 +54,12 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       return next
     })
     ctx.stores.cache.update((draft) => {
-      for (const entity of hydrated) draft.entries[entityKey(entity)] = entity
+      const cutoff = Date.now() - retentionMs()
+      for (const [key, stamped] of Object.entries(draft.at)) if (stamped < cutoff) delete draft.entries[key]
+      for (const entity of hydrated) {
+        draft.entries[entityKey(entity)] = entity
+        draft.at[entityKey(entity)] = Date.now()
+      }
     })
   }
   const [runs, setRuns] = createStore<Record<string, readonly RunEntity[]>>({})
@@ -134,8 +149,9 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
         setMeta("unresolved", unresolved.length)
       }
       if (branch) {
-        const { runs: branchRuns } = await client.rpc(Quartermaster).branchRuns({ directory: current.directory, branch })
+        const { runs: branchRuns, prs } = await client.rpc(Quartermaster).branchRuns({ directory: current.directory, branch })
         setRuns(repoKey(info.repo), branchRuns)
+        merge(prs)
       }
       setMeta("error", null)
       rechain()
@@ -193,7 +209,6 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
   // (the history panel keeps it) — so backfilling an old session stays quiet.
   // Run-only chains are the exception: they exist because the session explicitly
   // referenced a run, so they stay until a day passes without activity.
-  const DAY_MS = 24 * 60 * 60 * 1000
   const live = (chain: Chain): boolean =>
     chain.pr?.state === "open" ||
     chain.pr?.state === "draft" ||
@@ -260,8 +275,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
   })
 
   // Launcher: the side region's + menu lists Quartermaster so the tab can be opened.
-  ctx.add(MenuItem, (): MenuItem => {
-    const current = ctx.sessions.current()
+  ctx.add(MenuItem, (): MenuItem => {    const current = ctx.sessions.current()
 
     return {
       menu: "session.panel",
@@ -317,6 +331,50 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       </div>
     ),
   })
+
+  // ── Settings: cache lifecycle, in the app's Settings › Extensions area ──
+  ctx.add(SettingsPage, {
+    id: "settings",
+    icon: "settings-gear",
+    get title() {
+      return ctx.t("settings.title")
+    },
+    get entries() {
+      return [
+        {
+          id: "retention",
+          title: ctx.t("settings.retention"),
+          description: ctx.t("settings.retention.description"),
+          keywords: "cache retention days history keep sidebar",
+        },
+      ]
+    },
+    render: () => <QuartermasterSettings />,
+  })
+}
+
+const QuartermasterSettings = (): JSX.Element => {
+  const ctx = usePlugin<typeof definition>()
+  const ui = ctx.ui
+  const days = () => Math.max(1, Math.round(ctx.stores.settings.value.retentionDays))
+
+  return (
+    <ui.SettingsLayout title={ctx.t("settings.title")} description={ctx.t("settings.description")}>
+      <ui.SettingsSection title={ctx.t("settings.section.caching")}>
+        <ui.SettingsRow id="retention" title={ctx.t("settings.retention")} description={ctx.t("settings.retention.description")}>
+          <ui.TextInput
+            value={String(days())}
+            label={ctx.t("settings.retention")}
+            onInput={(value) => {
+              const parsed = Number.parseInt(value, 10)
+              if (Number.isFinite(parsed)) ctx.stores.settings.update((draft) => { draft.retentionDays = Math.min(365, Math.max(1, parsed)) })
+            }}
+          />
+          <span class="qm-note" style={{ padding: "0 6px" }}>{ctx.t("settings.retention.days")}</span>
+        </ui.SettingsRow>
+      </ui.SettingsSection>
+    </ui.SettingsLayout>
+  )
 }
 
 const STYLES = `

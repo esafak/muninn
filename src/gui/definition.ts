@@ -55,7 +55,15 @@ export const definition = Plugin.define({
      * under `plugin.quartermaster.cache`, so reopening a session renders its
      * chains instantly; values were validated by the RPC boundary on the way in.
      */
-    cache: Store.global(Schema.Struct({ entries: Schema.Record(Schema.String, Entity) }), { entries: {} }),
+    cache: Store.global(
+      Schema.Struct({
+        entries: Schema.Record(Schema.String, Entity),
+        at: Schema.Record(Schema.String, Schema.Number),
+      }),
+      { entries: {}, at: {} },
+    ),
+    /** User preferences from the plugin's settings page. */
+    settings: Store.global(Schema.Struct({ retentionDays: Schema.Number }), { retentionDays: 30 }),
   },
   i18n: {
     en: {
@@ -69,6 +77,12 @@ export const definition = Plugin.define({
       "auth.note": "Public repositories only. Connect your forge in Settings › Integrations for private repos and higher rate limits.",
       "auth.unresolved": "{count} references couldn't be read — check they exist in this repo. Private repos need a forge connection or `gh auth login`.",
       "panel.error": "Couldn't reach the forge ({message}). Fix credentials or connection, then switch sessions to retry.",
+      "settings.title": "Quartermaster",
+      "settings.description": "How source references are extracted, refreshed and remembered in your sessions.",
+      "settings.section.caching": "Caching",
+      "settings.retention": "Keep history",
+      "settings.retention.description": "Days to remember pull requests, issues and runs before they age out of the sidebar and pills.",
+      "settings.retention.days": "days",
       "state.open": "open",
       "state.draft": "draft",
       "state.merged": "merged",

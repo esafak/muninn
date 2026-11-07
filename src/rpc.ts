@@ -103,7 +103,7 @@ export const Quartermaster = Rpc.define({
     /** Recent CI runs of one branch: the standalone cards of the history panel. */
     branchRuns: {
       input: z.object({ directory: z.string(), branch: z.string() }),
-      output: z.object({ runs: z.array(RunEntity) }),
+      output: z.object({ runs: z.array(RunEntity), prs: z.array(PullEntity) }),
     },
   },
   events: {},
