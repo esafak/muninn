@@ -1,0 +1,26 @@
+scratch/probe-sessions.ts
+  h_ea91e2db23540f 1-43
+src/extract.test.ts
+  h_ea91e2db23540f 2,52-72
+src/extract.ts
+  h_ea91e2db23540f 58-60,90-91,93-104
+src/gui/definition.ts
+  h_ea91e2db23540f 70
+src/gui/history.tsx
+  h_ea91e2db23540f 59-61
+src/providers/github/lexicon.ts
+  h_ea91e2db23540f 28-29,32-41
+src/providers/lexicon.ts
+  h_ea91e2db23540f 12,14-15
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "cf6374e3031a8ff98e1ff0987980c7abed908f86",
+  "prompts": {},
+  "humans": {
+    "h_ea91e2db23540f": {
+      "author": "Emre Şafak <3928300+esafak@users.noreply.github.com>"
+    }
+  }
+}
