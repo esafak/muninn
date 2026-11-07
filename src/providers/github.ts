@@ -80,6 +80,7 @@ const request = async <T>(path: string, auth: Auth): Promise<T | undefined> => {
       "user-agent": "quartermaster",
       ...(token ? { authorization: `Bearer ${token}` } : {}),
     },
+    signal: AbortSignal.timeout(20_000),
   })
   if (response.status === 404) return undefined
   if (response.status === 403 && response.headers.get("x-ratelimit-remaining") === "0")
@@ -253,14 +254,25 @@ const resolveToken = async (ctx: Plugin.Context): Promise<string | undefined> =>
 
   // The integration API is newer than some app versions; treat absence as no
   // credential rather than letting a synchronous access error reject the caller.
+  // Raced with a timeout: an integration promise that never settles in some app
+  // contexts must not hang the RPC (this froze refresh at "no response logged").
   try {
-    const connection = await ctx.integration.connection.active("github")
+    const connection = await race(ctx.integration.connection.active("github"), 5_000)
     if (!connection) return undefined
-    const credential = await ctx.integration.connection.resolve(connection)
+    const credential = await race(ctx.integration.connection.resolve(connection), 5_000)
     return tokenFrom(credential)
   } catch {
     return undefined
   }
+}
+
+/** Resolves with the promise's value, or undefined after `ms` without settling. */
+const race = <T>(promise: Promise<T>, ms: number): Promise<T | undefined> => {
+  let timer: ReturnType<typeof setTimeout>
+  const timeout = new Promise<T | undefined>((resolve) => {
+    timer = setTimeout(() => resolve(undefined), ms)
+  })
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer))
 }
 
 /** `gh auth token`, resolved once per server process (re-login needs a restart). */
