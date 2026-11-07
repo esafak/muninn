@@ -35,6 +35,8 @@ export const scan = (text: string, repo?: RepoRef, lexicons: readonly Lexicon[] 
   const found = new Map<string, Ref>()
   /** Numbers seen in explicit references (URLs, shorthand) — they win over bare mentions. */
   const explicitNumbers = new Set<number>()
+  /** Numbers written with a kind word ("run 906") — explicit intent, survives listing runs. */
+  const kindWordNumbers = new Set<number>()
 
   const add = (ref: Ref) => {
     const key = `${ref.repo ? `${ref.repo.host}/${ref.repo.owner}/${ref.repo.repo}` : "@"}#${ref.number}`
@@ -68,13 +70,14 @@ export const scan = (text: string, repo?: RepoRef, lexicons: readonly Lexicon[] 
 
   if (repo) {
     for (const match of source.matchAll(kindWordPattern)) {
-      // An explicit URL or shorthand reference with the same number is authoritative:
-      // `[PR #2494](configs/pull/2494)` must not also create a phantom for the
-      // session's own repository.
-      if (explicitNumbers.has(Number(match[2]))) continue
+      const number = Number(match[2])
+      // Intent is recorded even when an explicit URL also has the number: a
+      // listing that names "run 906" keeps run 906 alive.
+      kindWordNumbers.add(number)
+      if (explicitNumbers.has(number)) continue
       add({
         kind: kindWordMap[match[1]!.toLowerCase() as keyof typeof kindWordMap],
-        number: Number(match[2]),
+        number,
         repo,
       })
     }
@@ -84,13 +87,13 @@ export const scan = (text: string, repo?: RepoRef, lexicons: readonly Lexicon[] 
     }
   }
 
-  return [...found.values()].filter((ref) => {
-    // `gh run list`-style enumerations dump dozens of run ids; a run only counts
-    // when it is singled out. Many at once means a listing — drop the runs (branch
-    // runs and singled-out URLs still surface them elsewhere).
-    if (ref.kind !== "run") return true
-    return [...found.values()].filter((other) => other.kind === "run").length < 6
-  })
+  // `gh run list`-style enumerations dump dozens of run ids; a run only counts when
+  // it is singled out. Many URL runs at once means a listing — drop them, unless
+  // the transcript singles one out with a kind word.
+  const result = [...found.values()]
+  const urlRuns = result.filter((ref) => ref.kind === "run")
+  if (urlRuns.length >= 6) return result.filter((ref) => ref.kind !== "run" || kindWordNumbers.has(ref.number))
+  return result
 }
 
 /** Flattens a session's parts into the text Quartermaster should scan: text parts

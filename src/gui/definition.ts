@@ -10,7 +10,8 @@ const RunStatus = Schema.Literals(["queued", "running", "succeeded", "failed", "
 const Entity = Schema.Union([
   Schema.Struct({
     kind: Schema.Literal("issue"),
-    provider: Schema.String,
+    // Optional: entities hydrated by older server code predate provider stamping.
+    provider: Schema.optional(Schema.String),
     repo: Repo,
     number: Schema.Number,
     title: Schema.String,
@@ -20,7 +21,7 @@ const Entity = Schema.Union([
   }),
   Schema.Struct({
     kind: Schema.Literal("run"),
-    provider: Schema.String,
+    provider: Schema.optional(Schema.String),
     repo: Repo,
     id: Schema.Number,
     name: Schema.String,
@@ -34,7 +35,7 @@ const Entity = Schema.Union([
   }),
   Schema.Struct({
     kind: Schema.Literal("pr"),
-    provider: Schema.String,
+    provider: Schema.optional(Schema.String),
     repo: Repo,
     number: Schema.Number,
     title: Schema.String,

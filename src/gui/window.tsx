@@ -120,6 +120,8 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     const current = session()
     if (!current) return
     setSessionReady(true)
+    // Gate pills on this session before any network: identity is known up front.
+    setMeta((previous) => ({ ...previous, sessionID: current.id, repo: null, provider: null, branch: "" }))
     const client = ctx.client
 
     try {

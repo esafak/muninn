@@ -87,9 +87,11 @@ describe("scan", () => {
 
   test("run enumerations are treated as listings, not intent", () => {
     const listing = Array.from({ length: 8 }, (_, i) => `https://github.com/sst/opencode/actions/runs/${900 + i}`).join("\n")
-    const refs = scan(listing, opencode, [githubLexicon])
-    expect(refs.filter((ref) => ref.kind === "run")).toHaveLength(0)
-    expect(refs.filter((ref) => ref.kind === "pr")).toHaveLength(8)
+    expect(scan(listing, opencode, [githubLexicon])).toEqual([])
+    // A singled-out run in the same transcript still counts.
+    expect(scan(`${listing}\nbut run ${906} is the one that failed`, opencode, [githubLexicon])).toEqual([
+      { kind: "run", number: 906, repo: opencode },
+    ])
   })
 
   test("pull urls with deep-link suffixes", () => {
