@@ -104,6 +104,9 @@ export const refKey = (ref: Ref): string => (ref.repo ? `${repoKey(ref.repo)}#${
 export const chainTone = (chain: Chain): "success" | "warning" | "danger" | undefined => {
   if (chain.runs.some((run) => run.status === "failed")) return "danger"
   if (chain.runs.some((run) => run.status === "running" || run.status === "queued")) return "warning"
+  // Open PR with every check green: ready to merge.
+  if (chain.pr?.state === "open" && chain.runs.length > 0 && chain.runs.every((run) => run.status === "succeeded"))
+    return "success"
   if (chain.pr?.state === "merged") return "success"
   if (chain.pr === undefined && chain.runs.some((run) => run.status === "succeeded")) return "success"
   return undefined

@@ -161,7 +161,13 @@ export const History = (props: HistoryProps) => {
           )}
         </For>
       </Show>
-      <div class="qm-debug">{props.debug()}</div>
+      <div
+        class="qm-debug"
+        title="Click to copy diagnostics"
+        onClick={() => void ctx.system.copy(props.debug()).catch(() => undefined)}
+      >
+        {props.debug()} · click to copy
+      </div>
     </div>
   )
 }

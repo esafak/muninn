@@ -250,7 +250,10 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       const list = chains().filter((chain) => live(chain))
       if (list.length === 0) return undefined
 
-      const worst = list.find((chain) => chainTone(chain) === "danger") ?? list[0]!
+      // PR chains are the primary work: they lead the pill regardless of recency,
+      // with a danger PR still outranking a calm one.
+      const prChains = list.filter((chain) => chain.pr)
+      const worst = (prChains.find((chain) => chainTone(chain) === "danger") ?? prChains[0]) ?? list[0]!
       const primary = worst.pr ?? worst.issue
 
       return {
