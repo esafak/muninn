@@ -135,12 +135,20 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
   })
 
   // ── Component 1: pills above the composer ────────────────────────────────
+  // Live chains only: merged, closed and settled work drops out of the pill row
+  // (the history panel keeps it) — so backfilling an old session stays quiet.
+  const live = (chain: Chain): boolean =>
+    chain.pr?.state === "open" ||
+    chain.pr?.state === "draft" ||
+    chain.runs.some((run) => run.status === "queued" || run.status === "running") ||
+    (chain.pr === undefined && chain.issue?.state === "open")
+
   ctx.add(ComposerPill, {
     id: "links",
     order: 10,
     show: (input) => {
       if (input.session.id !== meta.sessionID) return undefined
-      const list = chains().filter((chain) => chain.pr || chain.issue)
+      const list = chains().filter((chain) => live(chain) && (chain.pr || chain.issue))
       if (list.length === 0) return undefined
 
       const worst = list.find((chain) => chainTone(chain) === "danger") ?? list[0]!
