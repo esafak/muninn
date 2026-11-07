@@ -1,0 +1,36 @@
+/**
+ * The narrow seam every source provider implements. The split by runtime is
+ * deliberate: lexicons and marks are pure (bundled into windows), while hydration
+ * and merges run server-side behind the Quartermaster RPC — the GUI only ever sees
+ * generic kinds, statuses, and this interface's outputs.
+ */
+
+import type { Entity, Ref, RepoRef, RunEntity } from "../model"
+
+export type MergeMethod = "merge" | "squash" | "rebase"
+
+/** The repo's merge policy, from the provider's repository settings. */
+export interface MergeSettings {
+  /** Allowed methods, in preference order. A single entry means never ask. */
+  methods: MergeMethod[]
+  default: MergeMethod
+  /** The repo deletes head branches on merge by default (GitHub: delete_branch_on_merge). */
+  deleteBranchByDefault: boolean
+}
+
+export type Auth = () => Promise<string | undefined>
+
+export interface SourceProvider {
+  /** Registry id, e.g. "github". */
+  id: string
+  /** URL hosts this provider claims, e.g. ["github.com"]. Dispatch is by host. */
+  hosts: readonly string[]
+  /** Resolves a write/read credential; undefined means anonymous public access. */
+  auth: (ctx: unknown) => Promise<string | undefined>
+  /** The repo's merge policy; undefined when unknown or unsupported. */
+  mergeSettings: (repo: RepoRef, auth: Auth) => Promise<MergeSettings | undefined>
+  /** Hydrates references into entities; unresolvable references are dropped. */
+  hydrate: (refs: readonly (Ref & { repo: RepoRef })[], sessionRepo: RepoRef | undefined, auth: Auth) => Promise<Entity[]>
+  /** Recent runs of one branch — the standalone cards of the history panel. */
+  branchRuns: (repo: RepoRef, branch: string, auth: Auth) => Promise<RunEntity[]>
+}

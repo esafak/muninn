@@ -1,0 +1,30 @@
+{
+  "name": "opencode-quartermaster",
+  "version": "0.1.0",
+  "type": "module",
+  "license": "MIT",
+  "description": "Tracks what a session ships: pull requests, issues, and CI runs — extracted from the conversation, hydrated from the forge, and shown live in OpenCode Desktop.",
+  "exports": {
+    ".": "./src/index.ts",
+    "./rpc": "./src/rpc.ts",
+    "./gui-experimental": "./dist/gui-experimental.cjs"
+  },
+  "scripts": {
+    "build": "vite build",
+    "watch": "vite build --watch",
+    "check": "tsc --noEmit",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@opencode/plugin": "^2.2.6",
+    "zod": "^4"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/node": "latest",
+    "solid-js": "^1.9.0",
+    "typescript": "latest",
+    "vite": "^7.0.0",
+    "vite-plugin-solid": "^2.11.0"
+  }
+}

@@ -1,0 +1,83 @@
+/**
+ * Extracts source references from session text. Pure and dependency-free: it runs
+ * inside the GUI bundle on every message change, so it must never touch Node or
+ * network. Providers contribute URL and shorthand syntax through their lexicons;
+ * kind words ("PR 4821", "issue 1043", "run 18402") and bare `#123` references are
+ * forge-generic and resolve against the session's repository, which the caller
+ * passes.
+ */
+
+import type { Ref, RepoRef } from "./model"
+import type { Lexicon } from "./providers/lexicon"
+
+/** Strip fenced code blocks and inline code spans: their `#123`s are prose, not references. */
+const stripCode = (text: string): string =>
+  text.replace(/```[\s\S]*?```/g, " ").replace(/~~~[\s\S]*?~~~/g, " ").replace(/`[^`\n]*`/g, " ")
+
+const kindWordPattern = /\b(pull request|pr|issue|check run|run)\s+#?(\d+)\b/gi
+const bareHashPattern = /(?<![/\w&])#(\d+)\b/g
+
+const kindWordMap = {
+  "pull request": "pr",
+  pr: "pr",
+  issue: "issue",
+  "check run": "run",
+  run: "run",
+} as const
+
+/**
+ * Collects references from one block of session text. `repo` is the session's own
+ * repository: when absent, only self-contained references (URLs, shorthand) are
+ * returned. Results are deduplicated; a kind learned from any occurrence sticks.
+ */
+export const scan = (text: string, repo?: RepoRef, lexicons: readonly Lexicon[] = []): Ref[] => {
+  const source = stripCode(text)
+  const found = new Map<string, Ref>()
+
+  const add = (ref: Ref) => {
+    const key = `${ref.repo ? `${ref.repo.host}/${ref.repo.owner}/${ref.repo.repo}` : "@"}#${ref.number}`
+    const existing = found.get(key)
+    // A kind learned from a URL or a kind word replaces an unknown kind; an explicit
+    // repository wins over a session-repository reference only when it differs.
+    if (!existing) {
+      found.set(key, ref)
+      return
+    }
+    found.set(key, {
+      number: ref.number,
+      kind: existing.kind ?? ref.kind,
+      repo: existing.repo ?? ref.repo,
+    })
+  }
+
+  for (const lexicon of lexicons) {
+    for (const pattern of lexicon.urls)
+      for (const match of source.matchAll(pattern.re))
+        add({ kind: pattern.kind, number: Number(match[3]), repo: { host: lexicon.host, owner: match[1]!, repo: match[2]! } })
+    if (lexicon.shorthand)
+      for (const match of source.matchAll(lexicon.shorthand.re))
+        add({ number: Number(match[3]), repo: { host: lexicon.host, owner: match[1]!, repo: match[2]! } })
+  }
+
+  if (repo) {
+    for (const match of source.matchAll(kindWordPattern))
+      add({
+        kind: kindWordMap[match[1]!.toLowerCase() as keyof typeof kindWordMap],
+        number: Number(match[2]),
+        repo,
+      })
+    for (const match of source.matchAll(bareHashPattern)) add({ number: Number(match[1]), repo })
+  }
+
+  return [...found.values()]
+}
+
+/** Flattens a session's parts into the text Quartermaster should scan. */
+export const textToScan = (parts: readonly unknown[]): string =>
+  parts.flatMap((part) => (isTextPart(part) ? [part.text] : [])).join("\n")
+
+const isTextPart = (part: unknown): part is { type: "text"; text: string } =>
+  typeof part === "object" &&
+  part !== null &&
+  (part as { type?: unknown }).type === "text" &&
+  typeof (part as { text?: unknown }).text === "string"
