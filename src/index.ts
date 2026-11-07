@@ -19,7 +19,7 @@ const sourceFor = (host: string | undefined): SourceProvider | undefined =>
   sources.find((source) => host !== undefined && source.hosts.includes(host))
 
 export default Plugin.define({
-  id: "opencode-quartermaster",
+  id: "quartermaster",
   async setup(ctx) {
     await ctx.rpc.register(Quartermaster, {
       repo: async (input) => {

@@ -1,4 +1,4 @@
-# opencode-quartermaster
+# quartermaster
 
 Tracks what an OpenCode session ships: pull requests, issues, and CI runs —
 extracted from the conversation, hydrated from the forge, and shown live in

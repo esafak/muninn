@@ -74,7 +74,7 @@ const request = async <T>(path: string, auth: Auth): Promise<T | undefined> => {
     headers: {
       accept: "application/vnd.github+json",
       "x-github-api-version": "2022-11-28",
-      "user-agent": "opencode-quartermaster",
+      "user-agent": "quartermaster",
       ...(token ? { authorization: `Bearer ${token}` } : {}),
     },
   })
