@@ -145,16 +145,7 @@ export const History = (props: HistoryProps) => {
 
                 <For each={chain.runs}>
                   {(run) => (
-                    <RunRow
-                      run={run}
-                      chainKey={chain.key}
-                      expanded={expanded}
-                      onToggle={toggle}
-                      onOpen={props.onOpen}
-                      copy={copyId}
-                      copied={copied}
-                      label={ctx.t}
-                    />
+                    <RunRow run={run} chainKey={chain.key} expanded={expanded} onToggle={toggle} onOpen={props.onOpen} label={ctx.t} />
                   )}
                 </For>
 
@@ -178,12 +169,9 @@ const RunRow = (props: {
   expanded: Accessor<ReadonlySet<string>>
   onToggle: (key: string) => void
   onOpen: (url: string) => void
-  copy: (event: MouseEvent, text: string, key: string) => void
-  copied: Accessor<string | null>
   label: (key: string) => string
 }): JSX.Element => {
   const key = () => `${props.chainKey}#${props.run.id}`
-  const copied = () => props.copied() === `r${key()}`
 
   return (
     <>
@@ -191,17 +179,8 @@ const RunRow = (props: {
         <span class="qm-state" data-status={props.run.status} title={props.label(`state.${props.run.status}`)}>
           <StatusGlyph status={props.run.status} />
         </span>
-        <span class="qm-title">
-          run{" "}
-          <span
-            class="qm-id"
-            classList={{ copied: copied() }}
-            title="Click to copy"
-            onClick={(event) => props.copy(event, String(props.run.id), `r${key()}`)}
-          >
-            {copied() ? "✓" : `#${props.run.id}`}
-          </span>{" "}
-          · {props.run.name}
+        <span class="qm-title" title={`run ${props.run.id}`}>
+          {props.run.name}
         </span>
         <span class="qm-meta">{time(props.run.updatedAt)}</span>
         <span
