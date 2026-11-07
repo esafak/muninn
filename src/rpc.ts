@@ -34,6 +34,7 @@ export const RunEntity = z.object({
   headSha: z.string(),
   status: z.enum(["queued", "running", "succeeded", "failed", "cancelled"]),
   checks: z.array(Check),
+  pullRequests: z.array(z.number()).default([]),
   url: z.string(),
   updatedAt: z.number(),
 })

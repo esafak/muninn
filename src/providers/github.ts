@@ -59,6 +59,7 @@ interface RunJson {
   head_sha: string
   html_url: string
   updated_at: string
+  pull_requests?: readonly { number: number }[]
 }
 
 interface JobsJson {
@@ -177,14 +178,12 @@ const hydratePull = async (repo: RepoRef, number: number, auth: Auth): Promise<P
   }
 }
 
-const hydrateRun = async (repo: RepoRef, id: number, auth: Auth): Promise<RunEntity | undefined> => {
-  const base = `/repos/${repo.owner}/${repo.repo}/actions/runs`
-  const run = await request<RunJson>(`${base}/${id}`, auth)
-  if (!run) return undefined
-
-  const jobs = await request<JobsJson>(`${base}/${id}/jobs?per_page=20`, auth)
-  const checks = (jobs?.jobs ?? []).slice(0, 12).map((job) => ({ name: job.name, status: checkStatus(job) }))
-
+const runEntity = async (repo: RepoRef, run: RunJson, auth: Auth, withChecks: boolean): Promise<RunEntity> => {
+  let checks: RunEntity["checks"] = []
+  if (withChecks) {
+    const jobs = await request<JobsJson>(`/repos/${repo.owner}/${repo.repo}/actions/runs/${run.id}/jobs?per_page=20`, auth)
+    checks = (jobs?.jobs ?? []).slice(0, 12).map((job) => ({ name: job.name, status: checkStatus(job) }))
+  }
   return {
     kind: "run",
     provider: "github",
@@ -195,9 +194,16 @@ const hydrateRun = async (repo: RepoRef, id: number, auth: Auth): Promise<RunEnt
     headSha: run.head_sha,
     status: runStatus(run),
     checks,
+    pullRequests: (run.pull_requests ?? []).map((pr) => pr.number),
     url: run.html_url,
     updatedAt: epoch(run.updated_at),
   }
+}
+
+const hydrateRun = async (repo: RepoRef, id: number, auth: Auth): Promise<RunEntity | undefined> => {
+  const run = await request<RunJson>(`/repos/${repo.owner}/${repo.repo}/actions/runs/${id}`, auth)
+  if (!run) return undefined
+  return runEntity(repo, run, auth, true)
 }
 
 /** token from an integration connection, or the environment as fallback. */
@@ -275,29 +281,42 @@ export const github: SourceProvider = {
         ),
       })),
     )
+
+    const entities: Entity[] = []
+    const unresolved: (Ref & { repo: RepoRef })[] = []
+    for (const result of results) {
+      if (result.entity) entities.push(result.entity)
+      else unresolved.push(result.ref)
+    }
+
+    // Runs belong to pull requests the session may never have mentioned; hydrate
+    // those too, so the association is visible.
+    const related = new Map<string, Ref & { repo: RepoRef }>()
+    for (const entity of entities) {
+      if (entity.kind !== "run") continue
+      for (const number of entity.pullRequests) {
+        const key = `${entity.repo.owner}/${entity.repo.repo}#${number}`
+        if (![...unique.values()].some((ref) => ref.repo.owner === entity.repo.owner && ref.repo.repo === entity.repo.repo && ref.number === number))
+          related.set(key, { kind: "pr", number, repo: entity.repo })
+      }
+    }
+    const relatedEntities = await Promise.all(
+      [...related.values()].map(async (ref) => ({
+        entity: await cached(`${ref.repo.owner}/${ref.repo.repo}#pr${ref.number}`, () => hydratePull(ref.repo, ref.number, auth)),
+      })),
+    )
+    entities.push(...relatedEntities.filter((result) => result.entity !== undefined).map((result) => result.entity!))
+
     return {
-      entities: results.filter((result) => result.entity !== undefined).map((result) => result.entity!),
-      unresolved: results.filter((result) => result.entity === undefined).map((result) => result.ref),
+      entities,
+      unresolved,
     }
   },
-
   branchRuns: async (repo, branch, auth) => {
     const runs = await request<{ workflow_runs: readonly RunJson[] }>(
       `/repos/${repo.owner}/${repo.repo}/actions/runs?branch=${encodeURIComponent(branch)}&per_page=8`,
       auth,
     )
-    return (runs?.workflow_runs ?? []).map((run) => ({
-      kind: "run" as const,
-      provider: "github",
-      repo,
-      id: run.id,
-      name: run.name || run.display_title,
-      headBranch: run.head_branch,
-      headSha: run.head_sha,
-      status: runStatus(run),
-      checks: [],
-      url: run.html_url,
-      updatedAt: epoch(run.updated_at),
-    }))
+    return await Promise.all((runs?.workflow_runs ?? []).map((run) => runEntity(repo, run, auth, true)))
   },
 }

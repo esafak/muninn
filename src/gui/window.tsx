@@ -61,16 +61,41 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     return messages.map((message) => textToScan((message as { parts?: unknown[] }).parts ?? [])).join("\n")
   }
 
-  const refs = createMemo(() => (meta.repo ? scan(text(), meta.repo, [githubLexicon]) : []))
+  const refs = createMemo(() => scan(text(), meta.repo ?? undefined, [githubLexicon]))
 
   const rechain = () => {
     const repo = meta.repo
     // Chains are session-associated: only entities this session's transcript
-    // references join, joined against the (global, durable) entity cache.
-    const relevant = refs()
-      .map((ref) => entities[refKey(ref)])
-      .filter((entity): entity is Entity => entity !== undefined)
-    setChains(associate(relevant, repo ? (runs[repoKey(repo)] ?? []) : []))
+    // references join, joined against the (global, durable) entity cache. Bare
+    // references don't know their kind — try all three. Runs pull in their pull
+    // requests (matched by head SHA), so the association is visible without a mention.
+    const relevant = refs().flatMap((ref) => {
+      if (ref.kind) {
+        const entity = entities[refKey(ref)]
+        return entity ? [entity] : []
+      }
+      if (!ref.repo) return []
+      const base = repoKey(ref.repo)
+      return (["issue", "pr", "run"] as const)
+        .map((kind) => entities[`${base}#${kind}${ref.number}`])
+        .filter((entity): entity is Entity => entity !== undefined)
+    })
+    const related: Entity[] = []
+    for (const entity of relevant) {
+      if (entity.kind !== "run") continue
+      for (const candidate of Object.values(entities)) {
+        if (candidate.kind !== "pr") continue
+        if (
+          candidate.repo.host !== entity.repo.host ||
+          candidate.repo.owner !== entity.repo.owner ||
+          candidate.repo.repo !== entity.repo.repo
+        )
+          continue
+        if (candidate.headSha === entity.headSha && !relevant.includes(candidate) && !related.includes(candidate))
+          related.push(candidate)
+      }
+    }
+    setChains(associate([...relevant, ...related], repo ? (runs[repoKey(repo)] ?? []) : []))
   }
 
   const open = (url: string) => ctx.system.openExternal(url)
@@ -166,36 +191,43 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
   // ── Component 1: pills above the composer ────────────────────────────────
   // Live chains only: merged, closed and settled work drops out of the pill row
   // (the history panel keeps it) — so backfilling an old session stays quiet.
+  // Run-only chains are the exception: they exist because the session explicitly
+  // referenced a run, so they stay until a day passes without activity.
+  const DAY_MS = 24 * 60 * 60 * 1000
   const live = (chain: Chain): boolean =>
     chain.pr?.state === "open" ||
     chain.pr?.state === "draft" ||
-    chain.runs.some((run) => run.status === "queued" || run.status === "running") ||
-    (chain.pr === undefined && chain.issue?.state === "open")
+    chain.runs.some((run) => run.status === "queued" || run.status === "running" || run.status === "failed") ||
+    (chain.pr === undefined && chain.issue?.state === "open") ||
+    (chain.pr === undefined && chain.issue === undefined && Date.now() - chain.updatedAt < DAY_MS)
 
   ctx.add(ComposerPill, {
     id: "links",
     order: 10,
     show: (input) => {
       if (input.session.id !== meta.sessionID) return undefined
-      const list = chains().filter((chain) => live(chain) && (chain.pr || chain.issue))
+      const list = chains().filter((chain) => live(chain))
       if (list.length === 0) return undefined
 
       const worst = list.find((chain) => chainTone(chain) === "danger") ?? list[0]!
-      const primary = worst.pr ?? worst.issue!
-      const tone = chainTone(worst)
-      const failed = worst.runs.find((run) => run.status === "failed")
+      const primary = worst.pr ?? worst.issue
+      const failing = worst.runs.find((run) => run.status === "failed")
 
       return {
         icon: pillIcon(meta.provider),
-        label: `#${primary.number} ${failed ? ctx.t("state.failed") : ctx.t(`state.${worst.pr ? worst.pr.state : worst.issue!.state}`)}`,
-        tone,
+        label: primary
+          ? `#${primary.number} ${failing ? ctx.t("state.failed") : ctx.t(`state.${worst.pr ? worst.pr.state : worst.issue!.state}`)}`
+          : `run #${worst.runs[0]!.id} · ${ctx.t(`state.${worst.runs[0]!.status}`)}`,
+        tone: chainTone(worst),
         title: ctx.t("pill.title"),
         rows: list.slice(0, 5).map((chain) => {
-          const entity = chain.pr ?? chain.issue!
+          const entity = chain.pr ?? chain.issue
           const run = chain.runs[0]
           return {
             id: chain.key,
-            label: `#${entity.number} ${entity.title}`,
+            label: entity
+              ? `#${entity.number} ${entity.title}`
+              : `run #${run!.id} ${run!.name} · ${ctx.t(`state.${run!.status}`)}`,
             icon:
               run?.status === "failed"
                 ? "circle-xmark"
@@ -206,7 +238,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
                     : pillIcon(meta.provider),
             tone: chainTone(chain),
             detail: chain.pr ? chain.pr.headBranch : undefined,
-            run: () => open(entity.url),
+            run: () => open((entity ?? run)?.url ?? ""),
           }
         }),
       }

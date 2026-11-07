@@ -65,6 +65,8 @@ export interface RunEntity extends Base {
   status: RunStatus
   /** Individual checks of the run, for the expanded row. */
   checks: Check[]
+  /** Pull requests this run belongs to, per the provider. */
+  pullRequests: number[]
 }
 
 export interface PullEntity extends Base {

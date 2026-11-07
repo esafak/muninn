@@ -28,6 +28,7 @@ const Entity = Schema.Union([
     headSha: Schema.String,
     status: RunStatus,
     checks: Schema.Array(Schema.Struct({ name: Schema.String, status: RunStatus })),
+    pullRequests: Schema.Array(Schema.Number),
     url: Schema.String,
     updatedAt: Schema.Number,
   }),

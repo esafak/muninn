@@ -30,6 +30,7 @@ const run = (id: number, sha: string, updatedAt: number): RunEntity => ({
   headSha: sha,
   status: "succeeded",
   checks: [],
+  pullRequests: [],
   url: "u",
   updatedAt,
 })

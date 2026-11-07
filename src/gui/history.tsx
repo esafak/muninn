@@ -1,7 +1,7 @@
 import { For, Show, createSignal } from "solid-js"
 import type { Accessor, JSX } from "solid-js"
 import { usePlugin } from "@opencode/plugin/gui"
-import type { Chain, RepoRef, RunStatus } from "../model"
+import type { Chain, RepoRef, RunEntity, RunStatus } from "../model"
 import { chainTone } from "../model"
 import type { definition } from "./definition"
 import { Mark } from "./marks"
@@ -28,7 +28,8 @@ const sameDay = (a: number, b: number): boolean => new Date(a).toDateString() ==
 /**
  * The panel body: the session's chains as triplet cards under day headers, newest
  * activity first. Reads everything through props, so the panel stays mounted across
- * session switches and simply re-renders.
+ * session switches and simply re-renders. State is carried by the colored kind and
+ * status glyphs alone; hover titles spell it out.
  */
 export const History = (props: HistoryProps) => {
   const ctx = usePlugin<typeof definition>()
@@ -88,14 +89,11 @@ export const History = (props: HistoryProps) => {
                       <span class="qm-mark">
                         <Mark provider={issue().provider} />
                       </span>
-                      <span class="qm-kind" data-state={`issue-${issue().state}`}>
+                      <span class="qm-kind" data-state={`issue-${issue().state}`} title={ctx.t(`state.${issue().state}`)}>
                         <IssueGlyph closed={issue().state === "closed"} />
                       </span>
                       <span class="qm-id">#{issue().number}</span>
                       <span class="qm-title">{issue().title}</span>
-                      <span class="qm-state" data-state={issue().state}>
-                        {ctx.t(`state.${issue().state}`)}
-                      </span>
                     </div>
                   )}
                 </Show>
@@ -106,28 +104,28 @@ export const History = (props: HistoryProps) => {
                       <span class="qm-mark">
                         <Mark provider={pull().provider} />
                       </span>
-                      <span class="qm-kind" data-state={`pr-${pull().state}`}>
+                      <span class="qm-kind" data-state={`pr-${pull().state}`} title={ctx.t(`state.${pull().state}`)}>
                         <Show when={pull().state === "merged"} fallback={<PullGlyph />}>
                           <MergedGlyph />
                         </Show>
                       </span>
                       <span class="qm-id">#{pull().number}</span>
                       <span class="qm-title">{pull().title}</span>
-                      <span class="qm-state" data-state={pull().state}>
-                        {ctx.t(`state.${pull().state}`)}
-                      </span>
                     </div>
                   )}
                 </Show>
 
-                <For each={chain.runs}>{(run) => <RunRow run={run} chainKey={chain.key} expanded={expanded} onToggle={toggle} label={ctx.t} />}</For>
+                <For each={chain.runs}>
+                  {(run) => (
+                    <RunRow run={run} chainKey={chain.key} expanded={expanded} onToggle={toggle} onOpen={props.onOpen} label={ctx.t} />
+                  )}
+                </For>
 
-                <div class="qm-chain-foot">
-                  <Show when={chain.pr && chain.issue}>Closes #{chain.issue!.number}</Show>
-                  <span class="qm-foot-ago">
-                    {ctx.t("footer.updated")} {time(chain.updatedAt)}
-                  </span>
-                </div>
+                <Show when={chain.pr && chain.issue}>
+                  <div class="qm-chain-foot">
+                    <span>Closes #{chain.issue!.number}</span>
+                  </div>
+                </Show>
               </div>
             </>
           )}
@@ -138,10 +136,11 @@ export const History = (props: HistoryProps) => {
 }
 
 const RunRow = (props: {
-  run: Chain["runs"][number]
+  run: RunEntity
   chainKey: string
   expanded: Accessor<ReadonlySet<string>>
   onToggle: (key: string) => void
+  onOpen: (url: string) => void
   label: (key: string) => string
 }): JSX.Element => {
   const key = () => `${props.chainKey}#${props.run.id}`
@@ -149,20 +148,29 @@ const RunRow = (props: {
   return (
     <>
       <div class="qm-row sub" onClick={() => props.onToggle(key())}>
-        <span class="qm-state" data-status={props.run.status}>
+        <span class="qm-state" data-status={props.run.status} title={props.label(`state.${props.run.status}`)}>
           <StatusGlyph status={props.run.status} />
-          {props.label(`state.${props.run.status}`)}
         </span>
         <span class="qm-title">
           run #{props.run.id} · {props.run.name}
         </span>
         <span class="qm-meta">{time(props.run.updatedAt)}</span>
+        <span
+          class="qm-link"
+          title="Open run"
+          onClick={(event) => {
+            event.stopPropagation()
+            props.onOpen(props.run.url)
+          }}
+        >
+          ↗
+        </span>
       </div>
       <div class="qm-checks" classList={{ show: props.expanded().has(key()) }}>
         <For each={props.run.checks}>
           {(check) => (
             <div class="qm-check">
-              <span data-status={check.status}>
+              <span data-status={check.status} title={props.label(`state.${check.status}`)}>
                 <StatusGlyph status={check.status} />
               </span>
               <span class="qm-check-name">{check.name}</span>
