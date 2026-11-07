@@ -147,6 +147,7 @@ const hydrateOne = async (ref: Ref & { repo: RepoRef }, auth: Auth): Promise<Ent
 
   const entity: IssueEntity = {
     kind: "issue",
+    provider: "github",
     repo: ref.repo,
     number: issue.number,
     title: issue.title,
@@ -162,6 +163,7 @@ const hydratePull = async (repo: RepoRef, number: number, auth: Auth): Promise<P
   if (!pull) return undefined
   return {
     kind: "pr",
+    provider: "github",
     repo,
     number: pull.number,
     title: pull.title,
@@ -185,6 +187,7 @@ const hydrateRun = async (repo: RepoRef, id: number, auth: Auth): Promise<RunEnt
 
   return {
     kind: "run",
+    provider: "github",
     repo,
     id: run.id,
     name: run.name || run.display_title,
@@ -207,24 +210,39 @@ const resolveToken = async (ctx: Plugin.Context): Promise<string | undefined> =>
   const fromGh = await ghAuthToken()
   if (fromGh) return fromGh
 
-  const connection = await ctx.integration.connection.active("github").catch(() => undefined)
-  if (!connection) return undefined
-  const credential = await ctx.integration.connection.resolve(connection).catch(() => undefined)
-
-  return tokenFrom(credential)
+  // The integration API is newer than some app versions; treat absence as no
+  // credential rather than letting a synchronous access error reject the caller.
+  try {
+    const connection = await ctx.integration.connection.active("github")
+    if (!connection) return undefined
+    const credential = await ctx.integration.connection.resolve(connection)
+    return tokenFrom(credential)
+  } catch {
+    return undefined
+  }
 }
 
 /** `gh auth token`, resolved once per server process (re-login needs a restart). */
 let ghTokenCache: string | undefined | null = null
 const ghAuthToken = async (): Promise<string | undefined> => {
   if (ghTokenCache !== null) return ghTokenCache
-  try {
-    const { stdout } = await exec("gh", ["auth", "token"], { timeout: 5_000 })
-    ghTokenCache = stdout.trim() || undefined
-  } catch {
-    ghTokenCache = undefined
+  // The desktop server can run with a minimal PATH (GUI-launched): gh is often a
+  // shell-version-manager shim (mise, asdf) that only a user shell resolves.
+  const attempts = [
+    () => exec("gh", ["auth", "token"], { timeout: 10_000 }),
+    () => exec("/bin/zsh", ["-ic", "gh auth token"], { timeout: 10_000 }),
+  ]
+  for (const run of attempts) {
+    try {
+      const { stdout } = await run()
+      ghTokenCache = stdout.trim() || undefined
+      if (ghTokenCache) return ghTokenCache
+    } catch {
+      // Try the next resolution strategy.
+    }
   }
-  return ghTokenCache
+  ghTokenCache = undefined
+  return undefined
 }
 
 const tokenFrom = (credential: Credential.Value | undefined): string | undefined => {
@@ -270,6 +288,7 @@ export const github: SourceProvider = {
     )
     return (runs?.workflow_runs ?? []).map((run) => ({
       kind: "run" as const,
+      provider: "github",
       repo,
       id: run.id,
       name: run.name || run.display_title,

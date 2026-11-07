@@ -14,6 +14,8 @@ export interface HistoryProps {
   authenticated: Accessor<boolean>
   /** References that were extracted but could not be read (private repo without a credential). */
   unresolved: Accessor<number>
+  /** The last refresh failure, shown so hydration problems are never silent. */
+  error: Accessor<string | null>
   sessionReady: Accessor<boolean>
   onOpen: (url: string) => void
 }
@@ -57,6 +59,9 @@ export const History = (props: HistoryProps) => {
           <div class="qm-note" data-warn>{ctx.t("auth.unresolved", { count: props.unresolved() })}</div>
         </Show>
       </Show>
+      <Show when={props.error()}>
+        <div class="qm-note" data-warn>{ctx.t("panel.error", { message: props.error() ?? "" })}</div>
+      </Show>
 
       <Show
         when={props.chains().length > 0}
@@ -81,7 +86,7 @@ export const History = (props: HistoryProps) => {
                   {(issue) => (
                     <div class="qm-row" onClick={() => props.onOpen(issue().url)}>
                       <span class="qm-mark">
-                        <Mark host={issue().repo.host} />
+                        <Mark provider={issue().provider} />
                       </span>
                       <span class="qm-kind" data-state={`issue-${issue().state}`}>
                         <IssueGlyph closed={issue().state === "closed"} />
@@ -99,7 +104,7 @@ export const History = (props: HistoryProps) => {
                   {(pull) => (
                     <div class="qm-row sub" onClick={() => props.onOpen(pull().url)}>
                       <span class="qm-mark">
-                        <Mark host={pull().repo.host} />
+                        <Mark provider={pull().provider} />
                       </span>
                       <span class="qm-kind" data-state={`pr-${pull().state}`}>
                         <Show when={pull().state === "merged"} fallback={<PullGlyph />}>

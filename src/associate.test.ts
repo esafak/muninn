@@ -5,9 +5,10 @@ import type { IssueEntity, PullEntity, RunEntity } from "./model"
 const repo = { host: "github.com", owner: "sst", repo: "opencode" }
 const at = (ms: number) => ms
 
-const issue: IssueEntity = { kind: "issue", repo, number: 1043, title: "Scroll jank", state: "open", url: "u", updatedAt: at(100) }
+const issue: IssueEntity = { kind: "issue", provider: "github", repo, number: 1043, title: "Scroll jank", state: "open", url: "u", updatedAt: at(100) }
 const pull: PullEntity = {
   kind: "pr",
+  provider: "github",
   repo,
   number: 4821,
   title: "Fix scroll",
@@ -21,6 +22,7 @@ const pull: PullEntity = {
 }
 const run = (id: number, sha: string, updatedAt: number): RunEntity => ({
   kind: "run",
+  provider: "github",
   repo,
   id,
   name: "ci",

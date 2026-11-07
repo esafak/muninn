@@ -26,6 +26,7 @@ export const Check = z.object({
 
 export const RunEntity = z.object({
   kind: z.literal("run"),
+  provider: z.string(),
   repo: RepoRef,
   id: z.number(),
   name: z.string(),
@@ -39,6 +40,7 @@ export const RunEntity = z.object({
 
 export const IssueEntity = z.object({
   kind: z.literal("issue"),
+  provider: z.string(),
   repo: RepoRef,
   number: z.number(),
   title: z.string(),
@@ -49,6 +51,7 @@ export const IssueEntity = z.object({
 
 export const PullEntity = z.object({
   kind: z.literal("pr"),
+  provider: z.string(),
   repo: RepoRef,
   number: z.number(),
   title: z.string(),

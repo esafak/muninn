@@ -28,6 +28,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     branch: "",
     authenticated: false,
     unresolved: 0,
+    error: null as string | null,
   })
   // Hydrated entities, seeded from the durable cache (global stores load before
   // setup) and written through on every merge, so session reopen renders instantly.
@@ -81,31 +82,41 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     setSessionReady(true)
     const client = ctx.client
 
-    const info = await client.rpc(Quartermaster).repo({ directory: current.directory })
-    setMeta({
-      sessionID: current.id,
-      repo: info.repo,
-      provider: info.provider,
-      authenticated: info.authenticated,
-      branch: "",
-    })
-    if (!info.repo) return
+    try {
+      const info = await client.rpc(Quartermaster).repo({ directory: current.directory })
+      setMeta({
+        sessionID: current.id,
+        repo: info.repo,
+        provider: info.provider,
+        authenticated: info.authenticated,
+        branch: "",
+      })
+      if (!info.repo) {
+        setMeta("error", null)
+        return
+      }
 
-    const vcs = await client.vcs.get({ location: { directory: current.directory } }).catch(() => undefined)
-    const branch = vcs?.data?.branch?.current
-    setMeta("branch", branch ?? "")
+      const vcs = await client.vcs.get({ location: { directory: current.directory } }).catch(() => undefined)
+      const branch = vcs?.data?.branch?.current
+      setMeta("branch", branch ?? "")
 
-    const found = refs()
-    if (found.length > 0) {
-      const { entities: hydrated, unresolved } = await client.rpc(Quartermaster).hydrate({ directory: current.directory, refs: found })
-      merge(hydrated)
-      setMeta("unresolved", unresolved.length)
+      const found = refs()
+      if (found.length > 0) {
+        const { entities: hydrated, unresolved } = await client
+          .rpc(Quartermaster)
+          .hydrate({ directory: current.directory, refs: found })
+        merge(hydrated)
+        setMeta("unresolved", unresolved.length)
+      }
+      if (branch) {
+        const { runs: branchRuns } = await client.rpc(Quartermaster).branchRuns({ directory: current.directory, branch })
+        setRuns(repoKey(info.repo), branchRuns)
+      }
+      setMeta("error", null)
+      rechain()
+    } catch (error) {
+      setMeta("error", error instanceof Error ? error.message : String(error))
     }
-    if (branch) {
-      const { runs: branchRuns } = await client.rpc(Quartermaster).branchRuns({ directory: current.directory, branch })
-      setRuns(repoKey(info.repo), branchRuns)
-    }
-    rechain()
   }
 
   // Session (or its directory) changed: re-read everything.
@@ -249,6 +260,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
             branch={() => meta.branch}
             authenticated={() => meta.authenticated}
             unresolved={() => meta.unresolved}
+            error={() => meta.error}
             sessionReady={sessionReady}
             onOpen={open}
           />

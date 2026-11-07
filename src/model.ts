@@ -11,7 +11,7 @@ export interface RepoRef {
   repo: string
 }
 
-export type ProviderID = "github"
+export type ProviderID = string
 
 export type Kind = "issue" | "pr" | "run"
 
@@ -35,6 +35,8 @@ export interface Ref {
 }
 
 interface Base {
+  /** The provider that hydrated this entity. */
+  readonly provider: ProviderID
   /** When the entity last changed upstream; chains order by this. Epoch milliseconds. */
   readonly updatedAt: number
   readonly url: string

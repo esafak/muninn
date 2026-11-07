@@ -10,6 +10,7 @@ const RunStatus = Schema.Literals(["queued", "running", "succeeded", "failed", "
 const Entity = Schema.Union([
   Schema.Struct({
     kind: Schema.Literal("issue"),
+    provider: Schema.String,
     repo: Repo,
     number: Schema.Number,
     title: Schema.String,
@@ -19,6 +20,7 @@ const Entity = Schema.Union([
   }),
   Schema.Struct({
     kind: Schema.Literal("run"),
+    provider: Schema.String,
     repo: Repo,
     id: Schema.Number,
     name: Schema.String,
@@ -31,6 +33,7 @@ const Entity = Schema.Union([
   }),
   Schema.Struct({
     kind: Schema.Literal("pr"),
+    provider: Schema.String,
     repo: Repo,
     number: Schema.Number,
     title: Schema.String,
@@ -64,6 +67,7 @@ export const definition = Plugin.define({
       "repo.none": "No git remote found in this workspace.",
       "auth.note": "Public repositories only. Connect your forge in Settings › Integrations for private repos and higher rate limits.",
       "auth.unresolved": "{count} references couldn't be read — they look private. Connect your forge or run `gh auth login`, then reopen this session.",
+      "panel.error": "Couldn't reach the forge ({message}). Fix credentials or connection, then switch sessions to retry.",
       "state.open": "open",
       "state.draft": "draft",
       "state.merged": "merged",
