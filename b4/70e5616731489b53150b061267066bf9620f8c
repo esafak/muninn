@@ -1,0 +1,29 @@
+src/gui/window.tsx
+  h_ea91e2db23540f 64,69-70,72-82,98,194-196,200-202,209,213-214,218-221,224,228-230,241
+  h_ea91e2db23540f 71,83-97
+src/gui/history.tsx
+  h_ea91e2db23540f 124-128
+  h_ea91e2db23540f 4,31-32,92,107,118-122,139,143,151,158-167,173
+src/providers/github.ts
+  h_ea91e2db23540f 306,311-312
+  h_ea91e2db23540f 62,181-186,197,203-208,284-305,307-309,320
+src/associate.test.ts
+  h_ea91e2db23540f 33
+src/gui/definition.ts
+  h_ea91e2db23540f 31
+src/model.ts
+  h_ea91e2db23540f 68-69
+src/rpc.ts
+  h_ea91e2db23540f 37
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b470e5616731489b53150b061267066bf9620f8c",
+  "prompts": {},
+  "humans": {
+    "h_ea91e2db23540f": {
+      "author": "Emre Şafak <3928300+esafak@users.noreply.github.com>"
+    }
+  }
+}
