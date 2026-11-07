@@ -1,0 +1,19 @@
+bun.lock
+  s_66ae2cfa458981::t_885c43ea6e074f 1-886
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c737707d2e81770dfafc10dd1ee83051c8b7c15f",
+  "prompts": {},
+  "sessions": {
+    "s_66ae2cfa458981": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_e4cdaeedaffeCGUiz8hrlx0Mbk",
+        "model": "unknown"
+      },
+      "human_author": "Emre Şafak <3928300+esafak@users.noreply.github.com>"
+    }
+  }
+}
