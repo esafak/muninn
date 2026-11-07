@@ -222,11 +222,21 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     (chain.pr === undefined && chain.issue?.state === "open") ||
     (chain.pr === undefined && chain.issue === undefined && Date.now() - chain.updatedAt < DAY_MS)
 
-  // Diagnostics footer: which builds are loaded, and the pill-gate state at a glance.
+  // Diagnostics footer: the pill's full decision state, plus which builds are loaded.
   const debugLine = () => {
-    const gate = session()?.id === meta.sessionID ? "session ✓" : "session ✗"
-    const liveCount = chains().filter((chain) => live(chain)).length
-    return `qm gui ${__QM_BUILD__}${meta.debug ? ` · ${meta.debug}` : " · srv ?"} · ${chains().length} chains · ${liveCount} live · pill gate: ${gate}`
+    const current = session()
+    const gate = current?.id === meta.sessionID ? "✓" : "✗"
+    const list = chains().filter((chain) => live(chain))
+    const primary = list[0]?.pr ?? list[0]?.issue
+    const pill =
+      list.length === 0
+        ? "off: no live chains"
+        : primary
+          ? `#${primary.number} ${primary.title.slice(0, 36)}`
+          : list[0]!.runs[0]
+            ? `run #${list[0]!.runs[0].id}`
+            : "off"
+    return `qm gui ${__QM_BUILD__}${meta.debug ? ` · ${meta.debug}` : " · srv ?"} · gate ${gate} · chains ${chains().length} · live ${list.length} · pill: ${pill}`
   }
 
   ctx.add(ComposerPill, {
