@@ -84,21 +84,43 @@ export const scan = (text: string, repo?: RepoRef, lexicons: readonly Lexicon[] 
     }
   }
 
-  return [...found.values()]
+  return [...found.values()].filter((ref) => {
+    // `gh run list`-style enumerations dump dozens of run ids; a run only counts
+    // when it is singled out. Many at once means a listing — drop the runs (branch
+    // runs and singled-out URLs still surface them elsewhere).
+    if (ref.kind !== "run") return true
+    return [...found.values()].filter((other) => other.kind === "run").length < 6
+  })
 }
 
 /** Flattens a session's parts into the text Quartermaster should scan: text parts
- * and tool outputs (where gh/shell results — run links, PR urls — actually live). */
+ * and tool results (where gh/shell output — run links, PR urls, numbers — lives).
+ * Tool outputs appear as `state.output` or `state.content[]` blocks depending on
+ * the tool; the invoked command is scanned too. */
 export const textToScan = (parts: readonly unknown[]): string =>
   parts
     .flatMap((part) => {
       if (!part || typeof part !== "object") return []
-      const candidate = part as { type?: unknown; text?: unknown; state?: { output?: unknown } }
-      if (candidate.type === "text" && typeof candidate.text === "string") return [candidate.text]
-      if (candidate.type === "tool") {
-        const output = candidate.state?.output
-        if (typeof output === "string") return [output]
+      const candidate = part as {
+        type?: unknown
+        text?: unknown
+        state?: { output?: unknown; content?: unknown; input?: unknown }
       }
-      return []
+      if (candidate.type === "text" && typeof candidate.text === "string") return [candidate.text]
+      if (candidate.type !== "tool") return []
+      const out: string[] = []
+      const state = candidate.state
+      if (state && typeof state === "object") {
+        if (typeof state.output === "string") out.push(state.output)
+        if (Array.isArray(state.content))
+          for (const block of state.content)
+            if (block && typeof block === "object" && typeof (block as { text?: unknown }).text === "string")
+              out.push((block as { text: string }).text)
+        if (state.input && typeof state.input === "object") {
+          const command = (state.input as { command?: unknown }).command
+          if (typeof command === "string") out.push(command)
+        }
+      }
+      return out
     })
     .join("\n")

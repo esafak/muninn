@@ -70,6 +70,28 @@ describe("scan", () => {
     expect(scan(text, opencode, [githubLexicon])).toEqual([{ kind: "pr", number: 4821, repo: opencode }])
   })
 
+  test("tool state content blocks and invoked commands are scanned", () => {
+    const fresnel: RepoRef = { host: "github.com", owner: "archipelagoAI", repo: "fresnel" }
+    const text = textToScan([
+      {
+        type: "tool",
+        state: {
+          content: [{ type: "text", text: "merged PR 3684" }],
+          input: { command: "gh pr view 3684" },
+        },
+      },
+    ])
+    const refs = scan(text, fresnel, [githubLexicon])
+    expect(refs).toEqual([{ kind: "pr", number: 3684, repo: fresnel }])
+  })
+
+  test("run enumerations are treated as listings, not intent", () => {
+    const listing = Array.from({ length: 8 }, (_, i) => `https://github.com/sst/opencode/actions/runs/${900 + i}`).join("\n")
+    const refs = scan(listing, opencode, [githubLexicon])
+    expect(refs.filter((ref) => ref.kind === "run")).toHaveLength(0)
+    expect(refs.filter((ref) => ref.kind === "pr")).toHaveLength(8)
+  })
+
   test("pull urls with deep-link suffixes", () => {
     expect(scanGh("diff at https://github.com/sst/opencode/pull/4821/files", opencode)).toEqual([
       { kind: "pr", number: 4821, repo: opencode },

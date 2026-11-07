@@ -203,8 +203,9 @@ const pullsForBranch = async (repo: RepoRef, branch: string, auth: Auth): Promis
   const hit = branchPullsCache.get(key)
   if (hit && Date.now() - hit.at < BRANCH_PR_TTL_MS) return hit.prs
 
+  // Merged PRs must match too: a run's association outlives the merge.
   const pulls = await request<PullJson[]>(
-    `/repos/${repo.owner}/${repo.repo}/pulls?head=${encodeURIComponent(`${repo.owner}:${branch}`)}&state=open&per_page=5`,
+    `/repos/${repo.owner}/${repo.repo}/pulls?head=${encodeURIComponent(`${repo.owner}:${branch}`)}&state=all&per_page=5`,
     auth,
   )
   const prs = (pulls ?? []).map((pull) => toPullEntity(repo, pull))
