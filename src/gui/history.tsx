@@ -56,9 +56,9 @@ export const History = (props: HistoryProps) => {
 
       <Show when={props.repo() && !props.authenticated()}>
         <div class="qm-note">{ctx.t("auth.note")}</div>
-        <Show when={props.unresolved() > 0}>
-          <div class="qm-note" data-warn>{ctx.t("auth.unresolved", { count: props.unresolved() })}</div>
-        </Show>
+      </Show>
+      <Show when={props.unresolved() > 0}>
+        <div class="qm-note" data-warn>{ctx.t("auth.unresolved", { count: props.unresolved() })}</div>
       </Show>
       <Show when={props.error()}>
         <div class="qm-note" data-warn>{ctx.t("panel.error", { message: props.error() ?? "" })}</div>

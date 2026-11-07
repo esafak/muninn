@@ -55,8 +55,9 @@ export const scan = (text: string, repo?: RepoRef, lexicons: readonly Lexicon[] 
   for (const lexicon of lexicons) {
     for (const pattern of lexicon.urls)
       for (const match of source.matchAll(pattern.re)) {
-        explicitNumbers.add(Number(match[3]))
-        add({ kind: pattern.kind, number: Number(match[3]), repo: { host: lexicon.host, owner: match[1]!, repo: match[2]! } })
+        const number = Number(match[pattern.numberGroup ?? 3])
+        explicitNumbers.add(number)
+        add({ kind: pattern.kind, number, repo: { host: lexicon.host, owner: match[1]!, repo: match[2]! } })
       }
     if (lexicon.shorthand)
       for (const match of source.matchAll(lexicon.shorthand.re)) {
@@ -86,12 +87,18 @@ export const scan = (text: string, repo?: RepoRef, lexicons: readonly Lexicon[] 
   return [...found.values()]
 }
 
-/** Flattens a session's parts into the text Quartermaster should scan. */
+/** Flattens a session's parts into the text Quartermaster should scan: text parts
+ * and tool outputs (where gh/shell results — run links, PR urls — actually live). */
 export const textToScan = (parts: readonly unknown[]): string =>
-  parts.flatMap((part) => (isTextPart(part) ? [part.text] : [])).join("\n")
-
-const isTextPart = (part: unknown): part is { type: "text"; text: string } =>
-  typeof part === "object" &&
-  part !== null &&
-  (part as { type?: unknown }).type === "text" &&
-  typeof (part as { text?: unknown }).text === "string"
+  parts
+    .flatMap((part) => {
+      if (!part || typeof part !== "object") return []
+      const candidate = part as { type?: unknown; text?: unknown; state?: { output?: unknown } }
+      if (candidate.type === "text" && typeof candidate.text === "string") return [candidate.text]
+      if (candidate.type === "tool") {
+        const output = candidate.state?.output
+        if (typeof output === "string") return [output]
+      }
+      return []
+    })
+    .join("\n")

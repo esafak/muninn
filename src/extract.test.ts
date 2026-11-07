@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { scan } from "./extract"
+import { scan, textToScan } from "./extract"
 import { githubLexicon } from "./providers/github/lexicon"
 import type { RepoRef } from "./model"
 
@@ -47,6 +47,27 @@ describe("scan", () => {
     expect(scanGh("https://github.com/sst/opencode/actions/runs/18402/attempts/1", opencode)).toEqual([
       { kind: "run", number: 18402, repo: opencode },
     ])
+  })
+
+  test("run urls naming the pr in the query", () => {
+    const configs = { host: "github.com", owner: "archipelagoAI", repo: "configs" }
+    expect(
+      scanGh(
+        "check https://github.com/archipelagoAI/configs/actions/runs/42387589605/job/128448162705?pr=2627",
+        undefined,
+      ),
+    ).toEqual([
+      { kind: "run", number: 42387589605, repo: configs },
+      { kind: "pr", number: 2627, repo: configs },
+    ])
+  })
+
+  test("tool outputs are scanned", () => {
+    const text = textToScan([
+      { type: "text", text: "no refs here" },
+      { type: "tool", state: { output: "Created https://github.com/sst/opencode/pull/4821" } },
+    ])
+    expect(scan(text, opencode, [githubLexicon])).toEqual([{ kind: "pr", number: 4821, repo: opencode }])
   })
 
   test("pull urls with deep-link suffixes", () => {

@@ -25,7 +25,19 @@ export const githubLexicon: Lexicon = {
     },
     {
       kind: "run",
+      // Deep links: suffixes (job ids, attempts, queries) don't matter — the
+      // captured run id is what hydration needs.
       re: new RegExp(String.raw`https://(?:www\.)?github\.com/(${OWNER})/(${REPO})/actions/runs/(\d+)`, "gi"),
+    },
+    {
+      kind: "pr",
+      // Run links that name the PR in the query (?pr=2627) reference it explicitly.
+      // For fork PRs (whose runs report an empty pull_requests array) this is the
+      // only PR signal in the link itself; hydration resolves it via the API.
+      re: new RegExp(
+        String.raw`https://(?:www\.)?github\.com/(${OWNER})/(${REPO})/actions/runs/\d+(?:/[^\s?#]*)?\?[^#\s]*?pr=(\d+)`,
+        "gi",
+      ),
     },
   ],
   shorthand: { re: new RegExp(String.raw`(?<![\w@/])(${OWNER})/(${REPO})#(\d+)\b`, "g") },

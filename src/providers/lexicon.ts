@@ -9,8 +9,10 @@ import type { Kind, ProviderID } from "../model"
 
 export interface UrlPattern {
   kind: Kind
-  /** Global regex capturing (owner, repo, number). */
+  /** Global regex capturing (owner, repo, number) — `numberGroup` overrides the number index. */
   re: RegExp
+  /** Capture index of the reference number; defaults to 3. */
+  numberGroup?: number
 }
 
 export interface Lexicon {
