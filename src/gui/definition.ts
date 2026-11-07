@@ -11,6 +11,7 @@ export const definition = Plugin.define({
       "repo.reading": "Reading the session's repository…",
       "repo.none": "No git remote found in this workspace.",
       "auth.note": "Public repositories only. Connect your forge in Settings › Integrations for private repos and higher rate limits.",
+      "auth.unresolved": "{count} references couldn't be read — they look private. Connect your forge or run `gh auth login`, then reopen this session.",
       "state.open": "open",
       "state.draft": "draft",
       "state.merged": "merged",

@@ -88,10 +88,13 @@ export const Quartermaster = Rpc.define({
           .nullable(),
       }),
     },
-    /** Hydrates references into live entities. Unresolvable references are dropped. */
+    /** Hydrates references into live entities; everything not hydrated is reported unresolved. */
     hydrate: {
       input: z.object({ directory: z.string(), refs: z.array(Ref).max(64) }),
-      output: z.object({ entities: z.array(Entity) }),
+      output: z.object({
+        entities: z.array(Entity),
+        unresolved: z.array(z.object({ number: z.number(), repo: RepoRef, kind: z.string().optional() })),
+      }),
     },
     /** Recent CI runs of one branch: the standalone cards of the history panel. */
     branchRuns: {

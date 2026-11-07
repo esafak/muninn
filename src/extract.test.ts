@@ -40,6 +40,21 @@ describe("scan", () => {
     ])
   })
 
+  test("run urls with job and attempt suffixes", () => {
+    expect(
+      scanGh("https://github.com/archipelagoAI/fresnel/actions/runs/41995497581/job/127499929276", undefined),
+    ).toEqual([{ kind: "run", number: 41995497581, repo: { host: "github.com", owner: "archipelagoAI", repo: "fresnel" } }])
+    expect(scanGh("https://github.com/sst/opencode/actions/runs/18402/attempts/1", opencode)).toEqual([
+      { kind: "run", number: 18402, repo: opencode },
+    ])
+  })
+
+  test("pull urls with deep-link suffixes", () => {
+    expect(scanGh("diff at https://github.com/sst/opencode/pull/4821/files", opencode)).toEqual([
+      { kind: "pr", number: 4821, repo: opencode },
+    ])
+  })
+
   test("cross-repo shorthand", () => {
     expect(scanGh("mirror of acme/api#42", opencode)).toEqual([
       { number: 42, repo: { host: "github.com", owner: "acme", repo: "api" } },
@@ -64,8 +79,22 @@ describe("scan", () => {
     expect(scanGh("### 1. Steps\n## 42", opencode)).toEqual([])
   })
 
-  test("same number in different repositories stay distinct", () => {
-    const refs = scanGh("#4821 and acme/api#4821", opencode)
+  test("markdown-linked PR reference (reported miss)", () => {
+    const text =
+      "Merged [PR #2494](https://github.com/archipelagoAI/configs/pull/2494) as `e8a6a2f9`. Checks passed, and I removed the worktree and local branch."
+    const configs: RepoRef = { host: "github.com", owner: "archipelagoAI", repo: "configs" }
+
+    // Session repo is configs: one reference, kind from the URL.
+    expect(scanGh(text, configs)).toEqual([{ kind: "pr", number: 2494, repo: configs }])
+
+    // Session repo is something else: the explicit URL wins; no phantom for the session repo.
+    expect(scanGh(text, { host: "github.com", owner: "archipelagoAI", repo: "fresnel" })).toEqual([
+      { kind: "pr", number: 2494, repo: configs },
+    ])
+  })
+
+  test("same number in different repositories stay distinct when both are explicit", () => {
+    const refs = scanGh("https://github.com/sst/opencode/issues/4821 and acme/api#4821", opencode)
     expect(refs).toHaveLength(2)
   })
 

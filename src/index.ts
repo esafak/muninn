@@ -52,12 +52,17 @@ export default Plugin.define({
           groups.set(source, group)
         }
 
-        const entities = await Promise.all(
+        const results = await Promise.all(
           [...groups].map(([source, refs]) =>
-            source.hydrate(refs, sessionRepo, () => source.auth(ctx)).catch(() => []),
+            source
+              .hydrate(refs, sessionRepo, () => source.auth(ctx))
+              .catch(() => ({ entities: [], unresolved: refs as (Ref & { repo: RepoRef })[] })),
           ),
         )
-        return { entities: entities.flat() }
+        return {
+          entities: results.flatMap((result) => result.entities),
+          unresolved: results.flatMap((result) => result.unresolved),
+        }
       },
 
       branchRuns: async (input) => {

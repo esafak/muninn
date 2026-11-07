@@ -33,6 +33,8 @@ const kindWordMap = {
 export const scan = (text: string, repo?: RepoRef, lexicons: readonly Lexicon[] = []): Ref[] => {
   const source = stripCode(text)
   const found = new Map<string, Ref>()
+  /** Numbers seen in explicit references (URLs, shorthand) — they win over bare mentions. */
+  const explicitNumbers = new Set<number>()
 
   const add = (ref: Ref) => {
     const key = `${ref.repo ? `${ref.repo.host}/${ref.repo.owner}/${ref.repo.repo}` : "@"}#${ref.number}`
@@ -52,21 +54,33 @@ export const scan = (text: string, repo?: RepoRef, lexicons: readonly Lexicon[] 
 
   for (const lexicon of lexicons) {
     for (const pattern of lexicon.urls)
-      for (const match of source.matchAll(pattern.re))
+      for (const match of source.matchAll(pattern.re)) {
+        explicitNumbers.add(Number(match[3]))
         add({ kind: pattern.kind, number: Number(match[3]), repo: { host: lexicon.host, owner: match[1]!, repo: match[2]! } })
+      }
     if (lexicon.shorthand)
-      for (const match of source.matchAll(lexicon.shorthand.re))
+      for (const match of source.matchAll(lexicon.shorthand.re)) {
+        explicitNumbers.add(Number(match[3]))
         add({ number: Number(match[3]), repo: { host: lexicon.host, owner: match[1]!, repo: match[2]! } })
+      }
   }
 
   if (repo) {
-    for (const match of source.matchAll(kindWordPattern))
+    for (const match of source.matchAll(kindWordPattern)) {
+      // An explicit URL or shorthand reference with the same number is authoritative:
+      // `[PR #2494](configs/pull/2494)` must not also create a phantom for the
+      // session's own repository.
+      if (explicitNumbers.has(Number(match[2]))) continue
       add({
         kind: kindWordMap[match[1]!.toLowerCase() as keyof typeof kindWordMap],
         number: Number(match[2]),
         repo,
       })
-    for (const match of source.matchAll(bareHashPattern)) add({ number: Number(match[1]), repo })
+    }
+    for (const match of source.matchAll(bareHashPattern)) {
+      if (explicitNumbers.has(Number(match[1]))) continue
+      add({ number: Number(match[1]), repo })
+    }
   }
 
   return [...found.values()]

@@ -6,7 +6,11 @@
 
 import type { Credential, Plugin } from "@opencode/plugin"
 import type { Entity, IssueEntity, PullEntity, Ref, RepoRef, RunEntity } from "../model"
-import type { Auth, MergeMethod, MergeSettings, SourceProvider } from "./types"
+import type { Auth, Hydration, MergeMethod, MergeSettings, SourceProvider } from "./types"
+import { execFile } from "node:child_process"
+import { promisify } from "node:util"
+
+const exec = promisify(execFile)
 
 const API = "https://api.github.com"
 /** How long a hydrated entity is served from cache, in milliseconds. Keeps polling cheap. */
@@ -198,11 +202,29 @@ const resolveToken = async (ctx: Plugin.Context): Promise<string | undefined> =>
   const fromEnv = process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN
   if (fromEnv) return fromEnv
 
+  // The GitHub CLI is the most common already-authenticated credential: use it
+  // when present, before falling back to integration connections.
+  const fromGh = await ghAuthToken()
+  if (fromGh) return fromGh
+
   const connection = await ctx.integration.connection.active("github").catch(() => undefined)
   if (!connection) return undefined
   const credential = await ctx.integration.connection.resolve(connection).catch(() => undefined)
 
   return tokenFrom(credential)
+}
+
+/** `gh auth token`, resolved once per server process (re-login needs a restart). */
+let ghTokenCache: string | undefined | null = null
+const ghAuthToken = async (): Promise<string | undefined> => {
+  if (ghTokenCache !== null) return ghTokenCache
+  try {
+    const { stdout } = await exec("gh", ["auth", "token"], { timeout: 5_000 })
+    ghTokenCache = stdout.trim() || undefined
+  } catch {
+    ghTokenCache = undefined
+  }
+  return ghTokenCache
 }
 
 const tokenFrom = (credential: Credential.Value | undefined): string | undefined => {
@@ -227,12 +249,18 @@ export const github: SourceProvider = {
     const unique = new Map<string, Ref & { repo: RepoRef }>()
     for (const ref of refs) unique.set(`${ref.repo.owner}/${ref.repo.repo}#${ref.number}`, ref)
 
-    const entities = await Promise.all(
-      [...unique.values()].map((ref) =>
-        cached(`${ref.repo.owner}/${ref.repo.repo}#${ref.kind ?? "any"}${ref.number}`, () => hydrateOne(ref, auth)),
-      ),
+    const results = await Promise.all(
+      [...unique.values()].map(async (ref) => ({
+        ref,
+        entity: await cached(`${ref.repo.owner}/${ref.repo.repo}#${ref.kind ?? "any"}${ref.number}`, () =>
+          hydrateOne(ref, auth),
+        ),
+      })),
     )
-    return entities.filter((entity): entity is Entity => entity !== undefined)
+    return {
+      entities: results.filter((result) => result.entity !== undefined).map((result) => result.entity!),
+      unresolved: results.filter((result) => result.entity === undefined).map((result) => result.ref),
+    }
   },
 
   branchRuns: async (repo, branch, auth) => {

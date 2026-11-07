@@ -12,6 +12,8 @@ export interface HistoryProps {
   repo: Accessor<RepoRef | null>
   branch: Accessor<string>
   authenticated: Accessor<boolean>
+  /** References that were extracted but could not be read (private repo without a credential). */
+  unresolved: Accessor<number>
   sessionReady: Accessor<boolean>
   onOpen: (url: string) => void
 }
@@ -51,6 +53,9 @@ export const History = (props: HistoryProps) => {
 
       <Show when={props.repo() && !props.authenticated()}>
         <div class="qm-note">{ctx.t("auth.note")}</div>
+        <Show when={props.unresolved() > 0}>
+          <div class="qm-note" data-warn>{ctx.t("auth.unresolved", { count: props.unresolved() })}</div>
+        </Show>
       </Show>
 
       <Show

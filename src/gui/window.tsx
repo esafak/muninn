@@ -27,6 +27,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     provider: null as string | null,
     branch: "",
     authenticated: false,
+    unresolved: 0,
   })
   const [entities, setEntities] = createStore<Record<string, Entity>>({})
   const [runs, setRuns] = createStore<Record<string, readonly RunEntity[]>>({})
@@ -75,12 +76,13 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
 
     const found = refs()
     if (found.length > 0) {
-      const { entities: hydrated } = await client.rpc(Quartermaster).hydrate({ directory: current.directory, refs: found })
+      const { entities: hydrated, unresolved } = await client.rpc(Quartermaster).hydrate({ directory: current.directory, refs: found })
       setEntities((previous) => {
         const next = { ...previous }
         for (const entity of hydrated) next[entityKey(entity)] = entity
         return next
       })
+      setMeta("unresolved", unresolved.length)
     }
     if (branch) {
       const { runs: branchRuns } = await client.rpc(Quartermaster).branchRuns({ directory: current.directory, branch })
@@ -113,12 +115,13 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       void ctx.client
         .rpc(Quartermaster)
         .hydrate({ directory: current.directory, refs: found })
-        .then(({ entities: hydrated }) => {
+        .then(({ entities: hydrated, unresolved }) => {
           setEntities((previous) => {
             const next = { ...previous }
             for (const entity of hydrated) next[entityKey(entity)] = entity
             return next
           })
+          setMeta("unresolved", unresolved.length)
           rechain()
         })
         .catch(() => undefined)
@@ -230,6 +233,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
             repo={() => meta.repo}
             branch={() => meta.branch}
             authenticated={() => meta.authenticated}
+            unresolved={() => meta.unresolved}
             sessionReady={sessionReady}
             onOpen={open}
           />
@@ -259,6 +263,7 @@ const STYLES = `
   border-radius: 5px; padding: 2px 7px;
 }
 .qm-note { font-size: 10.5px; color: var(--v2-text-text-faint); padding: 0 4px 8px; }
+.qm-note[data-warn] { color: var(--v2-state-fg-warning); }
 .qm-day {
   font-size: 10px; font-weight: 600; letter-spacing: .07em; text-transform: uppercase;
   color: var(--v2-text-text-faint); padding: 10px 4px 6px;

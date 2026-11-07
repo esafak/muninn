@@ -11,18 +11,21 @@ const REPO = String.raw`[\w.-]+`
 export const githubLexicon: Lexicon = {
   provider: "github",
   host: "github.com",
+  // Patterns end at the captured id: GitHub's deep-link suffixes (/job/<id>,
+  // /files, /attempts/1, #issuecomment-…) are irrelevant to extraction, and a
+  // greedy \d+ already captures the full number.
   urls: [
     {
       kind: "issue",
-      re: new RegExp(String.raw`https://(?:www\.)?github\.com/(${OWNER})/(${REPO})/issues/(\d+)(?![/\w.-])`, "gi"),
+      re: new RegExp(String.raw`https://(?:www\.)?github\.com/(${OWNER})/(${REPO})/issues/(\d+)`, "gi"),
     },
     {
       kind: "pr",
-      re: new RegExp(String.raw`https://(?:www\.)?github\.com/(${OWNER})/(${REPO})/pull/(\d+)(?![/\w.-])`, "gi"),
+      re: new RegExp(String.raw`https://(?:www\.)?github\.com/(${OWNER})/(${REPO})/pull/(\d+)`, "gi"),
     },
     {
       kind: "run",
-      re: new RegExp(String.raw`https://(?:www\.)?github\.com/(${OWNER})/(${REPO})/actions/runs/(\d+)(?![/\w.-])`, "gi"),
+      re: new RegExp(String.raw`https://(?:www\.)?github\.com/(${OWNER})/(${REPO})/actions/runs/(\d+)`, "gi"),
     },
   ],
   shorthand: { re: new RegExp(String.raw`(?<![\w@/])(${OWNER})/(${REPO})#(\d+)\b`, "g") },

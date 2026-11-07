@@ -9,6 +9,14 @@ import type { Entity, Ref, RepoRef, RunEntity } from "../model"
 
 export type MergeMethod = "merge" | "squash" | "rebase"
 
+/** A reference the provider recognized but could not hydrate (missing, private, or no access). */
+export type Unresolved = Ref & { repo: RepoRef }
+
+export interface Hydration {
+  entities: Entity[]
+  unresolved: Unresolved[]
+}
+
 /** The repo's merge policy, from the provider's repository settings. */
 export interface MergeSettings {
   /** Allowed methods, in preference order. A single entry means never ask. */
@@ -29,8 +37,8 @@ export interface SourceProvider {
   auth: (ctx: unknown) => Promise<string | undefined>
   /** The repo's merge policy; undefined when unknown or unsupported. */
   mergeSettings: (repo: RepoRef, auth: Auth) => Promise<MergeSettings | undefined>
-  /** Hydrates references into entities; unresolvable references are dropped. */
-  hydrate: (refs: readonly (Ref & { repo: RepoRef })[], sessionRepo: RepoRef | undefined, auth: Auth) => Promise<Entity[]>
+  /** Hydrates references into entities; everything not hydrated is reported unresolved. */
+  hydrate: (refs: readonly (Ref & { repo: RepoRef })[], sessionRepo: RepoRef | undefined, auth: Auth) => Promise<Hydration>
   /** Recent runs of one branch — the standalone cards of the history panel. */
   branchRuns: (repo: RepoRef, branch: string, auth: Auth) => Promise<RunEntity[]>
 }
