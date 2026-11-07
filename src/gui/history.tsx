@@ -23,7 +23,8 @@ export interface HistoryProps {
 }
 
 const dayLabel = (epoch: number): string => new Date(epoch).toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" })
-const time = (epoch: number): string => new Date(epoch).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })
+const time = (epoch: number): string =>
+  new Date(epoch).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hourCycle: "h23" })
 
 const sameDay = (a: number, b: number): boolean => new Date(a).toDateString() === new Date(b).toDateString()
 
