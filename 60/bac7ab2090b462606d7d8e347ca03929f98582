@@ -1,0 +1,19 @@
+scratch/gui-sim.ts
+  s_9d119ab556f9ea::t_6e833d01c0b015 1-45
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "60bac7ab2090b462606d7d8e347ca03929f98582",
+  "prompts": {},
+  "sessions": {
+    "s_9d119ab556f9ea": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_e4baec06dffet0WhRRRcXF6FO3",
+        "model": "unknown"
+      },
+      "human_author": "Emre Şafak <3928300+esafak@users.noreply.github.com>"
+    }
+  }
+}
