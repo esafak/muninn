@@ -7,7 +7,7 @@ import { messagesText, scan } from "../extract"
 import type { Chain, Entity, PullEntity, RepoRef, RunEntity, RunStatus } from "../model"
 import { chainTone, mergeReady, mergeWhy, refKey, repoKey } from "../model"
 import { githubLexicon } from "../providers/github/lexicon"
-import { Quartermaster } from "../rpc"
+import { ForgeScout } from "../rpc"
 import type { definition } from "./definition"
 import { History, MergeButton } from "./history"
 import { CancelledGlyph, CheckGlyph, CrossGlyph, IssueGlyph, MergeGlyph, MergedGlyph, PullGlyph, QueuedGlyph } from "./icons"
@@ -73,7 +73,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
 
   const session = () => ctx.sessions.current()
 
-  /** All text Quartermaster may scan, from the mounted session's messages. The
+  /** All text ForgeScout may scan, from the mounted session's messages. The
    * SDK types the list here, so a wrong field fails the build; flattening itself
    * is `messagesText` in the tested core. */
   const text = () => {
@@ -131,7 +131,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     const client = ctx.client
 
     try {
-      const info = await client.rpc(Quartermaster).repo({ directory: current.directory })
+      const info = await client.rpc(ForgeScout).repo({ directory: current.directory })
       setMeta({
         sessionID: current.id,
         repo: info.repo,
@@ -150,7 +150,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
 
       const found = refs()
       if (found.length > 0) {
-        const result = await client.rpc(Quartermaster).hydrate({ directory: current.directory, refs: found })
+        const result = await client.rpc(ForgeScout).hydrate({ directory: current.directory, refs: found })
         merge(result.entities)
         setMeta("unresolved", result.unresolved.length)
         const byKind = new Map<string, number>()
@@ -159,7 +159,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
         setMeta("stats", `${found.length} refs → ${result.entities.length} hydrated (${breakdown}) · ${result.unresolved.length} unresolved`)
       }
       if (branch) {
-        const { runs: branchRuns, prs } = await client.rpc(Quartermaster).branchRuns({ directory: current.directory, branch })
+        const { runs: branchRuns, prs } = await client.rpc(ForgeScout).branchRuns({ directory: current.directory, branch })
         setRuns(repoKey(info.repo), branchRuns)
         merge(prs)
       }
@@ -169,7 +169,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       setMeta("error", error instanceof Error ? error.message : String(error))
     }
 
-    const dbg = await client.rpc(Quartermaster).debug({}).catch(() => null)
+    const dbg = await client.rpc(ForgeScout).debug({}).catch(() => null)
     setMeta("debug", dbg ? `srv ${dbg.server}` : "srv ?")
   }
 
@@ -197,7 +197,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       const current = session()
       if (!current) return
       void ctx.client
-        .rpc(Quartermaster)
+        .rpc(ForgeScout)
         .hydrate({ directory: current.directory, refs: found })
         .then(({ entities: hydrated, unresolved }) => {
           merge(hydrated)
@@ -244,7 +244,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     })
     if (!ok) return
     await client
-      .rpc(Quartermaster)
+      .rpc(ForgeScout)
       .merge({
         directory: current.directory,
         number: pull.number,
@@ -252,7 +252,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
         expectedHeadSha: pull.headSha,
         deleteBranch,
       })
-      .catch((error: unknown) => console.error("[quartermaster] merge failed", error))
+      .catch((error: unknown) => console.error("[forgescout] merge failed", error))
     void refresh()
   }
 
@@ -272,12 +272,12 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       if (!ok) return
     }
     await client
-      .rpc(Quartermaster)
+      .rpc(ForgeScout)
       .autoMerge({ directory: current.directory, number: pull.number, enable, method })
       .then((result) => {
         if (result.message) void ctx.dialogs.alert({ title: `Auto-merge for PR #${pull.number}`, description: result.message })
       })
-      .catch((error: unknown) => console.error("[quartermaster] auto-merge failed", error))
+      .catch((error: unknown) => console.error("[forgescout] auto-merge failed", error))
     void refresh()
   }
 
@@ -295,14 +295,14 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
           : list[0]!.runs[0]
             ? `run #${list[0]!.runs[0].id}`
             : "off"
-    return `qm gui ${__QM_BUILD__}${meta.debug ? ` · ${meta.debug}` : " · srv ?"} · gate ${gate} · chains ${chains().length} · live ${list.length} · pill: ${pill}${meta.stats ? ` · ${meta.stats}` : ""}`
+    return `fs gui ${__FS_BUILD__}${meta.debug ? ` · ${meta.debug}` : " · srv ?"} · gate ${gate} · chains ${chains().length} · live ${list.length} · pill: ${pill}${meta.stats ? ` · ${meta.stats}` : ""}`
   }
 
   const runGlyph = (status: RunStatus): JSX.Element => {
     if (status === "succeeded") return <CheckGlyph />
     if (status === "failed") return <CrossGlyph />
     if (status === "cancelled") return <CancelledGlyph />
-    if (status === "running") return <span class="qm-spin" />
+    if (status === "running") return <span class="fs-spin" />
     return <QueuedGlyph />
   }
 
@@ -341,54 +341,54 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     // sidebar has, plus the merge-method/delete-branch choices. Reads the stores
     // itself, so it stays live while open. Run ids live only here (pill grammar).
     menu: (input) => (
-      <div class="qm-pop">
+      <div class="fs-pop">
         <For each={chains().filter((chain) => live(chain)).slice(0, 3)}>
           {(chain) => (
-            <div class="qm-pop-chain">
+            <div class="fs-pop-chain">
               <For each={chain.prs}>
                 {(pull) => (
-                  <div class="qm-pop-row" onClick={() => { input.close(); open(pull.url) }}>
-                    <span class="qm-kind" data-state={`pr-${pull.state}`} title={ctx.t(`state.${pull.state}`)}>
+                  <div class="fs-pop-row" onClick={() => { input.close(); open(pull.url) }}>
+                    <span class="fs-kind" data-state={`pr-${pull.state}`} title={ctx.t(`state.${pull.state}`)}>
                       {pull.state === "merged" ? <MergedGlyph /> : <PullGlyph />}
                     </span>
                     <span
-                      class="qm-merge-state"
+                      class="fs-merge-state"
                       data-state={pull.mergeState ?? "unknown"}
                       title={`merge: ${pull.mergeState ?? "unknown"}${pull.reviewState ? ` · reviews: ${pull.reviewState}` : ""}`}
                     >
                       <MergeGlyph />
                     </span>
-                    <span class="qm-pop-id">#{pull.number}</span>
-                    <span class="qm-pop-title">{pull.title}</span>
+                    <span class="fs-pop-id">#{pull.number}</span>
+                    <span class="fs-pop-title">{pull.title}</span>
                     <MergeButton chain={chain} pull={pull} onMerge={mergePull} onArm={armPull} />
                   </div>
                 )}
               </For>
               <For each={chain.issues}>
                 {(issue) => (
-                  <div class="qm-pop-row" onClick={() => { input.close(); open(issue.url) }}>
-                    <span class="qm-kind" data-state={`issue-${issue.state}`} title={ctx.t(`state.${issue.state}`)}>
+                  <div class="fs-pop-row" onClick={() => { input.close(); open(issue.url) }}>
+                    <span class="fs-kind" data-state={`issue-${issue.state}`} title={ctx.t(`state.${issue.state}`)}>
                       <IssueGlyph closed={issue.state === "closed"} />
                     </span>
-                    <span class="qm-pop-id">#{issue.number}</span>
-                    <span class="qm-pop-title">{issue.title}</span>
+                    <span class="fs-pop-id">#{issue.number}</span>
+                    <span class="fs-pop-title">{issue.title}</span>
                   </div>
                 )}
               </For>
               <For each={chain.runs.slice(0, 3)}>
                 {(run) => (
-                  <div class="qm-pop-row" onClick={() => { input.close(); open(run.url) }}>
-                    <span class="qm-kind" data-state={run.status} title={ctx.t(`state.${run.status}`)}>
+                  <div class="fs-pop-row" onClick={() => { input.close(); open(run.url) }}>
+                    <span class="fs-kind" data-state={run.status} title={ctx.t(`state.${run.status}`)}>
                       {runGlyph(run.status)}
                     </span>
-                    <span class="qm-pop-id">#{run.id}</span>
-                    <span class="qm-pop-title">{run.name}</span>
+                    <span class="fs-pop-id">#{run.id}</span>
+                    <span class="fs-pop-title">{run.name}</span>
                   </div>
                 )}
               </For>
               <Show when={chain.runs.length > 3}>
                 <div
-                  class="qm-pop-more"
+                  class="fs-pop-more"
                   onClick={() => {
                     input.close()
                     if (input.session.id) ctx.layout.open(`${ctx.id}:history`, input.session)
@@ -400,8 +400,8 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
             </div>
           )}
         </For>
-        <div class="qm-pop-foot">
-          <label class="qm-pop-toggle">
+        <div class="fs-pop-foot">
+          <label class="fs-pop-toggle">
             <input
               type="checkbox"
               checked={ctx.stores.settings.value.deleteBranch}
@@ -427,7 +427,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     ),
   })
 
-  // Launcher: the side region's + menu lists Quartermaster so the tab can be opened.
+  // Launcher: the side region's + menu lists ForgeScout so the tab can be opened.
   ctx.add(MenuItem, (): MenuItem => {    const current = ctx.sessions.current()
 
     return {
@@ -465,8 +465,8 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     },
     list: (input) => (input.open.includes("history") ? [tab] : []),
     render: () => (
-      <div class="qm-panel" data-quartermaster>
-        <div class="qm-scroll" data-scrollable>
+      <div class="fs-panel" data-forgescout>
+        <div class="fs-scroll" data-scrollable>
           <History
             chains={chains}
             repo={() => meta.repo}
@@ -483,7 +483,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
           />
         </div>
         <Show when={chains().length === 0 && meta.repo === null && !sessionReady()}>
-          <div class="qm-empty" />
+          <div class="fs-empty" />
         </Show>
       </div>
     ),
@@ -506,11 +506,11 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
         },
       ]
     },
-    render: () => <QuartermasterSettings />,
+    render: () => <ForgeScoutSettings />,
   })
 }
 
-const QuartermasterSettings = (): JSX.Element => {
+const ForgeScoutSettings = (): JSX.Element => {
   const ctx = usePlugin<typeof definition>()
   const ui = ctx.ui
   const days = () => Math.max(1, Math.round(ctx.stores.settings.value.retentionDays))
@@ -527,7 +527,7 @@ const QuartermasterSettings = (): JSX.Element => {
               if (Number.isFinite(parsed)) ctx.stores.settings.update((draft) => { draft.retentionDays = Math.min(365, Math.max(1, parsed)) })
             }}
           />
-          <span class="qm-note" style={{ padding: "0 6px" }}>{ctx.t("settings.retention.days")}</span>
+          <span class="fs-note" style={{ padding: "0 6px" }}>{ctx.t("settings.retention.days")}</span>
         </ui.SettingsRow>
         <ui.SettingsRow id="debug" title={ctx.t("settings.debug")} description={ctx.t("settings.debug.description")}>
           <ui.Switch
@@ -543,133 +543,133 @@ const QuartermasterSettings = (): JSX.Element => {
 }
 
 const STYLES = `
-[data-quartermaster] {
+[data-forgescout] {
   color: var(--v2-text-text-base);
   font-size: 12px;
   line-height: 1.45;
 }
-.qm-panel { height: 100%; min-height: 0; display: flex; flex-direction: column; }
-.qm-scroll { min-height: 0; flex: 1; overflow-y: auto; padding: 10px 12px 14px; }
-.qm-head { display: flex; align-items: center; gap: 6px; padding: 2px 4px 10px; color: var(--v2-text-text-muted); }
-.qm-mark { color: var(--v2-icon-icon-muted); flex: none; display: inline-flex; }
-.qm-repo { font-family: var(--v2-font-family-code); font-size: 11px; }
-.qm-branch {
+.fs-panel { height: 100%; min-height: 0; display: flex; flex-direction: column; }
+.fs-scroll { min-height: 0; flex: 1; overflow-y: auto; padding: 10px 12px 14px; }
+.fs-head { display: flex; align-items: center; gap: 6px; padding: 2px 4px 10px; color: var(--v2-text-text-muted); }
+.fs-mark { color: var(--v2-icon-icon-muted); flex: none; display: inline-flex; }
+.fs-repo { font-family: var(--v2-font-family-code); font-size: 11px; }
+.fs-branch {
   margin-left: auto; font-size: 10.5px; font-family: var(--v2-font-family-code);
   color: var(--v2-text-text-faint); background: var(--v2-background-bg-layer-01);
   border-radius: 5px; padding: 2px 7px;
 }
-.qm-note { font-size: 10.5px; color: var(--v2-text-text-faint); padding: 0 4px 8px; }
-.qm-note[data-warn] { color: var(--v2-state-fg-warning); }
-.qm-day {
+.fs-note { font-size: 10.5px; color: var(--v2-text-text-faint); padding: 0 4px 8px; }
+.fs-note[data-warn] { color: var(--v2-state-fg-warning); }
+.fs-day {
   font-size: 10px; font-weight: 600; letter-spacing: .07em; text-transform: uppercase;
   color: var(--v2-text-text-faint); padding: 10px 4px 6px;
 }
-.qm-chain {
+.fs-chain {
   background: var(--v2-background-bg-deep);
   border-radius: 10px;
   box-shadow: inset 0 0 0 .5px var(--v2-border-border-muted);
   padding: 4px 0 2px;
   margin-bottom: 8px;
 }
-.qm-chain[data-tone="danger"] { box-shadow: inset 0 0 0 .5px var(--v2-state-border-danger); }
-.qm-row { position: relative; display: flex; align-items: center; gap: 8px; padding: 6px 10px 6px 12px; border-radius: 7px; min-width: 0; }
-.qm-row:hover { background: var(--v2-overlay-simple-overlay-hover); cursor: pointer; }
-.qm-row.sub { padding-left: 26px; }
-.qm-row.sub::before { content: ""; position: absolute; left: 22px; top: -4px; height: 8px; width: 1px; background: var(--v2-border-border-strong); }
-.qm-kind { flex: none; display: inline-flex; }
-.qm-kind[data-state="issue-open"], .qm-kind[data-state="pr-open"] { color: var(--v2-state-fg-success); }
-.qm-kind[data-state="pr-draft"] { color: var(--v2-icon-icon-faint); }
-.qm-kind[data-state="pr-merged"], .qm-kind[data-state="issue-closed"] { color: var(--v2-text-text-accent); }
-.qm-kind[data-state="pr-closed"] { color: var(--v2-state-fg-danger); }
-.qm-id { font-family: var(--v2-font-family-code); font-size: 11.5px; font-weight: 600; flex: none; cursor: copy; }
-.qm-id.copied { color: var(--v2-state-fg-success); }
-.qm-chain[data-stale="true"] { opacity: .55; }
-.qm-title { flex: 1; min-width: 0; font-size: 12px; color: var(--v2-text-text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.qm-meta { flex: none; font-size: 10.5px; color: var(--v2-text-text-faint); font-family: var(--v2-font-family-code); }
-.qm-state { display: inline-flex; align-items: center; gap: 4px; flex: none; font-size: 10.5px; font-family: var(--v2-font-family-code); }
-.qm-state[data-state="open"], .qm-state[data-status="succeeded"] { color: var(--v2-state-fg-success); }
-.qm-state[data-state="merged"], .qm-state[data-state="closed"], .qm-state[data-status="running"] { color: var(--v2-text-text-accent); }
-.qm-state[data-state="closed"][data-issue] { color: var(--v2-text-text-accent); }
-.qm-state[data-state="draft"], .qm-state[data-status="queued"], .qm-state[data-status="cancelled"] { color: var(--v2-text-text-faint); }
-.qm-state[data-state="closed"] { color: var(--v2-state-fg-danger); }
-.qm-checks { overflow: hidden; max-height: 0; transition: max-height .18s ease; }
-.qm-checks.show { max-height: 260px; }
-.qm-check { display: flex; align-items: center; gap: 7px; padding: 3px 10px 3px 42px; font-size: 11px; font-family: var(--v2-font-family-code); color: var(--v2-text-text-muted); }
-.qm-check-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.qm-check [data-status="succeeded"] { color: var(--v2-state-fg-success); }
-.qm-check [data-status="failed"] { color: var(--v2-state-fg-danger); }
-.qm-check [data-status="running"] { color: var(--v2-text-text-accent); }
-.qm-check [data-status="queued"], .qm-check [data-status="cancelled"] { color: var(--v2-text-text-faint); }
-.qm-chain-foot {
+.fs-chain[data-tone="danger"] { box-shadow: inset 0 0 0 .5px var(--v2-state-border-danger); }
+.fs-row { position: relative; display: flex; align-items: center; gap: 8px; padding: 6px 10px 6px 12px; border-radius: 7px; min-width: 0; }
+.fs-row:hover { background: var(--v2-overlay-simple-overlay-hover); cursor: pointer; }
+.fs-row.sub { padding-left: 26px; }
+.fs-row.sub::before { content: ""; position: absolute; left: 22px; top: -4px; height: 8px; width: 1px; background: var(--v2-border-border-strong); }
+.fs-kind { flex: none; display: inline-flex; }
+.fs-kind[data-state="issue-open"], .fs-kind[data-state="pr-open"] { color: var(--v2-state-fg-success); }
+.fs-kind[data-state="pr-draft"] { color: var(--v2-icon-icon-faint); }
+.fs-kind[data-state="pr-merged"], .fs-kind[data-state="issue-closed"] { color: var(--v2-text-text-accent); }
+.fs-kind[data-state="pr-closed"] { color: var(--v2-state-fg-danger); }
+.fs-id { font-family: var(--v2-font-family-code); font-size: 11.5px; font-weight: 600; flex: none; cursor: copy; }
+.fs-id.copied { color: var(--v2-state-fg-success); }
+.fs-chain[data-stale="true"] { opacity: .55; }
+.fs-title { flex: 1; min-width: 0; font-size: 12px; color: var(--v2-text-text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fs-meta { flex: none; font-size: 10.5px; color: var(--v2-text-text-faint); font-family: var(--v2-font-family-code); }
+.fs-state { display: inline-flex; align-items: center; gap: 4px; flex: none; font-size: 10.5px; font-family: var(--v2-font-family-code); }
+.fs-state[data-state="open"], .fs-state[data-status="succeeded"] { color: var(--v2-state-fg-success); }
+.fs-state[data-state="merged"], .fs-state[data-state="closed"], .fs-state[data-status="running"] { color: var(--v2-text-text-accent); }
+.fs-state[data-state="closed"][data-issue] { color: var(--v2-text-text-accent); }
+.fs-state[data-state="draft"], .fs-state[data-status="queued"], .fs-state[data-status="cancelled"] { color: var(--v2-text-text-faint); }
+.fs-state[data-state="closed"] { color: var(--v2-state-fg-danger); }
+.fs-checks { overflow: hidden; max-height: 0; transition: max-height .18s ease; }
+.fs-checks.show { max-height: 260px; }
+.fs-check { display: flex; align-items: center; gap: 7px; padding: 3px 10px 3px 42px; font-size: 11px; font-family: var(--v2-font-family-code); color: var(--v2-text-text-muted); }
+.fs-check-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fs-check [data-status="succeeded"] { color: var(--v2-state-fg-success); }
+.fs-check [data-status="failed"] { color: var(--v2-state-fg-danger); }
+.fs-check [data-status="running"] { color: var(--v2-text-text-accent); }
+.fs-check [data-status="queued"], .fs-check [data-status="cancelled"] { color: var(--v2-text-text-faint); }
+.fs-chain-foot {
   display: flex; align-items: center; gap: 8px; padding: 5px 12px 6px;
   border-top: 1px solid var(--v2-border-border-muted); margin-top: 3px;
   font-size: 10.5px; color: var(--v2-text-text-faint);
 }
-.qm-foot-ago { margin-left: auto; }
-.qm-empty { color: var(--v2-text-text-faint); font-size: 11px; padding: 6px 4px; }
-.qm-debug {
+.fs-foot-ago { margin-left: auto; }
+.fs-empty { color: var(--v2-text-text-faint); font-size: 11px; padding: 6px 4px; }
+.fs-debug {
   flex: none; padding: 6px 12px 0;
   font-family: var(--v2-font-family-code); font-size: 9.5px;
   color: var(--v2-text-text-faint);
   border-top: 1px dashed var(--v2-border-border-muted);
   user-select: text; cursor: pointer;
 }
-.qm-debug:hover { color: var(--v2-text-text-muted); }
-.qm-spin {
+.fs-debug:hover { color: var(--v2-text-text-muted); }
+.fs-spin {
   width: 11px; height: 11px; border-radius: 50%; flex: none;
   border: 1.5px solid var(--v2-border-border-strong); border-top-color: var(--v2-text-text-accent);
-  animation: qm-rot .9s linear infinite;
+  animation: fs-rot .9s linear infinite;
 }
-@keyframes qm-rot { to { transform: rotate(360deg); } }
+@keyframes fs-rot { to { transform: rotate(360deg); } }
 
 /* Pill dropdown (custom popover content; the host owns the popover chrome). */
-.qm-pop { display: flex; flex-direction: column; gap: 2px; min-width: 300px; max-width: 380px; max-height: 440px; overflow-y: auto; }
-.qm-pop-chain { display: flex; flex-direction: column; gap: 1px; }
-.qm-pop-chain + .qm-pop-chain { margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--v2-border-border-muted); }
-.qm-pop-row { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: 7px; font-size: 12px; min-width: 0; }
-.qm-pop-row:hover { background: var(--v2-overlay-simple-overlay-hover); cursor: pointer; }
-.qm-pop-id { font-family: var(--v2-font-family-code); font-size: 11px; color: var(--v2-text-text-muted); flex: none; }
-.qm-pop-title { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--v2-text-text-base); }
-.qm-pop-more { padding: 4px 8px; font-size: 11px; color: var(--v2-text-text-faint); cursor: pointer; border-radius: 7px; }
-.qm-pop-more:hover { background: var(--v2-overlay-simple-overlay-hover); color: var(--v2-text-text-muted); }
-.qm-pop-foot {
+.fs-pop { display: flex; flex-direction: column; gap: 2px; min-width: 300px; max-width: 380px; max-height: 440px; overflow-y: auto; }
+.fs-pop-chain { display: flex; flex-direction: column; gap: 1px; }
+.fs-pop-chain + .fs-pop-chain { margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--v2-border-border-muted); }
+.fs-pop-row { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: 7px; font-size: 12px; min-width: 0; }
+.fs-pop-row:hover { background: var(--v2-overlay-simple-overlay-hover); cursor: pointer; }
+.fs-pop-id { font-family: var(--v2-font-family-code); font-size: 11px; color: var(--v2-text-text-muted); flex: none; }
+.fs-pop-title { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--v2-text-text-base); }
+.fs-pop-more { padding: 4px 8px; font-size: 11px; color: var(--v2-text-text-faint); cursor: pointer; border-radius: 7px; }
+.fs-pop-more:hover { background: var(--v2-overlay-simple-overlay-hover); color: var(--v2-text-text-muted); }
+.fs-pop-foot {
   display: flex; align-items: center; gap: 12px;
   margin-top: 4px; padding: 7px 8px 3px;
   border-top: 1px solid var(--v2-border-border-muted);
   font-size: 11px; color: var(--v2-text-text-faint);
 }
-.qm-pop-toggle { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
-.qm-pop-foot select {
+.fs-pop-toggle { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
+.fs-pop-foot select {
   margin-left: auto; font-size: 11px; color: var(--v2-text-text-muted);
   background: var(--v2-background-bg-layer-01); border: 1px solid var(--v2-border-border-muted);
   border-radius: 5px; padding: 2px 6px;
 }
-.qm-kind { color: var(--v2-icon-icon-muted); flex: none; display: inline-flex; }
-.qm-kind[data-state="open"], .qm-kind[data-state="succeeded"] { color: var(--v2-state-fg-success); }
-.qm-kind[data-state="draft"], .qm-kind[data-state="queued"], .qm-kind[data-state="running"] { color: var(--v2-state-fg-warning); }
-.qm-kind[data-state="merged"] { color: var(--v2-state-fg-success); }
-.qm-kind[data-state="closed"], .qm-kind[data-state="failed"], .qm-kind[data-state="cancelled"] { color: var(--v2-state-fg-danger); }
+.fs-kind { color: var(--v2-icon-icon-muted); flex: none; display: inline-flex; }
+.fs-kind[data-state="open"], .fs-kind[data-state="succeeded"] { color: var(--v2-state-fg-success); }
+.fs-kind[data-state="draft"], .fs-kind[data-state="queued"], .fs-kind[data-state="running"] { color: var(--v2-state-fg-warning); }
+.fs-kind[data-state="merged"] { color: var(--v2-state-fg-success); }
+.fs-kind[data-state="closed"], .fs-kind[data-state="failed"], .fs-kind[data-state="cancelled"] { color: var(--v2-state-fg-danger); }
 
 /* Merge action: green when ready, amber while checks run, grey when blocked. */
-.qm-merge {
+.fs-merge {
   flex: none; font-size: 10.5px; font-weight: 600; line-height: 1;
   padding: 4px 9px; border-radius: 6px; cursor: pointer;
   color: var(--v2-state-fg-on-success, #fff);
   background: var(--v2-state-bg-success, #1a7f37); border: none;
 }
-.qm-merge:hover { filter: brightness(1.1); }
-.qm-merge.pending { background: var(--v2-state-bg-warning, #9a6700); }
-.qm-merge.armed {
+.fs-merge:hover { filter: brightness(1.1); }
+.fs-merge.pending { background: var(--v2-state-bg-warning, #9a6700); }
+.fs-merge.armed {
   background: none; color: var(--v2-state-fg-warning, #9a6700);
   box-shadow: inset 0 0 0 .5px var(--v2-state-border-warning, #9a6700);
 }
-.qm-merge.armed:hover { background: var(--v2-overlay-simple-overlay-hover); filter: none; }
+.fs-merge.armed:hover { background: var(--v2-overlay-simple-overlay-hover); filter: none; }
 
 /* Merge-status glyph: GitHub's circle-dot, colored by merge state. */
-.qm-merge-state { color: var(--v2-icon-icon-muted); flex: none; display: inline-flex; }
-.qm-merge-state[data-state="ready"] { color: var(--v2-state-fg-success, #1a7f37); }
-.qm-merge-state[data-state="pending"], .qm-merge-state[data-state="blocked"], .qm-merge-state[data-state="unknown"] { color: var(--v2-state-fg-warning, #9a6700); }
-.qm-merge-state[data-state="conflict"] { color: var(--v2-state-fg-danger, #cf222e); }
+.fs-merge-state { color: var(--v2-icon-icon-muted); flex: none; display: inline-flex; }
+.fs-merge-state[data-state="ready"] { color: var(--v2-state-fg-success, #1a7f37); }
+.fs-merge-state[data-state="pending"], .fs-merge-state[data-state="blocked"], .fs-merge-state[data-state="unknown"] { color: var(--v2-state-fg-warning, #9a6700); }
+.fs-merge-state[data-state="conflict"] { color: var(--v2-state-fg-danger, #cf222e); }
 `
 
 let injected = false
@@ -677,7 +677,7 @@ const injectStyles = (): void => {
   if (injected || typeof document === "undefined") return
   const style = document.createElement("style")
   style.textContent = STYLES
-  style.dataset.quartermaster = ""
+  style.dataset.forgescout = ""
   document.head.append(style)
   injected = true
 }

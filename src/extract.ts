@@ -96,12 +96,12 @@ export const scan = (text: string, repo?: RepoRef, lexicons: readonly Lexicon[] 
   return result
 }
 
-/** Flattens a session's parts into the text Quartermaster should scan: text parts
+/** Flattens a session's parts into the text ForgeScout should scan: text parts
  * and tool results (where gh/shell output — run links, PR urls, numbers — lives).
  * Tool outputs appear as `state.output` or `state.content[]` blocks depending on
  * the tool; the invoked command is scanned too. */
 /** Flattens projected session messages (what the host's message.list returns) into
- * the text Quartermaster scans: user messages carry `text` directly; assistant
+ * the text ForgeScout scans: user messages carry `text` directly; assistant
  * messages carry a `content[]` of text/reasoning items plus completed tool states
  * (where gh/shell output — run links, PR urls — actually lives). Structurally
  * typed so the core stays SDK-agnostic; the GUI call site is SDK-typed, so a

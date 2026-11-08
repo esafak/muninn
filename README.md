@@ -1,4 +1,4 @@
-# quartermaster
+# forgescout
 
 Tracks what an OpenCode session ships: pull requests, issues, and CI runs —
 extracted from the conversation, hydrated from the forge, and shown live in
@@ -9,14 +9,14 @@ Two components, one data model:
 - **Composer pills** — one pair per work chain (`#4821 ✓ ready ⇢ #1043 +1` + a
   Merge pill). Appears only when the session touches sources; floats over the
   timeline, so it never resizes the composer.
-- **Quartermaster side panel** — chains as triplet cards (issue → PR → runs),
+- **ForgeScout side panel** — chains as triplet cards (issue → PR → runs),
   chronologically by last activity, grouped by day.
 
 ## Parts
 
 | Export | Runtime | What it does |
 |---|---|---|
-| `.` | OpenCode server | Repo resolution from `git remote`, reference hydration, merge policy — behind the `Quartermaster` RPC. GitHub REST via integration credentials, `GITHUB_TOKEN`, or anonymous public access. |
+| `.` | OpenCode server | Repo resolution from `git remote`, reference hydration, merge policy — behind the `ForgeScout` RPC. GitHub REST via integration credentials, `GITHUB_TOKEN`, or anonymous public access. |
 | `./rpc` | both | The RPC contract — the only shared runtime token. |
 | `./gui-experimental` | desktop windows | Prebuilt bundle: pills, side panel, scanning. |
 

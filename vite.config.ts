@@ -12,5 +12,5 @@ const sha = (() => {
 
 export default defineConfig({
   plugins: [gui()],
-  define: { __QM_BUILD__: JSON.stringify(`${sha}+${new Date().toISOString().slice(11, 19)}`) },
+  define: { __FS_BUILD__: JSON.stringify(`${sha}+${new Date().toISOString().slice(11, 19)}`) },
 })

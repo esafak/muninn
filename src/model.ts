@@ -1,10 +1,10 @@
 /**
- * The provider-agnostic model Quartermaster's UI renders. Providers (GitHub today,
+ * The provider-agnostic model ForgeScout's UI renders. Providers (GitHub today,
  * GitLab or a tracker tomorrow) hydrate these; the GUI never sees provider
  * specifics beyond a `provider` mark and a repo slug.
  */
 
-/** Repositories Quartermaster knows about, parsed from a git remote URL. */
+/** Repositories ForgeScout knows about, parsed from a git remote URL. */
 export interface RepoRef {
   host: string
   owner: string

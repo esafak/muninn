@@ -1,3 +1,3 @@
 /// <reference types="vite/client" />
 
-declare const __QM_BUILD__: string
+declare const __FS_BUILD__: string

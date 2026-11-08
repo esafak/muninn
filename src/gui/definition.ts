@@ -58,7 +58,7 @@ export const definition = Plugin.define({
   stores: {
     /**
      * Hydrated entity cache, keyed by `host/owner/repo#kind<number>`. Persisted
-     * under `plugin.quartermaster.cache`, so reopening a session renders its
+     * under `plugin.forgescout.cache`, so reopening a session renders its
      * chains instantly; values were validated by the RPC boundary on the way in.
      */
     cache: Store.global(
@@ -81,7 +81,7 @@ export const definition = Plugin.define({
   },
   i18n: {
     en: {
-      "tab.title": "Quartermaster",
+      "tab.title": "ForgeScout",
       "pill.title": "Session sources",
       "pill.linked": "linked",
       "empty.title": "No linked sources yet.",
@@ -91,7 +91,7 @@ export const definition = Plugin.define({
       "auth.note": "Public repositories only. Connect your forge in Settings › Integrations for private repos and higher rate limits.",
       "auth.unresolved": "{count} references couldn't be read — check they exist in this repo. Private repos need a forge connection or `gh auth login`.",
       "panel.error": "Couldn't reach the forge ({message}). Fix credentials or connection, then switch sessions to retry.",
-      "settings.title": "Quartermaster",
+      "settings.title": "ForgeScout",
       "settings.description": "How source references are extracted, refreshed and remembered in your sessions.",
       "settings.section.caching": "Caching",
       "settings.retention": "Keep history",
