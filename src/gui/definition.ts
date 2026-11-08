@@ -78,6 +78,20 @@ export const definition = Plugin.define({
       }),
       { retentionDays: 30, debugMode: true, mergeMethod: "squash", deleteBranch: true },
     ),
+    /** Pull requests Muninn is driving to merge ("merge when ready"): armed
+     * locally, fired by Muninn's refresh cycle once checks and reviews are green. */
+    armed: Store.global(
+      Schema.Struct({
+        entries: Schema.Array(
+          Schema.Struct({
+            repo: Repo,
+            number: Schema.Number,
+            method: Schema.Literals(["merge", "squash", "rebase"]),
+          }),
+        ),
+      }),
+      { entries: [] },
+    ),
   },
   i18n: {
     en: {

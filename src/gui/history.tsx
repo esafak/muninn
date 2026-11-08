@@ -25,8 +25,10 @@ export interface HistoryProps {
   onOpen: (url: string) => void
   /** Merges the pull request now (method + delete-branch from settings, head-SHA guarded). */
   onMerge: (pull: PullEntity) => Promise<void>
-  /** Arms or disarms auto-merge (merge when checks pass and required reviews approve). */
+  /** Arms or disarms merge-when-ready (Muninn drives the merge when green). */
   onArm: (pull: PullEntity, enable: boolean) => Promise<void>
+  /** Whether the PR is armed — locally by Muninn, or already on the forge. */
+  isArmed: (pull: PullEntity) => boolean
 }
 
 /**
@@ -38,15 +40,20 @@ export interface HistoryProps {
 export const MergeButton = (props: {
   chain: Chain
   pull: PullEntity
+  isArmed: (pull: PullEntity) => boolean
   onMerge: (pull: PullEntity) => Promise<void>
   onArm: (pull: PullEntity, enable: boolean) => Promise<void>
 }): JSX.Element => (
   <Show when={props.pull.state === "open"}>
     <Switch>
-      <Match when={props.pull.autoMerge}>
+      <Match when={props.isArmed(props.pull)}>
         <button
           class="mn-merge armed"
-          title={`auto-merge is armed (${props.pull.autoMerge}) — merging when checks pass and reviews approve. Click to cancel.`}
+          title={
+            props.pull.autoMerge
+              ? `armed here and on the forge (${props.pull.autoMerge}) — Muninn merges when checks pass and reviews approve. Click to cancel.`
+              : "Muninn is driving the merge — it fires when checks pass and reviews approve. Click to cancel."
+          }
           onClick={(event) => {
             event.stopPropagation()
             void props.onArm(props.pull, false)
@@ -187,7 +194,7 @@ export const History = (props: HistoryProps) => {
                         {copied() === `p${chain.key}${pull.number}` ? "✓" : `#${pull.number}`}
                       </span>
                       <span class="mn-title">{pull.title}</span>
-                      <MergeButton chain={chain} pull={pull} onMerge={props.onMerge} onArm={props.onArm} />
+                      <MergeButton chain={chain} pull={pull} isArmed={props.isArmed} onMerge={props.onMerge} onArm={props.onArm} />
                     </div>
                   )}
                 </For>

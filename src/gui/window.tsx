@@ -5,7 +5,7 @@ import { ComposerPill, MenuItem, Panel, SettingsPage, createKeyed, usePlugin, ty
 import { associate } from "../associate"
 import { messagesText, scan } from "../extract"
 import type { Chain, Entity, PullEntity, RepoRef, RunEntity, RunStatus } from "../model"
-import { chainTone, mergeReady, mergeWhy, refKey, repoKey } from "../model"
+import { chainTone, armedTargets, mergeReady, mergeWhy, refKey, repoKey } from "../model"
 import { githubLexicon } from "../providers/github/lexicon"
 import { Muninn } from "../rpc"
 import type { definition } from "./definition"
@@ -165,6 +165,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       }
       setMeta("error", null)
       rechain()
+      driveArmedMerges()
     } catch (error) {
       setMeta("error", error instanceof Error ? error.message : String(error))
     }
@@ -228,12 +229,40 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     (chain.prs.length === 0 && chain.issues.some((issue) => issue.state === "open")) ||
     (chain.prs.length === 0 && chain.issues.length === 0 && Date.now() - chain.updatedAt < DAY_MS)
 
-  /** Merges a pull request: confirms in the app's dialog (naming exactly what
-   * happens), then fires the provider merge guarded by the PR's head SHA. */
-  const mergePull = async (pull: PullEntity): Promise<void> => {
+  /** Whether a PR is armed for Muninn-driven merge-when-ready — ours, or already
+   * armed on the forge's side (shown the same; cancel handles both). */
+  const isArmed = (pull: PullEntity): boolean =>
+    ctx.stores.armed.value.entries.some(
+      (entry) => repoKey(entry.repo) === repoKey(pull.repo) && entry.number === pull.number,
+    ) || !!pull.autoMerge
+
+  /** Fires the merge RPC (head-SHA guarded; method and delete-branch from settings)
+   * and toasts the outcome. No confirmation — callers own consent. */
+  const fireMerge = async (pull: PullEntity, method: "merge" | "squash" | "rebase"): Promise<boolean> => {
     const current = session()
     const client = ctx.client
-    if (!current || !client) return
+    if (!current || !client) return false
+    const result = await client
+      .rpc(Muninn)
+      .merge({
+        directory: current.directory,
+        number: pull.number,
+        method,
+        expectedHeadSha: pull.headSha,
+        deleteBranch: ctx.stores.settings.value.deleteBranch,
+      })
+      .catch((error: unknown) => ({ merged: false as const, message: error instanceof Error ? error.message : String(error) }))
+    if (!result.merged) {
+      ctx.toast.show({ title: `PR #${pull.number} merge failed`, description: result.message, variant: "error" })
+      return false
+    }
+    ctx.toast.show({ title: `PR #${pull.number} merged`, description: `${method} into ${pull.baseBranch}`, variant: "success" })
+    return true
+  }
+
+  /** Merges a pull request now: confirms in the app's dialog (naming exactly what
+   * happens), then fires the provider merge guarded by the PR's head SHA. */
+  const mergePull = async (pull: PullEntity): Promise<void> => {
     const method = ctx.stores.settings.value.mergeMethod
     const deleteBranch = ctx.stores.settings.value.deleteBranch
     const ok = await ctx.dialogs.confirm({
@@ -243,42 +272,57 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       danger: true,
     })
     if (!ok) return
-    await client
-      .rpc(Muninn)
-      .merge({
-        directory: current.directory,
-        number: pull.number,
-        method,
-        expectedHeadSha: pull.headSha,
-        deleteBranch,
-      })
-      .catch((error: unknown) => console.error("[muninn] merge failed", error))
+    await fireMerge(pull, method)
     void refresh()
   }
 
-  /** Arms or disarms auto-merge (merge when checks pass and required reviews approve).
-   * Arming confirms — it will merge later without supervision; disarming is instant. */
+  /** Arms or disarms merge-when-ready. Arming is local — Muninn watches the chain
+   * and fires the merge itself when checks and reviews are green; the forge's own
+   * auto-merge is never used. Arming confirms once; that consent carries. */
   const armPull = async (pull: PullEntity, enable: boolean): Promise<void> => {
-    const current = session()
-    const client = ctx.client
-    if (!current || !client) return
-    const method = ctx.stores.settings.value.mergeMethod
     if (enable) {
+      const method = ctx.stores.settings.value.mergeMethod
       const ok = await ctx.dialogs.confirm({
         title: `Merge PR #${pull.number} when ready?`,
-        description: `Auto-merges "${pull.title}" into ${pull.baseBranch} with ${method} as soon as checks pass and required reviews approve. You can cancel any time.`,
+        description: `Muninn watches "${pull.title}" and merges into ${pull.baseBranch} with ${method} as soon as checks pass and reviews approve. You can cancel any time.`,
         confirm: "Merge when ready",
       })
       if (!ok) return
-    }
-    await client
-      .rpc(Muninn)
-      .autoMerge({ directory: current.directory, number: pull.number, enable, method })
-      .then((result) => {
-        if (result.message) void ctx.dialogs.alert({ title: `Auto-merge for PR #${pull.number}`, description: result.message })
+      ctx.stores.armed.update((draft) => {
+        if (!draft.entries.some((entry) => repoKey(entry.repo) === repoKey(pull.repo) && entry.number === pull.number))
+          draft.entries.push({ repo: pull.repo, number: pull.number, method })
       })
-      .catch((error: unknown) => console.error("[muninn] auto-merge failed", error))
+      void refresh()
+      return
+    }
+    // Disarm: drop our entry; also cancel an arm the user made on the forge.
+    ctx.stores.armed.update((draft) => {
+      draft.entries = draft.entries.filter(
+        (entry) => !(repoKey(entry.repo) === repoKey(pull.repo) && entry.number === pull.number),
+      )
+    })
+    const current = session()
+    const client = ctx.client
+    if (pull.autoMerge && current && client)
+      await client
+        .rpc(Muninn)
+        .autoMerge({ directory: current.directory, number: pull.number, enable: false, method: pull.autoMerge })
+        .catch((error: unknown) => console.error("[muninn] forge disarm failed", error))
     void refresh()
+  }
+
+  /** The merge-when-ready driver: fires merges for armed entries whose chain is
+   * green. Runs after every refresh cycle; consumes the entry before firing so a
+   * concurrent refresh can't double-fire. */
+  const driveArmedMerges = () => {
+    for (const { pull, method } of armedTargets(ctx.stores.armed.value.entries, chains())) {
+      ctx.stores.armed.update((draft) => {
+        draft.entries = draft.entries.filter(
+          (entry) => !(repoKey(entry.repo) === repoKey(pull.repo) && entry.number === pull.number),
+        )
+      })
+      void fireMerge(pull, method).then(() => void refresh())
+    }
   }
 
   // Diagnostics footer: the pill's full decision state, plus which builds are loaded.
@@ -366,7 +410,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
                     </span>
                     <span class="mn-pop-id">#{pull.number}</span>
                     <span class="mn-pop-title">{pull.title}</span>
-                    <MergeButton chain={chain} pull={pull} onMerge={mergePull} onArm={armPull} />
+                    <MergeButton chain={chain} pull={pull} isArmed={isArmed} onMerge={mergePull} onArm={armPull} />
                   </div>
                 )}
               </For>
@@ -412,17 +456,17 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
               <label
                 class="mn-pop-toggle"
                 title={
-                  lead().pull.autoMerge
-                    ? `auto-merge is armed (${lead().pull.autoMerge}) — click to cancel`
+                  isArmed(lead().pull)
+                    ? `Muninn is driving the merge (${lead().pull.autoMerge ? "also armed on the forge" : "armed locally"}) — click to cancel`
                     : mergeReady(lead().chain)
-                      ? "already mergeable — GitHub doesn't arm auto-merge on clean PRs; just Merge"
-                      : `arm auto-merge: merge as soon as checks pass and reviews approve — now blocked: ${mergeWhy(lead().chain)}`
+                      ? "already mergeable — just Merge; nothing to wait for"
+                      : `Muninn merges when checks pass and reviews approve — now blocked: ${mergeWhy(lead().chain)}`
                 }
               >
                 <input
                   type="checkbox"
-                  checked={!!lead().pull.autoMerge}
-                  disabled={!lead().pull.autoMerge && mergeReady(lead().chain)}
+                  checked={isArmed(lead().pull)}
+                  disabled={!isArmed(lead().pull) && mergeReady(lead().chain)}
                   onChange={(event) => void armPull(lead().pull, event.currentTarget.checked)}
                 />
                 merge when ready
@@ -509,6 +553,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
             onOpen={open}
             onMerge={mergePull}
             onArm={armPull}
+            isArmed={isArmed}
           />
         </div>
         <Show when={chains().length === 0 && meta.repo === null && !sessionReady()}>

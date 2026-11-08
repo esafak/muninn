@@ -144,6 +144,34 @@ export const mergeWhy = (chain: Chain): string => {
   return "not ready"
 }
 
+/** A pull request Muninn is driving to merge: armed locally by the user, merged
+ * by Muninn's refresh cycle — never delegated to the forge's own auto-merge. */
+export interface ArmedEntry {
+  repo: RepoRef
+  number: number
+  method: "merge" | "squash" | "rebase"
+}
+
+/** Armed entries whose chain is mergeable right now. Providers without merge or
+ * review state fall back to checks, so this drives identically on any forge. */
+export const armedTargets = (
+  entries: readonly ArmedEntry[],
+  chains: readonly Chain[],
+): { pull: PullEntity; chain: Chain; method: ArmedEntry["method"] }[] => {
+  const out: { pull: PullEntity; chain: Chain; method: ArmedEntry["method"] }[] = []
+  for (const entry of entries) {
+    const chain = chains.find((candidate) =>
+      candidate.prs.some(
+        (pull) => pull.state === "open" && pull.number === entry.number && repoKey(pull.repo) === repoKey(entry.repo),
+      ),
+    )
+    if (!chain || !mergeReady(chain)) continue
+    const pull = chain.prs.find((candidate) => candidate.number === entry.number)
+    if (pull) out.push({ pull, chain, method: entry.method })
+  }
+  return out
+}
+
 /**
  * Worst-state helper for pill tones: failing runs and conflicted/revoked work
  * outrank everything; blocked and in-flight work read as warning; a fully green

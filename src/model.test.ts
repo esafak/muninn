@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import type { Chain, IssueEntity, PullEntity, RunEntity } from "./model"
-import { chainTone, mergeReady, mergeWhy } from "./model"
+import { chainTone, mergeReady, mergeWhy, armedTargets, type ArmedEntry } from "./model"
 
 const repo = { host: "github.com", owner: "sst", repo: "opencode" }
 
@@ -113,5 +113,40 @@ describe("chainTone", () => {
   test("issues alone carry no tone until open", () => {
     expect(chainTone(chain({ prs: [], issues: [issue("closed")], runs: [] }))).toBeUndefined()
     expect(chainTone(chain({ prs: [], issues: [issue("open")], runs: [] }))).toBeUndefined()
+  })
+})
+
+describe("armedTargets", () => {
+  const entry = (over: Partial<ArmedEntry> = {}): ArmedEntry => ({
+    repo,
+    number: 4821,
+    method: "squash",
+    ...over,
+  })
+
+  test("a green chain with a matching entry fires with its armed method", () => {
+    const targets = armedTargets([entry({ method: "rebase" })], [chain({ prs: [pull({ mergeState: "ready" })] })])
+    expect(targets).toEqual([{ pull: pull({ mergeState: "ready" }), chain: chain({ prs: [pull({ mergeState: "ready" })] }), method: "rebase" }])
+  })
+
+  test("blocked, conflicted and failing chains don't fire yet", () => {
+    const blocked = chain({ prs: [pull({ mergeState: "blocked" })] })
+    const conflicted = chain({ prs: [pull({ mergeState: "conflict" })] })
+    const failing = chain({ runs: [run("failed")] })
+    expect(armedTargets([entry()], [blocked, conflicted, failing])).toEqual([])
+  })
+
+  test("entries only match their own repo, number, and open PRs", () => {
+    const otherRepo = entry({ repo: { host: "github.com", owner: "sst", repo: "ui" } })
+    const otherNumber = entry({ number: 9999 })
+    const merged = chain({ prs: [pull({ state: "merged" })] })
+    expect(armedTargets([otherRepo], [chain()])).toEqual([])
+    expect(armedTargets([otherNumber], [chain()])).toEqual([])
+    expect(armedTargets([entry()], [merged])).toEqual([])
+  })
+
+  test("providers without merge state still fire on green checks alone", () => {
+    // mergeState undefined: the fallback path — what a minimal forge returns.
+    expect(armedTargets([entry()], [chain()]).length).toBe(1)
   })
 })
