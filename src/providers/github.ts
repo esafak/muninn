@@ -385,4 +385,33 @@ export const github: SourceProvider = {
     const prs = await pullsForBranch(repo, branch, auth).catch(() => [] as PullEntity[])
     return { runs: runEntities, prs }
   },
+
+  merge: async (repo, number, method, expectedHeadSha, deleteBranch, auth) => {
+    const headers = {
+      accept: "application/vnd.github+json",
+      "user-agent": "quartermaster",
+      ...(await auth() ? { authorization: `Bearer ${await auth()}` } : {}),
+    }
+    const merge = await fetch(`https://api.github.com/repos/${repo.owner}/${repo.repo}/pulls/${number}/merge`, {
+      method: "PUT",
+      headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify({ sha: expectedHeadSha, merge_method: method }),
+      signal: AbortSignal.timeout(20_000),
+    })
+    if (!merge.ok) {
+      const detail = await merge.json().catch(() => ({ message: merge.statusText }))
+      return { merged: false, message: `GitHub ${merge.status}: ${(detail as { message?: string }).message ?? merge.statusText}` }
+    }
+    if (!deleteBranch) return { merged: true }
+
+    // Delete the PR's head branch after a successful merge.
+    const pull = await request<PullJson>(`/repos/${repo.owner}/${repo.repo}/pulls/${number}`, auth)
+    if (!pull) return { merged: true, message: "head branch not found for deletion" }
+    const deleted = await fetch(`https://api.github.com/repos/${repo.owner}/${repo.repo}/git/refs/heads/${encodeURIComponent(pull.head.ref)}`, {
+      method: "DELETE",
+      headers: { ...headers },
+      signal: AbortSignal.timeout(20_000),
+    })
+    return deleted.ok ? { merged: true } : { merged: true, message: `branch deletion failed: ${deleted.status}` }
+  },
 }

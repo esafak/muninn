@@ -41,4 +41,13 @@ export interface SourceProvider {
   hydrate: (refs: readonly (Ref & { repo: RepoRef })[], sessionRepo: RepoRef | undefined, auth: Auth) => Promise<Hydration>
   /** Recent runs of one branch plus the branch's open PRs, for GUI-side association. */
   branchRuns: (repo: RepoRef, branch: string, auth: Auth) => Promise<{ runs: RunEntity[]; prs: PullEntity[] }>
+  /** Merge a pull request; `expectedHeadSha` guards against stale renders. Returns a user-facing message on failure. */
+  merge: (
+    repo: RepoRef,
+    number: number,
+    method: "merge" | "squash" | "rebase",
+    expectedHeadSha: string,
+    deleteBranch: boolean,
+    auth: Auth,
+  ) => Promise<{ merged: boolean; message?: string }>
 }

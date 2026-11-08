@@ -64,7 +64,10 @@ export const definition = Plugin.define({
       { entries: {}, at: {} },
     ),
     /** User preferences from the plugin's settings page. */
-    settings: Store.global(Schema.Struct({ retentionDays: Schema.Number }), { retentionDays: 30 }),
+    settings: Store.global(
+      Schema.Struct({ retentionDays: Schema.Number, debugMode: Schema.Boolean }),
+      { retentionDays: 30, debugMode: true },
+    ),
   },
   i18n: {
     en: {
@@ -84,6 +87,8 @@ export const definition = Plugin.define({
       "settings.retention": "Keep history",
       "settings.retention.description": "Days to remember pull requests, issues and runs before they age out of the sidebar and pills.",
       "settings.retention.days": "days",
+      "settings.debug": "Debug mode",
+      "settings.debug.description": "Show the diagnostics footer (build SHAs, pill state, hydration stats) at the bottom of the panel.",
       "state.open": "open",
       "state.draft": "draft",
       "state.merged": "merged",

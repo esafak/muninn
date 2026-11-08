@@ -90,6 +90,13 @@ export default Plugin.define({
         return { runs: result.runs, prs: result.prs }
       },
       debug: async () => ({ server: await serverBuild(), directory: pluginRoot }),
+      merge: async (input) => {
+        const repo = await readRemote(input.directory)
+        if (!repo) return { merged: false, message: "no repository resolved for this directory" }
+        const source = sourceFor(repo.host)
+        if (!source) return { merged: false, message: `no provider for ${repo.host}` }
+        return source.merge(repo, input.number, input.method, input.expectedHeadSha, input.deleteBranch, () => source.auth(ctx))
+      },
     })
   },
 })

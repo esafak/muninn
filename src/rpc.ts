@@ -110,6 +110,17 @@ export const Quartermaster = Rpc.define({
       input: z.object({}),
       output: z.object({ server: z.string(), directory: z.string() }),
     },
+    /** Merge a pull request. `expectedHeadSha` guards against stale renders. */
+    merge: {
+      input: z.object({
+        directory: z.string(),
+        number: z.number(),
+        method: z.enum(["merge", "squash", "rebase"]),
+        expectedHeadSha: z.string(),
+        deleteBranch: z.boolean(),
+      }),
+      output: z.object({ merged: z.boolean(), message: z.string().optional() }),
+    },
   },
   events: {},
 })
