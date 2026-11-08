@@ -462,28 +462,42 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
           )}
         </For>
         <div class="mn-pop-foot">
-          <Show when={lead}>
-            {(lead) => (
-              <label
-                class="mn-pop-toggle"
-                title={
-                  isArmed(lead().pull)
-                    ? `Muninn is driving the merge (${lead().pull.autoMerge ? "also armed on the forge" : "armed locally"}) — click to cancel`
-                    : mergeReady(lead().chain)
-                      ? "already mergeable — just Merge; nothing to wait for"
-                      : `Muninn merges when checks pass and reviews approve — now blocked: ${mergeWhy(lead().chain)}`
-                }
-              >
-                <input
-                  type="checkbox"
-                  checked={isArmed(lead().pull)}
-                  disabled={!isArmed(lead().pull) && mergeReady(lead().chain)}
-                  onChange={(event) => void armPull(lead().pull, event.currentTarget.checked)}
-                />
-                merge when ready
-              </label>
-            )}
-          </Show>
+          <div class="mn-pop-line">
+            <Show when={lead}>
+              {(lead) => (
+                <label
+                  class="mn-pop-toggle"
+                  title={
+                    isArmed(lead().pull)
+                      ? `Muninn is driving the merge (${lead().pull.autoMerge ? "also armed on the forge" : "armed locally"}) — click to cancel`
+                      : mergeReady(lead().chain)
+                        ? "green now — Muninn merges on its next check (within ~30s)"
+                        : `Muninn merges when checks pass and reviews approve — now blocked: ${mergeWhy(lead().chain)}`
+                    }
+                >
+                  <input
+                    type="checkbox"
+                    checked={isArmed(lead().pull)}
+                    onChange={(event) => void armPull(lead().pull, event.currentTarget.checked)}
+                  />
+                  merge when ready
+                </label>
+              )}
+            </Show>
+            <select
+              title="Merge method"
+              value={ctx.stores.settings.value.mergeMethod}
+              onChange={(event) => {
+                const value = event.currentTarget.value
+                if (value === "squash" || value === "merge" || value === "rebase")
+                  ctx.stores.settings.update((draft) => { draft.mergeMethod = value })
+              }}
+            >
+              <option value="squash">squash</option>
+              <option value="merge">merge commit</option>
+              <option value="rebase">rebase</option>
+            </select>
+          </div>
           <label class="mn-pop-toggle">
             <input
               type="checkbox"
@@ -492,19 +506,6 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
             />
             delete branch
           </label>
-          <select
-            title="Merge method"
-            value={ctx.stores.settings.value.mergeMethod}
-            onChange={(event) => {
-              const value = event.currentTarget.value
-              if (value === "squash" || value === "merge" || value === "rebase")
-                ctx.stores.settings.update((draft) => { draft.mergeMethod = value })
-            }}
-          >
-            <option value="squash">squash</option>
-            <option value="merge">merge commit</option>
-            <option value="rebase">rebase</option>
-          </select>
         </div>
       </div>
       )
@@ -725,8 +726,10 @@ const STYLES = `
 }
 .mn-pop-toggle { display: flex; align-items: center; gap: 6px; cursor: pointer; min-width: 0; }
 .mn-pop-toggle:has(input:disabled) { cursor: not-allowed; opacity: .55; }
+.mn-pop-line { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.mn-pop-line .mn-pop-toggle { flex: 1; }
 .mn-pop-foot select {
-  width: 100%; font-size: 11px; color: var(--v2-text-text-muted);
+  margin-left: auto; flex: none; width: auto; font-size: 11px; color: var(--v2-text-text-muted);
   background: var(--v2-background-bg-layer-01); border: 1px solid var(--v2-border-border-muted);
   border-radius: 5px; padding: 3px 6px;
 }
