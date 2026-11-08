@@ -3,7 +3,7 @@ import type { JSX } from "solid-js"
 import { createStore } from "solid-js/store"
 import { ComposerPill, MenuItem, Panel, SettingsPage, createKeyed, usePlugin, type IconName, type Plugin } from "@opencode/plugin/gui"
 import { associate } from "../associate"
-import { scan, textToScan } from "../extract"
+import { scan } from "../extract"
 import type { Chain, Entity, RepoRef, RunEntity } from "../model"
 import { chainTone, refKey, repoKey } from "../model"
 import { githubLexicon } from "../providers/github/lexicon"
@@ -72,12 +72,30 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
 
   const session = () => ctx.sessions.current()
 
-  /** All text Quartermaster may scan, from the mounted session's messages. */
+  /** All text Quartermaster may scan, from the mounted session's messages. Typed
+   * from the SDK so a wrong field fails the build instead of starving the scan. */
   const text = () => {
     const current = session()
     if (!current) return ""
-    const messages: readonly unknown[] = current.server.data.session.message.list(current.id)
-    return messages.map((message) => textToScan((message as { parts?: unknown[] }).parts ?? [])).join("\n")
+    const out: string[] = []
+    for (const message of current.server.data.session.message.list(current.id)) {
+      if (message.type === "user") {
+        out.push(message.text)
+        continue
+      }
+      if (message.type !== "assistant") continue
+      for (const part of message.content) {
+        if (part.type === "text" || part.type === "reasoning") out.push(part.text)
+        if (part.type !== "tool") continue
+        const state = part.state
+        if (state.status === "completed") {
+          const command = state.input.command
+          if (typeof command === "string") out.push(command)
+          for (const block of state.content) if (block.type === "text") out.push(block.text)
+        }
+      }
+    }
+    return out.join("\n")
   }
 
   const refs = createMemo(() => scan(text(), meta.repo ?? undefined, [githubLexicon]))
@@ -379,6 +397,15 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
               const current = session()
               const client = ctx.client
               if (!current || !client) return
+              // Merging is irreversible and remote: always confirm in the app's
+              // own dialog, naming exactly what will happen.
+              const ok = await ctx.dialogs.confirm({
+                title: `Merge PR #${pull.number}?`,
+                description: `Squash-merges "${pull.title}" into ${pull.baseBranch} and deletes the branch ${pull.headBranch}.`,
+                confirm: "Merge",
+                danger: true,
+              })
+              if (!ok) return
               await client
                 .rpc(Quartermaster)
                 .merge({

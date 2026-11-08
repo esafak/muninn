@@ -132,20 +132,7 @@ export const History = (props: HistoryProps) => {
                           class="qm-merge"
                           classList={{ pending: !props.mergeReady(chain) }}
                           disabled={!props.mergeReady(chain)}
-                          title={props.mergeReady(chain) ? "Merge (squash)" : props.mergeWhy(chain)}
-                          onClick={(event) => {
-                            event.stopPropagation()
-                            void props.onMerge(pull)
-                          }}
-                        >
-                          Merge
-                        </button>
-                      </Show>
-                      <Show when={pull.state === "open"}>
-                        <button
-                          class="qm-merge"
-                          title={props.mergeReady(chain) ? "Merge (squash)" : props.mergeWhy(chain) ?? "not ready"}
-                          disabled={!props.mergeReady(chain)}
+                          title={props.mergeReady(chain) ? "Merge (squash)…" : props.mergeWhy(chain)}
                           onClick={(event) => {
                             event.stopPropagation()
                             void props.onMerge(pull)
