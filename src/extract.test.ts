@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { scan, textToScan } from "./extract"
+import { messagesText, scan, textToScan } from "./extract"
 import { githubLexicon } from "./providers/github/lexicon"
 import type { RepoRef } from "./model"
 
@@ -146,5 +146,83 @@ describe("scan", () => {
   test("no lexicons: provider urls don't resolve, generic patterns still do", () => {
     expect(scan("https://github.com/sst/opencode/issues/7", opencode, [])).toEqual([])
     expect(scan("run 42 went green", opencode, [])).toEqual([{ kind: "run", number: 42, repo: opencode }])
+  })
+})
+
+describe("messagesText", () => {
+  // Fixtures mirror the SDK's SessionMessageInfo shapes: user messages carry
+  // `text`; assistant messages carry a `content[]`; tool parts carry `state`.
+  const user = (text: string) => ({ type: "user", id: "msg_1", text, time: { created: 0 } })
+  const assistant = (content: unknown[]) => ({ type: "assistant", id: "msg_2", content, time: { created: 0 } })
+  const toolState = {
+    completed: (input: unknown, content: unknown[]) => ({ status: "completed", input, content }),
+    running: { status: "running", input: {} },
+    error: { status: "error", error: { message: "boom" } },
+  }
+
+  test("user message text is scanned directly", () => {
+    expect(messagesText([user("ship PR 4821 please")])).toBe("ship PR 4821 please")
+  })
+
+  test("assistant text and reasoning parts are scanned", () => {
+    const message = assistant([
+      { type: "text", text: "opening a pull request" },
+      { type: "reasoning", text: "refs 1043" },
+    ])
+    expect(messagesText([message])).toBe("opening a pull request\nrefs 1043")
+  })
+
+  test("completed tool parts contribute command and text output", () => {
+    const message = assistant([
+      {
+        type: "tool",
+        id: "tool_1",
+        name: "bash",
+        state: toolState.completed(
+          { command: "gh run view 906" },
+          [{ type: "text", text: "https://github.com/sst/opencode/actions/runs/906" }],
+        ),
+      },
+    ])
+    expect(messagesText([message])).toBe("gh run view 906\nhttps://github.com/sst/opencode/actions/runs/906")
+  })
+
+  test("running, erroring and in-flight tool parts contribute nothing", () => {
+    const message = assistant([
+      { type: "tool", id: "t1", name: "bash", state: toolState.running },
+      { type: "tool", id: "t2", name: "bash", state: toolState.error },
+      { type: "tool", id: "t3", name: "bash", state: undefined },
+    ])
+    expect(messagesText([message])).toBe("")
+  })
+
+  test("non-text tool output blocks and malformed entries are skipped", () => {
+    const message = assistant([
+      { type: "tool", id: "t1", name: "bash", state: toolState.completed({}, [{ type: "image", url: "x" }, null, "junk"]) },
+    ])
+    expect(messagesText([message])).toBe("")
+    expect(messagesText([null, undefined, 42, {}, { type: "idle" }])).toBe("")
+  })
+
+  test("whole pipeline: a real-shaped transcript yields scannable text", () => {
+    const transcript = [
+      user("merge PR 4821 once green"),
+      assistant([
+        { type: "text", text: "PR 4821 is green; issue #1043 tracks the rollout" },
+        {
+          type: "tool",
+          id: "t1",
+          name: "bash",
+          state: toolState.completed({ command: "gh pr view 4821" }, [{ type: "text", text: "https://github.com/sst/opencode/pull/4821" }]),
+        },
+      ]),
+      { type: "idle" },
+    ]
+    // pr 4821 appears three ways (kind word, repeat, url) and dedupes to one;
+    // the bare #1043 lands as an issue.
+    expect(scan(messagesText(transcript), opencode, [githubLexicon]).map((ref) => ref.kind)).toEqual([
+      "pr",
+      "issue",
+    ])
   })
 })

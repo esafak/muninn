@@ -100,6 +100,47 @@ export const scan = (text: string, repo?: RepoRef, lexicons: readonly Lexicon[] 
  * and tool results (where gh/shell output — run links, PR urls, numbers — lives).
  * Tool outputs appear as `state.output` or `state.content[]` blocks depending on
  * the tool; the invoked command is scanned too. */
+/** Flattens projected session messages (what the host's message.list returns) into
+ * the text Quartermaster scans: user messages carry `text` directly; assistant
+ * messages carry a `content[]` of text/reasoning items plus completed tool states
+ * (where gh/shell output — run links, PR urls — actually lives). Structurally
+ * typed so the core stays SDK-agnostic; the GUI call site is SDK-typed, so a
+ * wrong field there still fails the build. */
+export const messagesText = (messages: readonly unknown[]): string => {
+  const out: string[] = []
+  for (const message of messages) {
+    if (!message || typeof message !== "object") continue
+    const m = message as { type?: unknown; text?: unknown; content?: unknown }
+    if (m.type === "user" && typeof m.text === "string") {
+      out.push(m.text)
+      continue
+    }
+    if (m.type !== "assistant" || !Array.isArray(m.content)) continue
+    for (const part of m.content) {
+      if (!part || typeof part !== "object") continue
+      const p = part as { type?: unknown; text?: unknown; state?: unknown }
+      if ((p.type === "text" || p.type === "reasoning") && typeof p.text === "string") {
+        out.push(p.text)
+        continue
+      }
+      if (p.type !== "tool") continue
+      const state = p.state as { status?: unknown; input?: unknown; content?: unknown } | undefined
+      if (!state || state.status !== "completed") continue
+      if (state.input && typeof state.input === "object") {
+        const command = (state.input as { command?: unknown }).command
+        if (typeof command === "string") out.push(command)
+      }
+      if (Array.isArray(state.content))
+        for (const block of state.content)
+          if (block && typeof block === "object" && (block as { type?: unknown }).type === "text") {
+            const text = (block as { text?: unknown }).text
+            if (typeof text === "string") out.push(text)
+          }
+    }
+  }
+  return out.join("\n")
+}
+
 export const textToScan = (parts: readonly unknown[]): string =>
   parts
     .flatMap((part) => {
