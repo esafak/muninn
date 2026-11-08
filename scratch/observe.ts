@@ -112,13 +112,14 @@ console.log(`   branch PRs: ${branchPrs.map((pr) => `#${pr.number} [${pr.headSha
 const chains = associate([...hydration.entities, ...branchPrs], branchRuns)
 console.log(`\n━━ stage 3 · association: ${chains.length} chains`)
 for (const chain of chains) {
+  const lead = chain.prs[0]
   const live =
-    chain.pr?.state === "open" ||
-    chain.pr?.state === "draft" ||
+    lead?.state === "open" ||
+    lead?.state === "draft" ||
     chain.runs.some((run) => run.status === "queued" || run.status === "running" || run.status === "failed") ||
-    (chain.pr === undefined && chain.issue?.state === "open") ||
-    (chain.pr === undefined && chain.issue === undefined && Date.now() - chain.updatedAt < DAY_MS)
+    (chain.prs.length === 0 && chain.issues.some((issue) => issue.state === "open")) ||
+    (chain.prs.length === 0 && chain.issues.length === 0 && Date.now() - chain.updatedAt < DAY_MS)
   console.log(
-    `   ${live ? "LIVE " : "dead "} pr=${chain.pr ? `#${chain.pr.number} ${chain.pr.state}` : "-"} issues=${chain.issues?.map((i) => `#${i.number}${i.via ? `(${i.via})` : ""}`).join(",") || "-"} runs=${chain.runs.map((r) => `#${r.id} ${r.status}`).join(",") || "-"} → pill ${live ? `#${(chain.pr ?? chain.issues?.[0])?.number} …` : "-"}`,
+    `   ${live ? "LIVE " : "dead "} pr=${chain.prs.map((p) => `#${p.number} ${p.state}`).join(",") || "-"} issues=${chain.issues.map((i) => `#${i.number}`).join(",") || "-"} runs=${chain.runs.map((r) => `#${r.id} ${r.status}`).join(",") || "-"}`,
   )
 }

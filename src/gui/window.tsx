@@ -341,12 +341,26 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
         : picked.chain.runs[0]
           ? `run #${picked.chain.runs[0].id}`
           : "off"
+    // Pipeline census: refs by kind, how many hit the entity store, how big the
+    // store is. A PR that reaches hydration but not the pill gets caught here.
+    const refList = refs()
+    const kinds = { pr: 0, run: 0, issue: 0, bare: 0 }
+    let hits = 0
+    for (const ref of refList) {
+      kinds[ref.kind ?? "bare"]++
+      const base = ref.repo ? repoKey(ref.repo) : undefined
+      const found = ref.kind
+        ? entities[refKey(ref)] !== undefined
+        : base !== undefined &&
+          ["issue", "pr", "run"].some((kind) => entities[`${base}#${kind}${ref.number}`] !== undefined)
+      if (found) hits++
+    }
     const pick = !picked
       ? "pick: none"
       : `pick: ${picked.reason}${picked.considered > 1 ? ` of ${picked.considered}` : ""} · lead ${
           picked.chain.prs[0] ? (picked.chain.prs[0].headBranch === meta.branch ? "branch match" : "newest") : "—"
         }`
-    return `mn gui ${__MN_BUILD__}${meta.debug ? ` · ${meta.debug}` : " · srv ?"} · gate ${gate} · chains ${chains().length} · live ${liveCount} · pill: ${pill} · ${pick}${meta.stats ? ` · ${meta.stats}` : ""}`
+    return `mn gui ${__MN_BUILD__}${meta.debug ? ` · ${meta.debug}` : " · srv ?"} · gate ${gate} · chains ${chains().length} · live ${liveCount} · pill: ${pill} · ${pick} · refs ${refList.length} (pr ${kinds.pr} run ${kinds.run} issue ${kinds.issue} bare ${kinds.bare}) → hits ${hits}/${Object.keys(entities).length} ents${meta.stats ? ` · ${meta.stats}` : ""}`
   }
 
   /** The braille spinner frames for the pill's pending-merge indicator. The host
