@@ -52,13 +52,14 @@ export const MergeButton = (props: {
           title={
             props.pull.autoMerge
               ? `armed here and on the forge (${props.pull.autoMerge}) — Muninn merges when checks pass and reviews approve. Click to cancel.`
-              : "Muninn is driving the merge — it fires when checks pass and reviews approve. Click to cancel."
+              : "Muninn is watching — it merges the moment checks pass and reviews approve. Click to cancel."
           }
           onClick={(event) => {
             event.stopPropagation()
             void props.onArm(props.pull, false)
           }}
         >
+          <span class="mn-spin" />
           Armed
         </button>
       </Match>
@@ -176,11 +177,12 @@ export const History = (props: HistoryProps) => {
                           <MergedGlyph />
                         </Show>
                       </span>
-                      <Show when={pull.state === "open" && pull.mergeState}>
+                      <Show when={pull.state === "open"}>
                         <span
                           class="mn-merge-state"
-                          data-state={pull.mergeState}
-                          title={`merge: ${pull.mergeState}${pull.reviewState ? ` · reviews: ${pull.reviewState}` : ""}`}
+                          data-state={pull.mergeState ?? "unknown"}
+                          data-armed={props.isArmed(pull) ? "" : undefined}
+                          title={`merge: ${pull.mergeState ?? "unknown"}${pull.reviewState ? ` · reviews: ${pull.reviewState}` : ""}${props.isArmed(pull) ? " · Muninn is watching" : ""}`}
                         >
                           <MergeGlyph />
                         </span>

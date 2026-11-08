@@ -342,6 +342,14 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     return `mn gui ${__MN_BUILD__}${meta.debug ? ` · ${meta.debug}` : " · srv ?"} · gate ${gate} · chains ${chains().length} · live ${list.length} · pill: ${pill}${meta.stats ? ` · ${meta.stats}` : ""}`
   }
 
+  /** The braille spinner frames for the pill's pending-merge indicator. The host
+   * re-runs the pill's `show` reactively, so ticking this signal animates the
+   * capsule label live while an armed PR waits. */
+  const SPIN_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+  const [spin, setSpin] = createSignal(0)
+  const spinTimer = setInterval(() => setSpin((frame) => (frame + 1) % SPIN_FRAMES.length), 140)
+  onCleanup(() => clearInterval(spinTimer))
+
   const runGlyph = (status: RunStatus): JSX.Element => {
     if (status === "succeeded") return <CheckGlyph />
     if (status === "failed") return <CrossGlyph />
@@ -367,15 +375,17 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
 
       // The capsule reads like GitHub's PR status: a circle icon in the worst
       // state's color, then `#number title ⌄` — short enough that the chevron
-      // (the affordance that this opens a menu) survives truncation.
+      // (the affordance that this opens a menu) survives truncation. An armed
+      // lead PR puts a ticking braille spinner in front: a merge is pending.
       const circle =
         tone === "success" ? "circle-check" : tone === "warning" ? "circle-exclamation" : tone === "danger" ? "circle-xmark" : pillIcon(meta.provider)
-      const short = (title: string): string => (title.length > 26 ? `${title.slice(0, 26)}…` : title)
+      const short = (title: string): string => (title.length > 24 ? `${title.slice(0, 24)}…` : title)
+      const pending = lead ? isArmed(lead) : false
 
       return {
         icon: circle,
         label: lead
-          ? `#${lead.number} ${short(lead.title)} ▾`
+          ? `${pending ? `${SPIN_FRAMES[spin()]} ` : ""}#${lead.number} ${short(lead.title)} ▾`
           : `run #${worst.runs[0]!.id} · ${ctx.t(`state.${worst.runs[0]!.status}`)} ▾`,
         tone,
         title: lead ? `#${lead.number} ${lead.title}` : ctx.t("pill.title"),
@@ -404,7 +414,8 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
                     <span
                       class="mn-merge-state"
                       data-state={pull.mergeState ?? "unknown"}
-                      title={`merge: ${pull.mergeState ?? "unknown"}${pull.reviewState ? ` · reviews: ${pull.reviewState}` : ""}`}
+                      data-armed={isArmed(pull) ? "" : undefined}
+                      title={`merge: ${pull.mergeState ?? "unknown"}${pull.reviewState ? ` · reviews: ${pull.reviewState}` : ""}${isArmed(pull) ? " · Muninn is watching" : ""}`}
                     >
                       <MergeGlyph />
                     </span>
@@ -707,16 +718,17 @@ const STYLES = `
 .mn-pop-more { padding: 4px 8px; font-size: 11px; color: var(--v2-text-text-faint); cursor: pointer; border-radius: 7px; }
 .mn-pop-more:hover { background: var(--v2-overlay-simple-overlay-hover); color: var(--v2-text-text-muted); }
 .mn-pop-foot {
-  display: flex; align-items: center; gap: 12px;
-  margin-top: 4px; padding: 7px 8px 3px;
+  display: flex; flex-direction: column; align-items: stretch; gap: 7px;
+  margin-top: 4px; padding: 8px 8px 4px;
   border-top: 1px solid var(--v2-border-border-muted);
   font-size: 11px; color: var(--v2-text-text-faint);
 }
-.mn-pop-toggle { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
+.mn-pop-toggle { display: flex; align-items: center; gap: 6px; cursor: pointer; min-width: 0; }
+.mn-pop-toggle:has(input:disabled) { cursor: not-allowed; opacity: .55; }
 .mn-pop-foot select {
-  margin-left: auto; font-size: 11px; color: var(--v2-text-text-muted);
+  width: 100%; font-size: 11px; color: var(--v2-text-text-muted);
   background: var(--v2-background-bg-layer-01); border: 1px solid var(--v2-border-border-muted);
-  border-radius: 5px; padding: 2px 6px;
+  border-radius: 5px; padding: 3px 6px;
 }
 .mn-kind { color: var(--v2-icon-icon-muted); flex: none; display: inline-flex; }
 .mn-kind[data-state="open"], .mn-kind[data-state="succeeded"] { color: var(--v2-state-fg-success); }
@@ -736,14 +748,24 @@ const STYLES = `
 .mn-merge.armed {
   background: none; color: var(--v2-state-fg-warning, #9a6700);
   box-shadow: inset 0 0 0 .5px var(--v2-state-border-warning, #9a6700);
+  display: inline-flex; align-items: center; gap: 5px;
 }
 .mn-merge.armed:hover { background: var(--v2-overlay-simple-overlay-hover); filter: none; }
+/* The pending-merge spinner rides inside the Armed button, tinted by it. */
+.mn-merge.armed .mn-spin {
+  width: 9px; height: 9px; border: 1px solid transparent;
+  border-top-color: currentColor; border-left-color: currentColor;
+  animation-duration: 1.1s;
+}
 
 /* Merge-status glyph: GitHub's circle-dot, colored by merge state. */
 .mn-merge-state { color: var(--v2-icon-icon-muted); flex: none; display: inline-flex; }
 .mn-merge-state[data-state="ready"] { color: var(--v2-state-fg-success, #1a7f37); }
 .mn-merge-state[data-state="pending"], .mn-merge-state[data-state="blocked"], .mn-merge-state[data-state="unknown"] { color: var(--v2-state-fg-warning, #9a6700); }
 .mn-merge-state[data-state="conflict"] { color: var(--v2-state-fg-danger, #cf222e); }
+/* Armed: Muninn is watching — the dot pulses until the merge fires. */
+.mn-merge-state[data-armed] { color: var(--v2-state-fg-warning, #9a6700); animation: mn-pulse 1.6s ease-in-out infinite; }
+@keyframes mn-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
 `
 
 let injected = false
