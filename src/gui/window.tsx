@@ -44,7 +44,9 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     const { at } = ctx.stores.cache.value
     const cutoff = Date.now() - retentionMs()
     const fresh: Record<string, Entity> = {}
-    for (const [key, entity] of Object.entries(entries)) if ((at[key] ?? 0) > cutoff) fresh[key] = entity
+    // Entries written before the `at` stamps existed (schema migration) read as
+    // fresh rather than being filtered out by the lifecycle on first load.
+    for (const [key, entity] of Object.entries(entries)) if ((at[key] ?? Date.now()) > cutoff) fresh[key] = entity
     return fresh
   }
   const [entities, setEntities] = createStore<Record<string, Entity>>(cached())
@@ -437,6 +439,14 @@ const QuartermasterSettings = (): JSX.Element => {
             }}
           />
           <span class="qm-note" style={{ padding: "0 6px" }}>{ctx.t("settings.retention.days")}</span>
+        </ui.SettingsRow>
+        <ui.SettingsRow id="debug" title={ctx.t("settings.debug")} description={ctx.t("settings.debug.description")}>
+          <ui.Switch
+            checked={ctx.stores.settings.value.debugMode}
+            label={ctx.t("settings.debug")}
+            hideLabel
+            onChange={(checked) => ctx.stores.settings.update((draft) => { draft.debugMode = checked })}
+          />
         </ui.SettingsRow>
       </ui.SettingsSection>
     </ui.SettingsLayout>
