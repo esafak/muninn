@@ -2,6 +2,7 @@ import { For, Show, createSignal } from "solid-js"
 import type { Accessor, JSX } from "solid-js"
 import { usePlugin } from "@opencode/plugin/gui"
 import type { Chain, RepoRef, RunEntity, RunStatus } from "../model"
+import type { PullEntity } from "../model"
 import { chainTone } from "../model"
 import type { definition } from "./definition"
 import { Mark } from "./marks"
@@ -18,10 +19,17 @@ export interface HistoryProps {
   unresolved: Accessor<number>
   /** The last refresh failure, shown so hydration problems are never silent. */
   error: Accessor<string | null>
-  /** Build + pill-gate diagnostics, rendered as the panel footer. */
+  /** Build + pill-gate diagnostics, rendered as the panel footer when debug mode is on. */
   debug: Accessor<string>
+  showDebug: Accessor<boolean>
+  /** Whether the chain's lead PR is mergeable now (open, checks green, no blockers). */
+  mergeReady: (chain: Chain) => boolean
+  /** Why the lead PR can't merge yet — shown on the disabled button. */
+  mergeWhy: (chain: Chain) => string
   sessionReady: Accessor<boolean>
   onOpen: (url: string) => void
+  /** Merges the pull request (squash, head-SHA guarded) and refreshes. */
+  onMerge: (pull: PullEntity) => Promise<void>
 }
 
 const dayLabel = (epoch: number): string => new Date(epoch).toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" })
@@ -119,6 +127,33 @@ export const History = (props: HistoryProps) => {
                         {copied() === `p${chain.key}${pull.number}` ? "✓" : `#${pull.number}`}
                       </span>
                       <span class="qm-title">{pull.title}</span>
+                      <Show when={pull.state === "open"}>
+                        <button
+                          class="qm-merge"
+                          classList={{ pending: !props.mergeReady(chain) }}
+                          disabled={!props.mergeReady(chain)}
+                          title={props.mergeReady(chain) ? "Merge (squash)" : props.mergeWhy(chain)}
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            void props.onMerge(pull)
+                          }}
+                        >
+                          Merge
+                        </button>
+                      </Show>
+                      <Show when={pull.state === "open"}>
+                        <button
+                          class="qm-merge"
+                          title={props.mergeReady(chain) ? "Merge (squash)" : props.mergeWhy(chain) ?? "not ready"}
+                          disabled={!props.mergeReady(chain)}
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            void props.onMerge(pull)
+                          }}
+                        >
+                          Merge
+                        </button>
+                      </Show>
                     </div>
                   )}
                 </For>
@@ -162,6 +197,15 @@ export const History = (props: HistoryProps) => {
             </>
           )}
         </For>
+      </Show>
+      <Show when={props.showDebug()}>
+        <div
+          class="qm-debug"
+          title="Click to copy diagnostics"
+          onClick={() => void ctx.system.copy(props.debug()).catch(() => undefined)}
+        >
+          {props.debug()} · click to copy
+        </div>
       </Show>
     </div>
   )

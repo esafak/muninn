@@ -358,8 +358,37 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
             unresolved={() => meta.unresolved}
             error={() => meta.error}
             debug={debugLine}
+            showDebug={() => ctx.stores.settings.value.debugMode}
+            mergeReady={(chain) =>
+              chain.prs.some((pr) => pr.state === "open") &&
+              chain.runs.length > 0 &&
+              chain.runs.every((run) => run.status === "succeeded")
+            }
+            mergeWhy={(chain) => {
+              const failed = chain.runs.find((run) => run.status === "failed")
+              if (failed) return `checks failed (run #${failed.id})`
+              if (chain.runs.some((run) => run.status === "queued" || run.status === "running")) return "checks still running"
+              if (chain.prs.every((pr) => pr.state !== "open")) return "pull request is not open"
+              return "not ready"
+            }}
             sessionReady={sessionReady}
             onOpen={open}
+            onMerge={async (pull) => {
+              const current = session()
+              const client = ctx.client
+              if (!current || !client) return
+              await client
+                .rpc(Quartermaster)
+                .merge({
+                  directory: current.directory,
+                  number: pull.number,
+                  method: "squash",
+                  expectedHeadSha: pull.headSha,
+                  deleteBranch: true,
+                })
+                .catch((error: unknown) => console.error("[quartermaster] merge failed", error))
+              void refresh()
+            }}
           />
         </div>
         <Show when={chains().length === 0 && meta.repo === null && !sessionReady()}>
