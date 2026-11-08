@@ -50,4 +50,12 @@ export interface SourceProvider {
     deleteBranch: boolean,
     auth: Auth,
   ) => Promise<{ merged: boolean; message?: string }>
+  /** Arms (or disarms) auto-merge: merge when checks pass and required reviews approve. */
+  setAutoMerge: (
+    repo: RepoRef,
+    number: number,
+    enable: boolean,
+    method: "merge" | "squash" | "rebase",
+    auth: Auth,
+  ) => Promise<{ armed: boolean; message?: string }>
 }

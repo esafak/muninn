@@ -5,12 +5,12 @@ import { ComposerPill, MenuItem, Panel, SettingsPage, createKeyed, usePlugin, ty
 import { associate } from "../associate"
 import { messagesText, scan } from "../extract"
 import type { Chain, Entity, PullEntity, RepoRef, RunEntity, RunStatus } from "../model"
-import { chainTone, refKey, repoKey } from "../model"
+import { chainTone, mergeReady, mergeWhy, refKey, repoKey } from "../model"
 import { githubLexicon } from "../providers/github/lexicon"
 import { Quartermaster } from "../rpc"
 import type { definition } from "./definition"
-import { History } from "./history"
-import { CancelledGlyph, CheckGlyph, CrossGlyph, IssueGlyph, MergedGlyph, PullGlyph, QueuedGlyph } from "./icons"
+import { History, MergeButton } from "./history"
+import { CancelledGlyph, CheckGlyph, CrossGlyph, IssueGlyph, MergeGlyph, MergedGlyph, PullGlyph, QueuedGlyph } from "./icons"
 import { pillIcon } from "./marks"
 
 const POLL_MS = 30_000
@@ -228,21 +228,6 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     (chain.prs.length === 0 && chain.issues.some((issue) => issue.state === "open")) ||
     (chain.prs.length === 0 && chain.issues.length === 0 && Date.now() - chain.updatedAt < DAY_MS)
 
-  /** Whether the chain's lead PR is mergeable now: open, checks green, no blockers. */
-  const mergeReady = (chain: Chain): boolean =>
-    chain.prs.some((pull) => pull.state === "open") &&
-    chain.runs.length > 0 &&
-    chain.runs.every((run) => run.status === "succeeded")
-
-  /** Why the lead PR can't merge yet — shown on the disabled button. */
-  const mergeWhy = (chain: Chain): string => {
-    const failed = chain.runs.find((run) => run.status === "failed")
-    if (failed) return `checks failed (run #${failed.id})`
-    if (chain.runs.some((run) => run.status === "queued" || run.status === "running")) return "checks still running"
-    if (chain.prs.every((pull) => pull.state !== "open")) return "pull request is not open"
-    return "not ready"
-  }
-
   /** Merges a pull request: confirms in the app's dialog (naming exactly what
    * happens), then fires the provider merge guarded by the PR's head SHA. */
   const mergePull = async (pull: PullEntity): Promise<void> => {
@@ -268,6 +253,31 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
         deleteBranch,
       })
       .catch((error: unknown) => console.error("[quartermaster] merge failed", error))
+    void refresh()
+  }
+
+  /** Arms or disarms auto-merge (merge when checks pass and required reviews approve).
+   * Arming confirms — it will merge later without supervision; disarming is instant. */
+  const armPull = async (pull: PullEntity, enable: boolean): Promise<void> => {
+    const current = session()
+    const client = ctx.client
+    if (!current || !client) return
+    const method = ctx.stores.settings.value.mergeMethod
+    if (enable) {
+      const ok = await ctx.dialogs.confirm({
+        title: `Merge PR #${pull.number} when ready?`,
+        description: `Auto-merges "${pull.title}" into ${pull.baseBranch} with ${method} as soon as checks pass and required reviews approve. You can cancel any time.`,
+        confirm: "Merge when ready",
+      })
+      if (!ok) return
+    }
+    await client
+      .rpc(Quartermaster)
+      .autoMerge({ directory: current.directory, number: pull.number, enable, method })
+      .then((result) => {
+        if (result.message) void ctx.dialogs.alert({ title: `Auto-merge for PR #${pull.number}`, description: result.message })
+      })
+      .catch((error: unknown) => console.error("[quartermaster] auto-merge failed", error))
     void refresh()
   }
 
@@ -309,15 +319,22 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       const prChains = chains().filter((chain) => chain.prs.length > 0)
       const worst = (prChains.find((chain) => chainTone(chain) === "danger") ?? prChains[0]) ?? chains()[0]!
       const lead = worst.prs[0]
-      const failing = worst.runs.find((run) => run.status === "failed")
+      const tone = chainTone(worst)
+
+      // The capsule reads like GitHub's PR status: a circle icon in the worst
+      // state's color, then `#number title ⌄` — short enough that the chevron
+      // (the affordance that this opens a menu) survives truncation.
+      const circle =
+        tone === "success" ? "circle-check" : tone === "warning" ? "circle-exclamation" : tone === "danger" ? "circle-xmark" : pillIcon(meta.provider)
+      const short = (title: string): string => (title.length > 26 ? `${title.slice(0, 26)}…` : title)
 
       return {
-        icon: pillIcon(meta.provider),
+        icon: circle,
         label: lead
-          ? `#${lead.number} ${lead.title}`
-          : `run #${worst.runs[0]!.id} · ${ctx.t(`state.${worst.runs[0]!.status}`)}`,
-        tone: chainTone(worst),
-        title: ctx.t("pill.title"),
+          ? `#${lead.number} ${short(lead.title)} ▾`
+          : `run #${worst.runs[0]!.id} · ${ctx.t(`state.${worst.runs[0]!.status}`)} ▾`,
+        tone,
+        title: lead ? `#${lead.number} ${lead.title}` : ctx.t("pill.title"),
       }
     },
     // The pill's dropdown: the full chain picture with the merge controls the
@@ -334,19 +351,16 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
                     <span class="qm-kind" data-state={`pr-${pull.state}`} title={ctx.t(`state.${pull.state}`)}>
                       {pull.state === "merged" ? <MergedGlyph /> : <PullGlyph />}
                     </span>
+                    <span
+                      class="qm-merge-state"
+                      data-state={pull.mergeState ?? "unknown"}
+                      title={`merge: ${pull.mergeState ?? "unknown"}${pull.reviewState ? ` · reviews: ${pull.reviewState}` : ""}`}
+                    >
+                      <MergeGlyph />
+                    </span>
                     <span class="qm-pop-id">#{pull.number}</span>
                     <span class="qm-pop-title">{pull.title}</span>
-                    <Show when={pull.state === "open"}>
-                      <button
-                        class="qm-merge"
-                        classList={{ pending: !mergeReady(chain) }}
-                        disabled={!mergeReady(chain)}
-                        title={mergeReady(chain) ? "Merge…" : mergeWhy(chain)}
-                        onClick={(event) => { event.stopPropagation(); input.close(); void mergePull(pull) }}
-                      >
-                        Merge
-                      </button>
-                    </Show>
+                    <MergeButton chain={chain} pull={pull} onMerge={mergePull} onArm={armPull} />
                   </div>
                 )}
               </For>
@@ -462,11 +476,10 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
             error={() => meta.error}
             debug={debugLine}
             showDebug={() => ctx.stores.settings.value.debugMode}
-            mergeReady={mergeReady}
-            mergeWhy={mergeWhy}
             sessionReady={sessionReady}
             onOpen={open}
             onMerge={mergePull}
+            onArm={armPull}
           />
         </div>
         <Show when={chains().length === 0 && meta.repo === null && !sessionReady()}>
@@ -646,7 +659,17 @@ const STYLES = `
 }
 .qm-merge:hover { filter: brightness(1.1); }
 .qm-merge.pending { background: var(--v2-state-bg-warning, #9a6700); }
-.qm-merge:disabled { cursor: not-allowed; filter: none; background: var(--v2-background-bg-layer-02, #3a3a3a); color: var(--v2-text-text-faint); box-shadow: inset 0 0 0 .5px var(--v2-border-border-muted); }
+.qm-merge.armed {
+  background: none; color: var(--v2-state-fg-warning, #9a6700);
+  box-shadow: inset 0 0 0 .5px var(--v2-state-border-warning, #9a6700);
+}
+.qm-merge.armed:hover { background: var(--v2-overlay-simple-overlay-hover); filter: none; }
+
+/* Merge-status glyph: GitHub's circle-dot, colored by merge state. */
+.qm-merge-state { color: var(--v2-icon-icon-muted); flex: none; display: inline-flex; }
+.qm-merge-state[data-state="ready"] { color: var(--v2-state-fg-success, #1a7f37); }
+.qm-merge-state[data-state="pending"], .qm-merge-state[data-state="blocked"], .qm-merge-state[data-state="unknown"] { color: var(--v2-state-fg-warning, #9a6700); }
+.qm-merge-state[data-state="conflict"] { color: var(--v2-state-fg-danger, #cf222e); }
 `
 
 let injected = false

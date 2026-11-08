@@ -5,7 +5,7 @@
  */
 
 import type { Credential, Plugin } from "@opencode/plugin"
-import type { Entity, IssueEntity, PullEntity, Ref, RepoRef, RunEntity } from "../model"
+import type { AutoMergeMethod, Entity, IssueEntity, MergeState, PullEntity, Ref, RepoRef, ReviewState, RunEntity } from "../model"
 import type { Auth, Hydration, MergeMethod, MergeSettings, SourceProvider } from "./types"
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
@@ -27,6 +27,7 @@ interface IssueJson {
 }
 
 interface PullJson {
+  node_id: string
   number: number
   title: string
   state: "open" | "closed"
@@ -37,6 +38,15 @@ interface PullJson {
   updated_at: string
   head: { sha: string; ref: string }
   base: { ref: string }
+  mergeable: boolean | null
+  mergeable_state: "clean" | "blocked" | "unstable" | "dirty" | "draft" | "has_hooks" | "unknown" | string
+  auto_merge: { merge_method: "merge" | "squash" | "rebase" } | null
+}
+
+interface ReviewJson {
+  state: "APPROVED" | "CHANGES_REQUESTED" | "COMMENTED" | "DISMISSED" | "PENDING"
+  user: { login: string } | null
+  submitted_at: string | null
 }
 
 interface RunJson {
@@ -87,6 +97,25 @@ const request = async <T>(path: string, auth: Auth): Promise<T | undefined> => {
     throw new Error("GitHub rate limit exceeded")
   if (!response.ok) throw new Error(`GitHub ${response.status} on ${path}`)
   return (await response.json()) as T
+}
+
+/** GraphQL call — the only way to arm or disarm a pull request's auto-merge. */
+const graphql = async <T>(query: string, variables: Record<string, unknown>, auth: Auth): Promise<T> => {
+  const token = await auth()
+  const response = await fetch(`${API}/graphql`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "user-agent": "quartermaster",
+      ...(token ? { authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify({ query, variables }),
+    signal: AbortSignal.timeout(20_000),
+  })
+  if (!response.ok) throw new Error(`GitHub GraphQL ${response.status}`)
+  const body = (await response.json()) as { data?: T; errors?: { message: string }[] }
+  if (body.errors?.length) throw new Error(body.errors.map((error) => error.message).join("; "))
+  return body.data as T
 }
 
 const epoch = (iso: string): number => Date.parse(iso)
@@ -174,6 +203,31 @@ const hydrateOne = async (ref: Ref & { repo: RepoRef }, auth: Auth): Promise<Ent
   return entity
 }
 
+/** GitHub's `mergeable_state`, in Quartermaster's terms. `clean` (or `has_hooks`,
+ * which still merges) is ready; `unstable`/`unknown` are checks still settling. */
+const mergeState = (pull: PullJson): MergeState | null => {
+  if (pull.state === "open" && !pull.draft) {
+    if (pull.mergeable_state === "clean" || pull.mergeable_state === "has_hooks") return "ready"
+    if (pull.mergeable_state === "blocked") return "blocked"
+    if (pull.mergeable_state === "dirty") return "conflict"
+    if (pull.mergeable_state) return "pending"
+  }
+  return null
+}
+
+const reviewState = (reviews: ReviewJson[] | undefined): ReviewState | null => {
+  if (!reviews || reviews.length === 0) return null
+  // Latest submitted review per user decides; a request for changes anywhere outranks approvals.
+  const latest = new Map<string, ReviewJson["state"]>()
+  for (const review of reviews)
+    if (review.user && review.submitted_at && review.state !== "COMMENTED" && review.state !== "PENDING")
+      latest.set(review.user.login, review.state)
+  const states = [...latest.values()]
+  if (states.includes("CHANGES_REQUESTED")) return "changes_requested"
+  if (states.includes("APPROVED")) return "approved"
+  return "pending"
+}
+
 const toPullEntity = (repo: RepoRef, pull: PullJson): PullEntity => ({
   kind: "pr",
   provider: "github",
@@ -185,6 +239,9 @@ const toPullEntity = (repo: RepoRef, pull: PullJson): PullEntity => ({
   baseBranch: pull.base.ref,
   closes: closingIssues(pull.body),
   headSha: pull.head.sha,
+  nodeId: pull.node_id,
+  mergeState: mergeState(pull),
+  autoMerge: pull.auto_merge?.merge_method ?? null,
   url: pull.html_url,
   updatedAt: epoch(pull.updated_at),
 })
@@ -192,7 +249,10 @@ const toPullEntity = (repo: RepoRef, pull: PullJson): PullEntity => ({
 const hydratePull = async (repo: RepoRef, number: number, auth: Auth): Promise<PullEntity | undefined> => {
   const pull = await request<PullJson>(`/repos/${repo.owner}/${repo.repo}/pulls/${number}`, auth)
   if (!pull) return undefined
-  return toPullEntity(repo, pull)
+  const entity = toPullEntity(repo, pull)
+  // Reviews are one extra read per PR; only the hydrated detail carries them.
+  const reviews = await request<ReviewJson[]>(`/repos/${repo.owner}/${repo.repo}/pulls/${number}/reviews?per_page=30`, auth)
+  return { ...entity, reviewState: reviewState(reviews) }
 }
 
 /**
@@ -413,5 +473,30 @@ export const github: SourceProvider = {
       signal: AbortSignal.timeout(20_000),
     })
     return deleted.ok ? { merged: true } : { merged: true, message: `branch deletion failed: ${deleted.status}` }
+  },
+
+  /** Arms or disarms auto-merge — merge when CI is green and required reviews pass.
+   * GraphQL-only on GitHub's side; needs the PR's node id. */
+  setAutoMerge: async (repo, number, enable, method, auth) => {
+    const pull = await request<PullJson>(`/repos/${repo.owner}/${repo.repo}/pulls/${number}`, auth)
+    if (!pull?.node_id) return { armed: false, message: "pull request not found" }
+    try {
+      if (enable) {
+        await graphql(
+          "mutation($id: ID!, $method: PullRequestMergeMethod!) { enablePullRequestAutoMerge(input: { pullRequestId: $id, mergeMethod: $method }) { clientMutationId } }",
+          { id: pull.node_id, method },
+          auth,
+        )
+      } else {
+        await graphql(
+          "mutation($id: ID!) { disablePullRequestAutoMerge(input: { pullRequestId: $id }) { clientMutationId } }",
+          { id: pull.node_id },
+          auth,
+        )
+      }
+      return { armed: enable }
+    } catch (error) {
+      return { armed: false, message: error instanceof Error ? error.message : "auto-merge failed" }
+    }
   },
 }

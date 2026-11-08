@@ -97,6 +97,13 @@ export default Plugin.define({
         if (!source) return { merged: false, message: `no provider for ${repo.host}` }
         return source.merge(repo, input.number, input.method, input.expectedHeadSha, input.deleteBranch, () => source.auth(ctx))
       },
+      autoMerge: async (input) => {
+        const repo = await readRemote(input.directory)
+        if (!repo) return { armed: false, message: "no repository resolved for this directory" }
+        const source = sourceFor(repo.host)
+        if (!source) return { armed: false, message: `no provider for ${repo.host}` }
+        return source.setAutoMerge(repo, input.number, input.enable, input.method, () => source.auth(ctx))
+      },
     })
   },
 })

@@ -19,6 +19,14 @@ export type IssueState = "open" | "closed"
 
 export type PullState = "open" | "draft" | "merged" | "closed"
 
+/** Mergeability per the provider (GitHub: `mergeable` + `mergeable_state`). null = unknown (older cache entries). */
+export type MergeState = "ready" | "pending" | "blocked" | "conflict"
+
+/** Review outcome, latest review per reviewer. null = no reviews or not fetched. */
+export type ReviewState = "approved" | "changes_requested" | "pending"
+
+export type AutoMergeMethod = "merge" | "squash" | "rebase"
+
 /** CI run states, the only thing a run row shows. */
 export type RunStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled"
 
@@ -81,6 +89,12 @@ export interface PullEntity extends Base {
   /** Issue numbers the pull request closes, parsed from its body. */
   closes: number[]
   headSha: string
+  /** Provider's node id, for graph mutations (arm auto-merge). Older cached entries predate it. */
+  nodeId?: string
+  mergeState?: MergeState | null
+  reviewState?: ReviewState | null
+  /** The provider's auto-merge: armed with this method, or null when off. */
+  autoMerge?: AutoMergeMethod | null
 }
 
 export type Entity = IssueEntity | PullEntity | RunEntity
@@ -105,14 +119,43 @@ export const repoKey = (repo: RepoRef): string => `${repo.host}/${repo.owner}/${
 export const refKey = (ref: Ref): string =>
   `${ref.repo ? `${ref.repo.host}/${ref.repo.owner}/${ref.repo.repo}` : "@"}#${ref.kind ?? ""}${ref.number}`
 
-/** Worst-state helper for pill tones: a failing run outranks everything on its chain. */
+/** Whether the chain's lead PR can merge right now: open, checks green, no
+ * conflicts, no outstanding change requests. Unknown states (entries hydrated
+ * by older code) don't block — they fall back to the checks. */
+export const mergeReady = (chain: Chain): boolean => {
+  const lead = chain.prs[0]
+  if (!lead || lead.state !== "open") return false
+  if (!chain.runs.every((run) => run.status === "succeeded")) return false
+  if (lead.reviewState === "changes_requested" || lead.mergeState === "conflict") return false
+  if (lead.mergeState && lead.mergeState !== "ready") return false
+  return true
+}
+
+/** Why the lead PR can't merge yet — the disabled button's tooltip. */
+export const mergeWhy = (chain: Chain): string => {
+  const lead = chain.prs[0]
+  const failed = chain.runs.find((run) => run.status === "failed")
+  if (failed) return `checks failed (run #${failed.id})`
+  if (chain.runs.some((run) => run.status === "queued" || run.status === "running")) return "checks still running"
+  if (lead?.reviewState === "changes_requested") return "changes requested"
+  if (lead?.mergeState === "conflict") return "merge conflicts with the base branch"
+  if (lead?.mergeState === "blocked") return "blocked by branch rules or a missing review"
+  if (!lead || lead.state !== "open") return "pull request is not open"
+  return "not ready"
+}
+
+/**
+ * Worst-state helper for pill tones: failing runs and conflicted/revoked work
+ * outrank everything; blocked and in-flight work read as warning; a fully green
+ * chain reads as success.
+ */
 export const chainTone = (chain: Chain): "success" | "warning" | "danger" | undefined => {
   if (chain.runs.some((run) => run.status === "failed")) return "danger"
-  if (chain.runs.some((run) => run.status === "running" || run.status === "queued")) return "warning"
   const lead = chain.prs[0]
-  // Open PR with every check green: ready to merge.
-  if (lead?.state === "open" && chain.runs.length > 0 && chain.runs.every((run) => run.status === "succeeded"))
-    return "success"
+  if (lead?.mergeState === "conflict" || lead?.reviewState === "changes_requested") return "danger"
+  if (chain.runs.some((run) => run.status === "running" || run.status === "queued")) return "warning"
+  if (lead?.state === "open" && (lead.mergeState === "blocked" || lead.mergeState === "pending")) return "warning"
+  if (lead?.state === "open" && mergeReady(chain)) return "success"
   if (lead?.state === "merged") return "success"
   if (chain.prs.length === 0 && chain.runs.some((run) => run.status === "succeeded")) return "success"
   return undefined

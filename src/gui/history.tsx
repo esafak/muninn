@@ -1,12 +1,11 @@
-import { For, Show, createSignal } from "solid-js"
+import { For, Match, Show, Switch, createSignal } from "solid-js"
 import type { Accessor, JSX } from "solid-js"
 import { usePlugin } from "@opencode/plugin/gui"
-import type { Chain, RepoRef, RunEntity, RunStatus } from "../model"
-import type { PullEntity } from "../model"
-import { chainTone } from "../model"
+import type { Chain, PullEntity, RepoRef, RunEntity, RunStatus } from "../model"
+import { chainTone, mergeReady, mergeWhy } from "../model"
 import type { definition } from "./definition"
 import { Mark } from "./marks"
-import { CancelledGlyph, CheckGlyph, CrossGlyph, IssueGlyph, MergedGlyph, PullGlyph, QueuedGlyph } from "./icons"
+import { CancelledGlyph, CheckGlyph, CrossGlyph, IssueGlyph, MergeGlyph, MergedGlyph, PullGlyph, QueuedGlyph } from "./icons"
 
 const DAY_MS = 24 * 60 * 60 * 1000
 
@@ -22,15 +21,67 @@ export interface HistoryProps {
   /** Build + pill-gate diagnostics, rendered as the panel footer when debug mode is on. */
   debug: Accessor<string>
   showDebug: Accessor<boolean>
-  /** Whether the chain's lead PR is mergeable now (open, checks green, no blockers). */
-  mergeReady: (chain: Chain) => boolean
-  /** Why the lead PR can't merge yet — shown on the disabled button. */
-  mergeWhy: (chain: Chain) => string
   sessionReady: Accessor<boolean>
   onOpen: (url: string) => void
-  /** Merges the pull request (squash, head-SHA guarded) and refreshes. */
+  /** Merges the pull request now (method + delete-branch from settings, head-SHA guarded). */
   onMerge: (pull: PullEntity) => Promise<void>
+  /** Arms or disarms auto-merge (merge when checks pass and required reviews approve). */
+  onArm: (pull: PullEntity, enable: boolean) => Promise<void>
 }
+
+/**
+ * The PR action button, shared by the sidebar and the pill's dropdown — GitHub's
+ * three states: green "Merge" when it can merge now; amber "Merge when ready"
+ * arming auto-merge when something blocks it; an amber "Armed" cancelling it when
+ * auto-merge is on. Nothing renders for merged/closed PRs.
+ */
+export const MergeButton = (props: {
+  chain: Chain
+  pull: PullEntity
+  onMerge: (pull: PullEntity) => Promise<void>
+  onArm: (pull: PullEntity, enable: boolean) => Promise<void>
+}): JSX.Element => (
+  <Show when={props.pull.state === "open"}>
+    <Switch>
+      <Match when={props.pull.autoMerge}>
+        <button
+          class="qm-merge armed"
+          title={`auto-merge is armed (${props.pull.autoMerge}) — merging when checks pass and reviews approve. Click to cancel.`}
+          onClick={(event) => {
+            event.stopPropagation()
+            void props.onArm(props.pull, false)
+          }}
+        >
+          Armed
+        </button>
+      </Match>
+      <Match when={mergeReady(props.chain)}>
+        <button
+          class="qm-merge"
+          title="Merge now — method and delete-branch follow the pill menu's choices"
+          onClick={(event) => {
+            event.stopPropagation()
+            void props.onMerge(props.pull)
+          }}
+        >
+          Merge
+        </button>
+      </Match>
+      <Match when={props.pull.state === "open"}>
+        <button
+          class="qm-merge pending"
+          title={`${mergeWhy(props.chain)} — click to merge when ready (auto-merge)`}
+          onClick={(event) => {
+            event.stopPropagation()
+            void props.onArm(props.pull, true)
+          }}
+        >
+          Merge when ready
+        </button>
+      </Match>
+    </Switch>
+  </Show>
+)
 
 const dayLabel = (epoch: number): string => new Date(epoch).toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" })
 const time = (epoch: number): string =>
@@ -118,6 +169,15 @@ export const History = (props: HistoryProps) => {
                           <MergedGlyph />
                         </Show>
                       </span>
+                      <Show when={pull.state === "open" && pull.mergeState}>
+                        <span
+                          class="qm-merge-state"
+                          data-state={pull.mergeState}
+                          title={`merge: ${pull.mergeState}${pull.reviewState ? ` · reviews: ${pull.reviewState}` : ""}`}
+                        >
+                          <MergeGlyph />
+                        </span>
+                      </Show>
                       <span
                         class="qm-id"
                         classList={{ copied: copied() === `p${chain.key}${pull.number}` }}
@@ -127,20 +187,7 @@ export const History = (props: HistoryProps) => {
                         {copied() === `p${chain.key}${pull.number}` ? "✓" : `#${pull.number}`}
                       </span>
                       <span class="qm-title">{pull.title}</span>
-                      <Show when={pull.state === "open"}>
-                        <button
-                          class="qm-merge"
-                          classList={{ pending: !props.mergeReady(chain) }}
-                          disabled={!props.mergeReady(chain)}
-                          title={props.mergeReady(chain) ? "Merge (squash)…" : props.mergeWhy(chain)}
-                          onClick={(event) => {
-                            event.stopPropagation()
-                            void props.onMerge(pull)
-                          }}
-                        >
-                          Merge
-                        </button>
-                      </Show>
+                      <MergeButton chain={chain} pull={pull} onMerge={props.onMerge} onArm={props.onArm} />
                     </div>
                   )}
                 </For>

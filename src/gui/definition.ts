@@ -46,6 +46,11 @@ const Entity = Schema.Union([
     headSha: Schema.String,
     url: Schema.String,
     updatedAt: Schema.Number,
+    // Optional: entries hydrated by older server code predate these.
+    nodeId: Schema.optional(Schema.String),
+    mergeState: Schema.optional(Schema.NullOr(Schema.Literals(["ready", "pending", "blocked", "conflict"]))),
+    reviewState: Schema.optional(Schema.NullOr(Schema.Literals(["approved", "changes_requested", "pending"]))),
+    autoMerge: Schema.optional(Schema.NullOr(Schema.Literals(["merge", "squash", "rebase"]))),
   }),
 ])
 

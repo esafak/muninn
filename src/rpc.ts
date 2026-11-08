@@ -63,6 +63,11 @@ export const PullEntity = z.object({
   headSha: z.string(),
   url: z.string(),
   updatedAt: z.number(),
+  // Optional: entries hydrated by older server code predate these.
+  nodeId: z.string().optional(),
+  mergeState: z.enum(["ready", "pending", "blocked", "conflict"]).nullish(),
+  reviewState: z.enum(["approved", "changes_requested", "pending"]).nullish(),
+  autoMerge: z.enum(["merge", "squash", "rebase"]).nullish(),
 })
 
 export const Entity = z.discriminatedUnion("kind", [IssueEntity, PullEntity, RunEntity])
@@ -120,6 +125,16 @@ export const Quartermaster = Rpc.define({
         deleteBranch: z.boolean(),
       }),
       output: z.object({ merged: z.boolean(), message: z.string().optional() }),
+    },
+    /** Arms (enable) or disarms auto-merge: merge when checks pass and required reviews approve. */
+    autoMerge: {
+      input: z.object({
+        directory: z.string(),
+        number: z.number(),
+        enable: z.boolean(),
+        method: z.enum(["merge", "squash", "rebase"]),
+      }),
+      output: z.object({ armed: z.boolean(), message: z.string().optional() }),
     },
   },
   events: {},
