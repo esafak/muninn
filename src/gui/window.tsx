@@ -340,7 +340,13 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     // The pill's dropdown: the full chain picture with the merge controls the
     // sidebar has, plus the merge-method/delete-branch choices. Reads the stores
     // itself, so it stays live while open. Run ids live only here (pill grammar).
-    menu: (input) => (
+    menu: (input) => {
+      // The lead open PR across live chains: the footer's merge-when-ready
+      // toggle binds to it. Reactive — the popover updates while it's open.
+      const lead = chains()
+        .filter((chain) => live(chain))
+        .flatMap((chain) => chain.prs.filter((pull) => pull.state === "open").map((pull) => ({ chain, pull })))[0]
+      return (
       <div class="mn-pop">
         <For each={chains().filter((chain) => live(chain)).slice(0, 3)}>
           {(chain) => (
@@ -401,6 +407,28 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
           )}
         </For>
         <div class="mn-pop-foot">
+          <Show when={lead}>
+            {(lead) => (
+              <label
+                class="mn-pop-toggle"
+                title={
+                  lead().pull.autoMerge
+                    ? `auto-merge is armed (${lead().pull.autoMerge}) — click to cancel`
+                    : mergeReady(lead().chain)
+                      ? "already mergeable — GitHub doesn't arm auto-merge on clean PRs; just Merge"
+                      : `arm auto-merge: merge as soon as checks pass and reviews approve — now blocked: ${mergeWhy(lead().chain)}`
+                }
+              >
+                <input
+                  type="checkbox"
+                  checked={!!lead().pull.autoMerge}
+                  disabled={!lead().pull.autoMerge && mergeReady(lead().chain)}
+                  onChange={(event) => void armPull(lead().pull, event.currentTarget.checked)}
+                />
+                merge when ready
+              </label>
+            )}
+          </Show>
           <label class="mn-pop-toggle">
             <input
               type="checkbox"
@@ -424,7 +452,8 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
           </select>
         </div>
       </div>
-    ),
+      )
+    },
   })
 
   // Launcher: the side region's + menu lists Muninn so the tab can be opened.
