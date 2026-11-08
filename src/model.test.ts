@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import type { Chain, IssueEntity, PullEntity, RunEntity } from "./model"
-import { chainTone, mergeReady, mergeWhy, armedTargets, type ArmedEntry } from "./model"
+import { chainTone, mergeReady, mergeWhy, armedTargets, pillPick, type ArmedEntry } from "./model"
 
 const repo = { host: "github.com", owner: "sst", repo: "opencode" }
 
@@ -148,5 +148,35 @@ describe("armedTargets", () => {
   test("providers without merge state still fire on green checks alone", () => {
     // mergeState undefined: the fallback path — what a minimal forge returns.
     expect(armedTargets([entry()], [chain()]).length).toBe(1)
+  })
+})
+
+describe("pillPick", () => {
+  test("a danger chain outranks a calm newer one", () => {
+    const calm = chain({ key: "calm", updatedAt: 200, prs: [pull({ number: 100, mergeState: "ready" })] })
+    const danger = chain({ key: "danger", updatedAt: 100, prs: [pull({ number: 101, reviewState: "changes_requested" })] })
+    const picked = pillPick([calm, danger])
+    expect(picked?.reason).toBe("danger")
+    expect(picked?.chain.key).toBe("danger")
+    expect(picked?.considered).toBe(2)
+  })
+
+  test("otherwise the most recently updated PR chain wins", () => {
+    const older = chain({ key: "older", updatedAt: 100 })
+    const newer = chain({ key: "newer", updatedAt: 200 })
+    const picked = pillPick([older, newer])
+    expect(picked?.reason).toBe("newest")
+    expect(picked?.chain.key).toBe("newer")
+  })
+
+  test("run-only chains are the last resort", () => {
+    const runOnly = chain({ key: "run", prs: [], runs: [run("succeeded")] })
+    const picked = pillPick([runOnly])
+    expect(picked?.reason).toBe("runs-only")
+    expect(picked?.chain.key).toBe("run")
+  })
+
+  test("no chains, no pill", () => {
+    expect(pillPick([])).toBeUndefined()
   })
 })

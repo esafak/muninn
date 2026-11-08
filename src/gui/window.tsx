@@ -5,7 +5,7 @@ import { ComposerPill, MenuItem, Panel, SettingsPage, createKeyed, usePlugin, ty
 import { associate } from "../associate"
 import { messagesText, scan } from "../extract"
 import type { Chain, Entity, PullEntity, RepoRef, RunEntity, RunStatus } from "../model"
-import { chainTone, armedTargets, mergeReady, mergeWhy, refKey, repoKey } from "../model"
+import { chainTone, armedTargets, pillPick, mergeReady, mergeWhy, refKey, repoKey } from "../model"
 import { githubLexicon } from "../providers/github/lexicon"
 import { Muninn } from "../rpc"
 import type { definition } from "./definition"
@@ -329,17 +329,24 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
   const debugLine = () => {
     const current = session()
     const gate = current?.id === meta.sessionID ? "✓" : "✗"
-    const list = chains().filter((chain) => live(chain))
-    const primary = list[0]?.prs[0] ?? list[0]?.issues[0]
-    const pill =
-      list.length === 0
-        ? "off: no live chains"
-        : primary
-          ? `#${primary.number} ${primary.title.slice(0, 36)}`
-          : list[0]!.runs[0]
-            ? `run #${list[0]!.runs[0].id}`
-            : "off"
-    return `mn gui ${__MN_BUILD__}${meta.debug ? ` · ${meta.debug}` : " · srv ?"} · gate ${gate} · chains ${chains().length} · live ${list.length} · pill: ${pill}${meta.stats ? ` · ${meta.stats}` : ""}`
+    const liveCount = chains().filter((chain) => live(chain)).length
+    // The capsule's exact pick, then the why: which rule won and out of how many
+    // candidates, and how the chain chose its lead PR.
+    const picked = pillPick(chains())
+    const lead = picked?.chain.prs[0]
+    const pill = !picked
+      ? "off: no live chains"
+      : lead
+        ? `#${lead.number} ${lead.title.slice(0, 36)}`
+        : picked.chain.runs[0]
+          ? `run #${picked.chain.runs[0].id}`
+          : "off"
+    const pick = !picked
+      ? "pick: none"
+      : `pick: ${picked.reason}${picked.considered > 1 ? ` of ${picked.considered}` : ""} · lead ${
+          picked.chain.prs[0] ? (picked.chain.prs[0].headBranch === meta.branch ? "branch match" : "newest") : "—"
+        }`
+    return `mn gui ${__MN_BUILD__}${meta.debug ? ` · ${meta.debug}` : " · srv ?"} · gate ${gate} · chains ${chains().length} · live ${liveCount} · pill: ${pill} · ${pick}${meta.stats ? ` · ${meta.stats}` : ""}`
   }
 
   /** The braille spinner frames for the pill's pending-merge indicator. The host
@@ -366,10 +373,13 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       const list = chains().filter((chain) => live(chain))
       if (list.length === 0) return undefined
 
-      // PR chains are the primary work: they lead the pill regardless of recency,
-      // with a danger PR still outranking a calm one.
-      const prChains = chains().filter((chain) => chain.prs.length > 0)
-      const worst = (prChains.find((chain) => chainTone(chain) === "danger") ?? prChains[0]) ?? chains()[0]!
+      // PR chains are the primary work: the pill leads with the worst-toned PR
+      // chain (failing/conflicted/review-blocked beats a calm newer one), else
+      // the most recently updated; run-only chains are the last resort. The same
+      // `pillPick` powers the footer's pick diagnostics.
+      const picked = pillPick(chains())
+      if (!picked) return undefined
+      const worst = picked.chain
       const lead = worst.prs[0]
       const tone = chainTone(worst)
 

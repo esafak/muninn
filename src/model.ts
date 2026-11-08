@@ -144,6 +144,22 @@ export const mergeWhy = (chain: Chain): string => {
   return "not ready"
 }
 
+/** The pill's lead chain: the worst-toned PR chain outranks recency (failing
+ * checks, conflicts, or a requested review beat a calm newer one); otherwise the
+ * most recently updated PR chain; run-only chains are the last resort. */
+export const pillPick = (
+  chains: readonly Chain[],
+): { chain: Chain; reason: "danger" | "newest" | "runs-only"; considered: number } | undefined => {
+  const byNewest = (a: { updatedAt: number }, b: { updatedAt: number }): number => b.updatedAt - a.updatedAt
+  const prChains = chains.filter((chain) => chain.prs.length > 0).toSorted(byNewest)
+  const danger = prChains.find((chain) => chainTone(chain) === "danger")
+  if (danger) return { chain: danger, reason: "danger", considered: prChains.length }
+  if (prChains[0]) return { chain: prChains[0], reason: "newest", considered: prChains.length }
+  const runChain = chains.toSorted(byNewest)[0]
+  if (runChain) return { chain: runChain, reason: "runs-only", considered: chains.length }
+  return undefined
+}
+
 /** A pull request Muninn is driving to merge: armed locally by the user, merged
  * by Muninn's refresh cycle — never delegated to the forge's own auto-merge. */
 export interface ArmedEntry {
