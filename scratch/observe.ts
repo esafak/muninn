@@ -1,5 +1,5 @@
 /**
- * Observes the full ForgeScout pipeline against live session data: transcript
+ * Observes the full Muninn pipeline against live session data: transcript
  * from opencode.db → shipped scanner → shipped provider (real GitHub API) →
  * shipped associate → exact pill computation. Plus the durable cache contents
  * and recent RPC traffic from the server log. This is the loop: run, compare,

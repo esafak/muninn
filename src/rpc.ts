@@ -1,5 +1,5 @@
 /**
- * The RPC between ForgeScout's server part and the desktop windows. Both sides
+ * The RPC between Muninn's server part and the desktop windows. Both sides
  * and any future provider plugin import this one contract — the only shared
  * runtime token in the package.
  */
@@ -76,8 +76,8 @@ export const Entity = z.discriminatedUnion("kind", [IssueEntity, PullEntity, Run
  * Hydration is best-effort by design: references that resolve to nothing (a `#123`
  * that is prose, a run of another repository) are simply absent from the output.
  */
-export const ForgeScout = Rpc.define({
-  id: "forgescout",
+export const Muninn = Rpc.define({
+  id: "muninn",
   methods: {
     /** Resolves the session directory's forge repository, from `git remote`. */
     repo: {
@@ -139,4 +139,4 @@ export const ForgeScout = Rpc.define({
   },
   events: {},
 })
-export type ForgeScoutRpc = typeof ForgeScout
+export type MuninnRpc = typeof Muninn

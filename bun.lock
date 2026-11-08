@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "opencode-quartermaster",
+      "name": "muninn",
       "dependencies": {
         "@opencode/plugin": "^2.2.6",
         "zod": "^4",

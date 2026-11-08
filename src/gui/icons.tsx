@@ -1,6 +1,6 @@
 /**
  * Inline glyphs. The app's `Icon` sprite is not part of the app-provided module set
- * for plugin bundles, so ForgeScout draws its own — small, `currentColor`, sized
+ * for plugin bundles, so Muninn draws its own — small, `currentColor`, sized
  * for 16px boxes.
  */
 

@@ -9,7 +9,7 @@ import type { IconName } from "@opencode/plugin/gui"
 import { githubLexicon } from "../providers/github/lexicon"
 import { GitHubMark } from "./icons"
 
-/** Providers ForgeScout knows marks and icons for. Registry-validated on lookup. */
+/** Providers Muninn knows marks and icons for. Registry-validated on lookup. */
 type KnownProvider = "github"
 
 const marks: Record<KnownProvider, () => JSX.Element> = { github: GitHubMark }

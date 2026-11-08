@@ -1,10 +1,10 @@
 /**
- * The provider-agnostic model ForgeScout's UI renders. Providers (GitHub today,
+ * The provider-agnostic model Muninn's UI renders. Providers (GitHub today,
  * GitLab or a tracker tomorrow) hydrate these; the GUI never sees provider
  * specifics beyond a `provider` mark and a repo slug.
  */
 
-/** Repositories ForgeScout knows about, parsed from a git remote URL. */
+/** Repositories Muninn knows about, parsed from a git remote URL. */
 export interface RepoRef {
   host: string
   owner: string

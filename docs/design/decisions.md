@@ -1,6 +1,6 @@
 # Settled decisions
 
-1. **Naming** — `forgescout`; sidebar tab "ForgeScout".
+1. **Naming** — `muninn`; sidebar tab "Muninn".
 2. **Placement** — pills above the composer (`ComposerPill` slot); the footer strip
    (`window.bottom`) was rejected but stays depicted in the mockup for reference.
 3. **Pill grammar** — PR/CI first: `#4821 ✓ ready ⇢ #1043 +1`. Linked issues collapse

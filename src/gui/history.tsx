@@ -45,7 +45,7 @@ export const MergeButton = (props: {
     <Switch>
       <Match when={props.pull.autoMerge}>
         <button
-          class="fs-merge armed"
+          class="mn-merge armed"
           title={`auto-merge is armed (${props.pull.autoMerge}) — merging when checks pass and reviews approve. Click to cancel.`}
           onClick={(event) => {
             event.stopPropagation()
@@ -57,7 +57,7 @@ export const MergeButton = (props: {
       </Match>
       <Match when={mergeReady(props.chain)}>
         <button
-          class="fs-merge"
+          class="mn-merge"
           title="Merge now — method and delete-branch follow the pill menu's choices"
           onClick={(event) => {
             event.stopPropagation()
@@ -69,7 +69,7 @@ export const MergeButton = (props: {
       </Match>
       <Match when={props.pull.state === "open"}>
         <button
-          class="fs-merge pending"
+          class="mn-merge pending"
           title={`${mergeWhy(props.chain)} — click to merge when ready (auto-merge)`}
           onClick={(event) => {
             event.stopPropagation()
@@ -114,31 +114,31 @@ export const History = (props: HistoryProps) => {
   }
 
   return (
-    <div class="fs-root" data-forgescout>
-      <div class="fs-head">
-        <span class="fs-mark">
+    <div class="mn-root" data-muninn>
+      <div class="mn-head">
+        <span class="mn-mark">
           <Mark host={props.repo()?.host} />
         </span>
-        <span class="fs-repo">{props.repo() ? `${props.repo()!.owner}/${props.repo()!.repo}` : ctx.t("repo.reading")}</span>
+        <span class="mn-repo">{props.repo() ? `${props.repo()!.owner}/${props.repo()!.repo}` : ctx.t("repo.reading")}</span>
         <Show when={props.branch()}>
-          <span class="fs-branch">{props.branch()}</span>
+          <span class="mn-branch">{props.branch()}</span>
         </Show>
       </div>
 
       <Show when={props.repo() && !props.authenticated()}>
-        <div class="fs-note">{ctx.t("auth.note")}</div>
+        <div class="mn-note">{ctx.t("auth.note")}</div>
         <Show when={props.unresolved() > 0}>
-          <div class="fs-note" data-warn>{ctx.t("auth.unresolved", { count: props.unresolved() })}</div>
+          <div class="mn-note" data-warn>{ctx.t("auth.unresolved", { count: props.unresolved() })}</div>
         </Show>
       </Show>
       <Show when={props.error()}>
-        <div class="fs-note" data-warn>{ctx.t("panel.error", { message: props.error() ?? "" })}</div>
+        <div class="mn-note" data-warn>{ctx.t("panel.error", { message: props.error() ?? "" })}</div>
       </Show>
 
       <Show
         when={props.chains().length > 0}
         fallback={
-          <div class="fs-empty">
+          <div class="mn-empty">
             <Show when={props.repo()} fallback={props.sessionReady() ? ctx.t("repo.none") : ctx.t("repo.reading")}>
               <b>{ctx.t("empty.title")}</b>
               <br />
@@ -151,27 +151,27 @@ export const History = (props: HistoryProps) => {
           {(chain, index) => (
             <>
               <Show when={index() === 0 || !sameDay(props.chains()[index() - 1]!.updatedAt, chain.updatedAt)}>
-                <div class="fs-day">{dayLabel(chain.updatedAt)}</div>
+                <div class="mn-day">{dayLabel(chain.updatedAt)}</div>
               </Show>
-              <div class="fs-chain" data-tone={chainTone(chain)}>
+              <div class="mn-chain" data-tone={chainTone(chain)}>
                 <For each={chain.prs}>
                   {(pull, prIndex) => (
                     <div
-                      class="fs-row"
+                      class="mn-row"
                       classList={{ sub: prIndex() > 0 }}
                       onClick={() => props.onOpen(pull.url)}
                     >
-                      <span class="fs-mark">
+                      <span class="mn-mark">
                         <Mark provider={pull.provider} />
                       </span>
-                      <span class="fs-kind" data-state={`pr-${pull.state}`} title={ctx.t(`state.${pull.state}`)}>
+                      <span class="mn-kind" data-state={`pr-${pull.state}`} title={ctx.t(`state.${pull.state}`)}>
                         <Show when={pull.state === "merged"} fallback={<PullGlyph />}>
                           <MergedGlyph />
                         </Show>
                       </span>
                       <Show when={pull.state === "open" && pull.mergeState}>
                         <span
-                          class="fs-merge-state"
+                          class="mn-merge-state"
                           data-state={pull.mergeState}
                           title={`merge: ${pull.mergeState}${pull.reviewState ? ` · reviews: ${pull.reviewState}` : ""}`}
                         >
@@ -179,14 +179,14 @@ export const History = (props: HistoryProps) => {
                         </span>
                       </Show>
                       <span
-                        class="fs-id"
+                        class="mn-id"
                         classList={{ copied: copied() === `p${chain.key}${pull.number}` }}
                         title="Click to copy"
                         onClick={(event) => copyId(event, `#${pull.number}`, `p${chain.key}${pull.number}`)}
                       >
                         {copied() === `p${chain.key}${pull.number}` ? "✓" : `#${pull.number}`}
                       </span>
-                      <span class="fs-title">{pull.title}</span>
+                      <span class="mn-title">{pull.title}</span>
                       <MergeButton chain={chain} pull={pull} onMerge={props.onMerge} onArm={props.onArm} />
                     </div>
                   )}
@@ -194,22 +194,22 @@ export const History = (props: HistoryProps) => {
 
                 <For each={chain.issues}>
                   {(issue) => (
-                    <div class="fs-row sub" onClick={() => props.onOpen(issue.url)}>
-                      <span class="fs-mark">
+                    <div class="mn-row sub" onClick={() => props.onOpen(issue.url)}>
+                      <span class="mn-mark">
                         <Mark provider={issue.provider} />
                       </span>
-                      <span class="fs-kind" data-state={`issue-${issue.state}`} title={ctx.t(`state.${issue.state}`)}>
+                      <span class="mn-kind" data-state={`issue-${issue.state}`} title={ctx.t(`state.${issue.state}`)}>
                         <IssueGlyph closed={issue.state === "closed"} />
                       </span>
                       <span
-                        class="fs-id"
+                        class="mn-id"
                         classList={{ copied: copied() === `i${chain.key}${issue.number}` }}
                         title="Click to copy"
                         onClick={(event) => copyId(event, `#${issue.number}`, `i${chain.key}${issue.number}`)}
                       >
                         {copied() === `i${chain.key}${issue.number}` ? "✓" : `#${issue.number}`}
                       </span>
-                      <span class="fs-title">{issue.title}</span>
+                      <span class="mn-title">{issue.title}</span>
                     </div>
                   )}
                 </For>
@@ -221,7 +221,7 @@ export const History = (props: HistoryProps) => {
                 </For>
 
                 <Show when={chain.prs.length > 0 && chain.issues.length > 0}>
-                  <div class="fs-chain-foot">
+                  <div class="mn-chain-foot">
                     <span>
                       Closes {chain.issues.map((issue) => `#${issue.number}`).join(", ")}
                     </span>
@@ -234,7 +234,7 @@ export const History = (props: HistoryProps) => {
       </Show>
       <Show when={props.showDebug()}>
         <div
-          class="fs-debug"
+          class="mn-debug"
           title="Click to copy diagnostics"
           onClick={() => void ctx.system.copy(props.debug()).catch(() => undefined)}
         >
@@ -257,16 +257,16 @@ const RunRow = (props: {
 
   return (
     <>
-      <div class="fs-row sub" onClick={() => props.onToggle(key())}>
-        <span class="fs-state" data-status={props.run.status} title={props.label(`state.${props.run.status}`)}>
+      <div class="mn-row sub" onClick={() => props.onToggle(key())}>
+        <span class="mn-state" data-status={props.run.status} title={props.label(`state.${props.run.status}`)}>
           <StatusGlyph status={props.run.status} />
         </span>
-        <span class="fs-title" title={`run ${props.run.id}`}>
+        <span class="mn-title" title={`run ${props.run.id}`}>
           {props.run.name}
         </span>
-        <span class="fs-meta">{time(props.run.updatedAt)}</span>
+        <span class="mn-meta">{time(props.run.updatedAt)}</span>
         <span
-          class="fs-link"
+          class="mn-link"
           title="Open run"
           onClick={(event) => {
             event.stopPropagation()
@@ -276,14 +276,14 @@ const RunRow = (props: {
           ↗
         </span>
       </div>
-      <div class="fs-checks" classList={{ show: props.expanded().has(key()) }}>
+      <div class="mn-checks" classList={{ show: props.expanded().has(key()) }}>
         <For each={props.run.checks}>
           {(check) => (
-            <div class="fs-check">
+            <div class="mn-check">
               <span data-status={check.status} title={props.label(`state.${check.status}`)}>
                 <StatusGlyph status={check.status} />
               </span>
-              <span class="fs-check-name">{check.name}</span>
+              <span class="mn-check-name">{check.name}</span>
             </div>
           )}
         </For>
@@ -296,6 +296,6 @@ const StatusGlyph = (props: { status: RunStatus }): JSX.Element => {
   if (props.status === "succeeded") return <CheckGlyph />
   if (props.status === "failed") return <CrossGlyph />
   if (props.status === "cancelled") return <CancelledGlyph />
-  if (props.status === "running") return <span class="fs-spin" />
+  if (props.status === "running") return <span class="mn-spin" />
   return <QueuedGlyph />
 }

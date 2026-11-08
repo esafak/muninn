@@ -87,7 +87,7 @@ const request = async <T>(path: string, auth: Auth): Promise<T | undefined> => {
     headers: {
       accept: "application/vnd.github+json",
       "x-github-api-version": "2022-11-28",
-      "user-agent": "forgescout",
+      "user-agent": "muninn",
       ...(token ? { authorization: `Bearer ${token}` } : {}),
     },
     signal: AbortSignal.timeout(20_000),
@@ -106,7 +106,7 @@ const graphql = async <T>(query: string, variables: Record<string, unknown>, aut
     method: "POST",
     headers: {
       "content-type": "application/json",
-      "user-agent": "forgescout",
+      "user-agent": "muninn",
       ...(token ? { authorization: `Bearer ${token}` } : {}),
     },
     body: JSON.stringify({ query, variables }),
@@ -203,7 +203,7 @@ const hydrateOne = async (ref: Ref & { repo: RepoRef }, auth: Auth): Promise<Ent
   return entity
 }
 
-/** GitHub's `mergeable_state`, in ForgeScout's terms. `clean` (or `has_hooks`,
+/** GitHub's `mergeable_state`, in Muninn's terms. `clean` (or `has_hooks`,
  * which still merges) is ready; `unstable`/`unknown` are checks still settling. */
 const mergeState = (pull: PullJson): MergeState | null => {
   if (pull.state === "open" && !pull.draft) {
@@ -449,7 +449,7 @@ export const github: SourceProvider = {
   merge: async (repo, number, method, expectedHeadSha, deleteBranch, auth) => {
     const headers = {
       accept: "application/vnd.github+json",
-      "user-agent": "forgescout",
+      "user-agent": "muninn",
       ...(await auth() ? { authorization: `Bearer ${await auth()}` } : {}),
     }
     const merge = await fetch(`https://api.github.com/repos/${repo.owner}/${repo.repo}/pulls/${number}/merge`, {

@@ -1,7 +1,7 @@
 /**
  * The narrow seam every source provider implements. The split by runtime is
  * deliberate: lexicons and marks are pure (bundled into windows), while hydration
- * and merges run server-side behind the ForgeScout RPC — the GUI only ever sees
+ * and merges run server-side behind the Muninn RPC — the GUI only ever sees
  * generic kinds, statuses, and this interface's outputs.
  */
 

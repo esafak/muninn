@@ -1,5 +1,5 @@
 /**
- * ForgeScout's server part. Runs inside the user's OpenCode server: it resolves
+ * Muninn's server part. Runs inside the user's OpenCode server: it resolves
  * the session directory's forge repository, hydrates extracted references over the
  * provider APIs, and serves all of it to desktop windows through the RPC contract.
  * Providers register here; dispatch is by claimed host.
@@ -10,7 +10,7 @@ import { github } from "./providers/github"
 import type { Ref, RepoRef } from "./model"
 import type { SourceProvider } from "./providers/types"
 import { readRemote } from "./remote"
-import { ForgeScout } from "./rpc"
+import { Muninn } from "./rpc"
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 
@@ -29,16 +29,16 @@ const serverBuild = async (): Promise<string> => {
   return serverSha
 }
 
-/** Every source provider ForgeScout ships. GitLab and friends join this array. */
+/** Every source provider Muninn ships. GitLab and friends join this array. */
 const sources: readonly SourceProvider[] = [github]
 
 const sourceFor = (host: string | undefined): SourceProvider | undefined =>
   sources.find((source) => host !== undefined && source.hosts.includes(host))
 
 export default Plugin.define({
-  id: "forgescout",
+  id: "muninn",
   async setup(ctx) {
-    await ctx.rpc.register(ForgeScout, {
+    await ctx.rpc.register(Muninn, {
       repo: async (input) => {
         const remote = await readRemote(input.directory)
         if (!remote) return { provider: null, repo: null, authenticated: false, merge: null }
