@@ -1,15 +1,16 @@
-import { createEffect, createMemo, createSignal, onCleanup, Show } from "solid-js"
+import { createEffect, createMemo, createSignal, onCleanup, For, Show } from "solid-js"
 import type { JSX } from "solid-js"
 import { createStore } from "solid-js/store"
 import { ComposerPill, MenuItem, Panel, SettingsPage, createKeyed, usePlugin, type IconName, type Plugin } from "@opencode/plugin/gui"
 import { associate } from "../associate"
 import { messagesText, scan } from "../extract"
-import type { Chain, Entity, RepoRef, RunEntity } from "../model"
+import type { Chain, Entity, PullEntity, RepoRef, RunEntity, RunStatus } from "../model"
 import { chainTone, refKey, repoKey } from "../model"
 import { githubLexicon } from "../providers/github/lexicon"
 import { Quartermaster } from "../rpc"
 import type { definition } from "./definition"
 import { History } from "./history"
+import { CancelledGlyph, CheckGlyph, CrossGlyph, IssueGlyph, MergedGlyph, PullGlyph, QueuedGlyph } from "./icons"
 import { pillIcon } from "./marks"
 
 const POLL_MS = 30_000
@@ -227,6 +228,49 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     (chain.prs.length === 0 && chain.issues.some((issue) => issue.state === "open")) ||
     (chain.prs.length === 0 && chain.issues.length === 0 && Date.now() - chain.updatedAt < DAY_MS)
 
+  /** Whether the chain's lead PR is mergeable now: open, checks green, no blockers. */
+  const mergeReady = (chain: Chain): boolean =>
+    chain.prs.some((pull) => pull.state === "open") &&
+    chain.runs.length > 0 &&
+    chain.runs.every((run) => run.status === "succeeded")
+
+  /** Why the lead PR can't merge yet — shown on the disabled button. */
+  const mergeWhy = (chain: Chain): string => {
+    const failed = chain.runs.find((run) => run.status === "failed")
+    if (failed) return `checks failed (run #${failed.id})`
+    if (chain.runs.some((run) => run.status === "queued" || run.status === "running")) return "checks still running"
+    if (chain.prs.every((pull) => pull.state !== "open")) return "pull request is not open"
+    return "not ready"
+  }
+
+  /** Merges a pull request: confirms in the app's dialog (naming exactly what
+   * happens), then fires the provider merge guarded by the PR's head SHA. */
+  const mergePull = async (pull: PullEntity): Promise<void> => {
+    const current = session()
+    const client = ctx.client
+    if (!current || !client) return
+    const method = ctx.stores.settings.value.mergeMethod
+    const deleteBranch = ctx.stores.settings.value.deleteBranch
+    const ok = await ctx.dialogs.confirm({
+      title: `Merge PR #${pull.number}?`,
+      description: `${method[0]!.toUpperCase()}${method.slice(1)}-merges "${pull.title}" into ${pull.baseBranch}${deleteBranch ? ` and deletes the branch ${pull.headBranch}` : ""}.`,
+      confirm: "Merge",
+      danger: true,
+    })
+    if (!ok) return
+    await client
+      .rpc(Quartermaster)
+      .merge({
+        directory: current.directory,
+        number: pull.number,
+        method,
+        expectedHeadSha: pull.headSha,
+        deleteBranch,
+      })
+      .catch((error: unknown) => console.error("[quartermaster] merge failed", error))
+    void refresh()
+  }
+
   // Diagnostics footer: the pill's full decision state, plus which builds are loaded.
   const debugLine = () => {
     const current = session()
@@ -242,6 +286,14 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
             ? `run #${list[0]!.runs[0].id}`
             : "off"
     return `qm gui ${__QM_BUILD__}${meta.debug ? ` · ${meta.debug}` : " · srv ?"} · gate ${gate} · chains ${chains().length} · live ${list.length} · pill: ${pill}${meta.stats ? ` · ${meta.stats}` : ""}`
+  }
+
+  const runGlyph = (status: RunStatus): JSX.Element => {
+    if (status === "succeeded") return <CheckGlyph />
+    if (status === "failed") return <CrossGlyph />
+    if (status === "cancelled") return <CancelledGlyph />
+    if (status === "running") return <span class="qm-spin" />
+    return <QueuedGlyph />
   }
 
   ctx.add(ComposerPill, {
@@ -266,51 +318,99 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
           : `run #${worst.runs[0]!.id} · ${ctx.t(`state.${worst.runs[0]!.status}`)}`,
         tone: chainTone(worst),
         title: ctx.t("pill.title"),
-        rows: list.slice(0, 3).flatMap((chain) => {
-          const rows: {
-            id: string
-            label: string
-            icon: IconName
-            tone?: "success" | "warning" | "danger"
-            detail?: string
-            run: () => void
-          }[] = []
-          for (const pr of chain.prs.slice(0, 2))
-            rows.push({
-              id: `${chain.key}:pr${pr.number}`,
-              label: `#${pr.number} ${pr.title}`,
-              icon: pillIcon(meta.provider),
-              tone: chainTone(chain),
-              detail: pr.headBranch,
-              run: () => open(pr.url),
-            })
-          for (const issue of chain.issues.slice(0, 2))
-            rows.push({
-              id: `${chain.key}:issue${issue.number}`,
-              label: `#${issue.number} ${issue.title}`,
-              icon: pillIcon(meta.provider),
-              detail: ctx.t(`state.${issue.state}`),
-              run: () => open(issue.url),
-            })
-          for (const run of chain.runs.slice(0, 2))
-            rows.push({
-              id: `${chain.key}:run${run.id}`,
-              label: `run #${run.id} · ${ctx.t(`state.${run.status}`)}`,
-              icon:
-                run.status === "failed"
-                  ? "circle-xmark"
-                  : run.status === "running"
-                    ? "outline-rotate-clockwise"
-                    : run.status === "succeeded"
-                      ? "check"
-                      : pillIcon(meta.provider),
-              detail: run.name,
-              run: () => open(run.url),
-            })
-          return rows
-        }),
       }
     },
+    // The pill's dropdown: the full chain picture with the merge controls the
+    // sidebar has, plus the merge-method/delete-branch choices. Reads the stores
+    // itself, so it stays live while open. Run ids live only here (pill grammar).
+    menu: (input) => (
+      <div class="qm-pop">
+        <For each={chains().filter((chain) => live(chain)).slice(0, 3)}>
+          {(chain) => (
+            <div class="qm-pop-chain">
+              <For each={chain.prs}>
+                {(pull) => (
+                  <div class="qm-pop-row" onClick={() => { input.close(); open(pull.url) }}>
+                    <span class="qm-kind" data-state={`pr-${pull.state}`} title={ctx.t(`state.${pull.state}`)}>
+                      {pull.state === "merged" ? <MergedGlyph /> : <PullGlyph />}
+                    </span>
+                    <span class="qm-pop-id">#{pull.number}</span>
+                    <span class="qm-pop-title">{pull.title}</span>
+                    <Show when={pull.state === "open"}>
+                      <button
+                        class="qm-merge"
+                        classList={{ pending: !mergeReady(chain) }}
+                        disabled={!mergeReady(chain)}
+                        title={mergeReady(chain) ? "Merge…" : mergeWhy(chain)}
+                        onClick={(event) => { event.stopPropagation(); input.close(); void mergePull(pull) }}
+                      >
+                        Merge
+                      </button>
+                    </Show>
+                  </div>
+                )}
+              </For>
+              <For each={chain.issues}>
+                {(issue) => (
+                  <div class="qm-pop-row" onClick={() => { input.close(); open(issue.url) }}>
+                    <span class="qm-kind" data-state={`issue-${issue.state}`} title={ctx.t(`state.${issue.state}`)}>
+                      <IssueGlyph closed={issue.state === "closed"} />
+                    </span>
+                    <span class="qm-pop-id">#{issue.number}</span>
+                    <span class="qm-pop-title">{issue.title}</span>
+                  </div>
+                )}
+              </For>
+              <For each={chain.runs.slice(0, 3)}>
+                {(run) => (
+                  <div class="qm-pop-row" onClick={() => { input.close(); open(run.url) }}>
+                    <span class="qm-kind" data-state={run.status} title={ctx.t(`state.${run.status}`)}>
+                      {runGlyph(run.status)}
+                    </span>
+                    <span class="qm-pop-id">#{run.id}</span>
+                    <span class="qm-pop-title">{run.name}</span>
+                  </div>
+                )}
+              </For>
+              <Show when={chain.runs.length > 3}>
+                <div
+                  class="qm-pop-more"
+                  onClick={() => {
+                    input.close()
+                    if (input.session.id) ctx.layout.open(`${ctx.id}:history`, input.session)
+                  }}
+                >
+                  +{chain.runs.length - 3} runs in the sidebar
+                </div>
+              </Show>
+            </div>
+          )}
+        </For>
+        <div class="qm-pop-foot">
+          <label class="qm-pop-toggle">
+            <input
+              type="checkbox"
+              checked={ctx.stores.settings.value.deleteBranch}
+              onChange={(event) => ctx.stores.settings.update((draft) => { draft.deleteBranch = event.currentTarget.checked })}
+            />
+            delete branch
+          </label>
+          <select
+            title="Merge method"
+            value={ctx.stores.settings.value.mergeMethod}
+            onChange={(event) => {
+              const value = event.currentTarget.value
+              if (value === "squash" || value === "merge" || value === "rebase")
+                ctx.stores.settings.update((draft) => { draft.mergeMethod = value })
+            }}
+          >
+            <option value="squash">squash</option>
+            <option value="merge">merge commit</option>
+            <option value="rebase">rebase</option>
+          </select>
+        </div>
+      </div>
+    ),
   })
 
   // Launcher: the side region's + menu lists Quartermaster so the tab can be opened.
@@ -362,45 +462,11 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
             error={() => meta.error}
             debug={debugLine}
             showDebug={() => ctx.stores.settings.value.debugMode}
-            mergeReady={(chain) =>
-              chain.prs.some((pr) => pr.state === "open") &&
-              chain.runs.length > 0 &&
-              chain.runs.every((run) => run.status === "succeeded")
-            }
-            mergeWhy={(chain) => {
-              const failed = chain.runs.find((run) => run.status === "failed")
-              if (failed) return `checks failed (run #${failed.id})`
-              if (chain.runs.some((run) => run.status === "queued" || run.status === "running")) return "checks still running"
-              if (chain.prs.every((pr) => pr.state !== "open")) return "pull request is not open"
-              return "not ready"
-            }}
+            mergeReady={mergeReady}
+            mergeWhy={mergeWhy}
             sessionReady={sessionReady}
             onOpen={open}
-            onMerge={async (pull) => {
-              const current = session()
-              const client = ctx.client
-              if (!current || !client) return
-              // Merging is irreversible and remote: always confirm in the app's
-              // own dialog, naming exactly what will happen.
-              const ok = await ctx.dialogs.confirm({
-                title: `Merge PR #${pull.number}?`,
-                description: `Squash-merges "${pull.title}" into ${pull.baseBranch} and deletes the branch ${pull.headBranch}.`,
-                confirm: "Merge",
-                danger: true,
-              })
-              if (!ok) return
-              await client
-                .rpc(Quartermaster)
-                .merge({
-                  directory: current.directory,
-                  number: pull.number,
-                  method: "squash",
-                  expectedHeadSha: pull.headSha,
-                  deleteBranch: true,
-                })
-                .catch((error: unknown) => console.error("[quartermaster] merge failed", error))
-              void refresh()
-            }}
+            onMerge={mergePull}
           />
         </div>
         <Show when={chains().length === 0 && meta.repo === null && !sessionReady()}>
@@ -542,6 +608,45 @@ const STYLES = `
   animation: qm-rot .9s linear infinite;
 }
 @keyframes qm-rot { to { transform: rotate(360deg); } }
+
+/* Pill dropdown (custom popover content; the host owns the popover chrome). */
+.qm-pop { display: flex; flex-direction: column; gap: 2px; min-width: 300px; max-width: 380px; max-height: 440px; overflow-y: auto; }
+.qm-pop-chain { display: flex; flex-direction: column; gap: 1px; }
+.qm-pop-chain + .qm-pop-chain { margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--v2-border-border-muted); }
+.qm-pop-row { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: 7px; font-size: 12px; min-width: 0; }
+.qm-pop-row:hover { background: var(--v2-overlay-simple-overlay-hover); cursor: pointer; }
+.qm-pop-id { font-family: var(--v2-font-family-code); font-size: 11px; color: var(--v2-text-text-muted); flex: none; }
+.qm-pop-title { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--v2-text-text-base); }
+.qm-pop-more { padding: 4px 8px; font-size: 11px; color: var(--v2-text-text-faint); cursor: pointer; border-radius: 7px; }
+.qm-pop-more:hover { background: var(--v2-overlay-simple-overlay-hover); color: var(--v2-text-text-muted); }
+.qm-pop-foot {
+  display: flex; align-items: center; gap: 12px;
+  margin-top: 4px; padding: 7px 8px 3px;
+  border-top: 1px solid var(--v2-border-border-muted);
+  font-size: 11px; color: var(--v2-text-text-faint);
+}
+.qm-pop-toggle { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
+.qm-pop-foot select {
+  margin-left: auto; font-size: 11px; color: var(--v2-text-text-muted);
+  background: var(--v2-background-bg-layer-01); border: 1px solid var(--v2-border-border-muted);
+  border-radius: 5px; padding: 2px 6px;
+}
+.qm-kind { color: var(--v2-icon-icon-muted); flex: none; display: inline-flex; }
+.qm-kind[data-state="open"], .qm-kind[data-state="succeeded"] { color: var(--v2-state-fg-success); }
+.qm-kind[data-state="draft"], .qm-kind[data-state="queued"], .qm-kind[data-state="running"] { color: var(--v2-state-fg-warning); }
+.qm-kind[data-state="merged"] { color: var(--v2-state-fg-success); }
+.qm-kind[data-state="closed"], .qm-kind[data-state="failed"], .qm-kind[data-state="cancelled"] { color: var(--v2-state-fg-danger); }
+
+/* Merge action: green when ready, amber while checks run, grey when blocked. */
+.qm-merge {
+  flex: none; font-size: 10.5px; font-weight: 600; line-height: 1;
+  padding: 4px 9px; border-radius: 6px; cursor: pointer;
+  color: var(--v2-state-fg-on-success, #fff);
+  background: var(--v2-state-bg-success, #1a7f37); border: none;
+}
+.qm-merge:hover { filter: brightness(1.1); }
+.qm-merge.pending { background: var(--v2-state-bg-warning, #9a6700); }
+.qm-merge:disabled { cursor: not-allowed; filter: none; background: var(--v2-background-bg-layer-02, #3a3a3a); color: var(--v2-text-text-faint); box-shadow: inset 0 0 0 .5px var(--v2-border-border-muted); }
 `
 
 let injected = false

@@ -65,8 +65,13 @@ export const definition = Plugin.define({
     ),
     /** User preferences from the plugin's settings page. */
     settings: Store.global(
-      Schema.Struct({ retentionDays: Schema.Number, debugMode: Schema.Boolean }),
-      { retentionDays: 30, debugMode: true },
+      Schema.Struct({
+        retentionDays: Schema.Number,
+        debugMode: Schema.Boolean,
+        mergeMethod: Schema.Literals(["squash", "merge", "rebase"]),
+        deleteBranch: Schema.Boolean,
+      }),
+      { retentionDays: 30, debugMode: true, mergeMethod: "squash", deleteBranch: true },
     ),
   },
   i18n: {
