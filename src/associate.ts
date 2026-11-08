@@ -1,47 +1,95 @@
 /**
- * Assembles hydrated entities into chains — the triplet cards of the history panel.
- * Pure and shared: runs GUI-side over refreshed entities on every poll.
+ * Assembles hydrated entities into chains — the triplet cards of the history
+ * panel. Pure and shared: runs GUI-side over refreshed entities on every poll.
+ *
+ * Chains are connected components:
+ * - PRs merge when they close a shared issue (renovate stacks, peer fixes)
+ * - runs bind to their PR by head SHA
+ * - issues bind to the PR that closes them; unmentioned issues stand alone
+ * - branch runs that match no PR stand alone (pushes, scheduled work)
+ *
+ * The lead PR of a chain is the session's own (checkout branch match), else the
+ * most recently active.
  */
 
-import type { Chain, Entity, RunEntity } from "./model"
+import type { Chain, Entity, IssueEntity, PullEntity, RunEntity } from "./model"
 import { repoKey } from "./model"
 
 const byNewest = (a: { updatedAt: number }, b: { updatedAt: number }): number => b.updatedAt - a.updatedAt
+const sameRepo = (a: { repo: { owner: string; repo: string } }, b: { repo: { owner: string; repo: string } }): boolean =>
+  a.repo.owner === b.repo.owner && a.repo.repo === b.repo.repo
 
-/**
- * Groups entities into chains:
- * - a pull request owns its CI runs (matched by head SHA) and the issue it closes
- *   (from its closing keywords, hydrated server-side)
- * - a session-branch run that matches no pull request stands alone
- * - an issue with no pull request stands alone until one appears
- */
-export const associate = (entities: readonly Entity[], branchRuns: readonly RunEntity[] = []): Chain[] => {
-  const pulls = entities.filter((entity): entity is Extract<Entity, { kind: "pr" }> => entity.kind === "pr")
-  const issues = entities.filter((entity): entity is Extract<Entity, { kind: "issue" }> => entity.kind === "issue")
-  const runs = [...entities.filter((entity): entity is RunEntity => entity.kind === "run"), ...branchRuns]
+interface PrGroup {
+  prs: PullEntity[]
+  /** Union of closing-issue numbers across the group's PRs. */
+  issueNumbers: Set<number>
+  runs: RunEntity[]
+  issues: IssueEntity[]
+}
 
-  const takenRuns = new Set<string>()
+export const associate = (
+  entities: readonly Entity[],
+  branchRuns: readonly RunEntity[] = [],
+  sessionBranch?: string,
+): Chain[] => {
+  const pulls = entities.filter((entity): entity is PullEntity => entity.kind === "pr")
+  const issues = entities.filter((entity): entity is IssueEntity => entity.kind === "issue")
+  const allRuns = [...entities.filter((entity): entity is RunEntity => entity.kind === "run"), ...branchRuns]
 
-  const chains: Chain[] = pulls.map((pr) => {
-    const owned = runs.filter((run) => run.headSha === pr.headSha && run.repo.owner === pr.repo.owner && run.repo.repo === pr.repo.repo)
-    owned.forEach((run) => takenRuns.add(`${repoKey(run.repo)}#run${run.id}`))
-    const closed = issues.find((issue) => issue.repo.owner === pr.repo.owner && issue.repo.repo === pr.repo.repo && pr.closes.includes(issue.number))
-    const updatedAt = Math.max(pr.updatedAt, closed?.updatedAt ?? 0, ...owned.map((run) => run.updatedAt))
-
-    return { key: `${repoKey(pr.repo)}#pr${pr.number}`, issue: closed, pr, runs: owned.toSorted(byNewest), updatedAt }
-  })
-
-  // Issues that no pulled-in PR claims, newest first among themselves.
-  for (const issue of issues) {
-    const claimed = chains.some((chain) => chain.issue === issue)
-    if (claimed) continue
-    chains.push({ key: `${repoKey(issue.repo)}#issue${issue.number}`, issue, runs: [], updatedAt: issue.updatedAt })
+  // 1. Merge PRs into groups by shared closing issues.
+  const groups: PrGroup[] = []
+  for (const pull of pulls.toSorted(byNewest)) {
+    const shared = groups.find((group) => pull.closes.some((number) => group.issueNumbers.has(number)))
+    if (shared) {
+      shared.prs.push(pull)
+      pull.closes.forEach((number) => shared.issueNumbers.add(number))
+    } else {
+      groups.push({ prs: [pull], issueNumbers: new Set(pull.closes), runs: [], issues: [] })
+    }
   }
 
-  // Session-branch runs that belong to no pull request: pushes and scheduled work.
-  for (const run of runs) {
+  // 2. Runs attach to their PR's group by head SHA; issues attach to the group
+  // whose PR closes their number.
+  const takenRuns = new Set<string>()
+  for (const group of groups) {
+    for (const pr of group.prs) {
+      const owned = allRuns.filter((run) => run.headSha === pr.headSha && sameRepo(run, pr))
+      owned.forEach((run) => takenRuns.add(`${repoKey(run.repo)}#run${run.id}`))
+      group.runs.push(...owned)
+    }
+    for (const issue of issues) {
+      if (sameRepo(issue, group.prs[0]!) && group.issueNumbers.has(issue.number)) group.issues.push(issue)
+    }
+    group.runs.sort(byNewest)
+  }
+
+  // 3. Build chains: lead PR = the session's own (checkout branch match), else the
+  // most recent in the group.
+  const chains: Chain[] = groups.map((group) => {
+    const lead = group.prs.find((pr) => sessionBranch !== undefined && pr.headBranch === sessionBranch) ?? group.prs[0]!
+    const updatedAt = Math.max(
+      ...group.prs.map((pr) => pr.updatedAt),
+      ...group.issues.map((issue) => issue.updatedAt),
+      ...group.runs.map((run) => run.updatedAt),
+    )
+    return {
+      key: `${repoKey(lead.repo)}#pr${lead.number}`,
+      prs: group.prs.toSorted((a, b) => (a === lead ? -1 : b === lead ? 1 : byNewest(a, b))),
+      issues: group.issues.toSorted(byNewest),
+      runs: group.runs,
+      updatedAt,
+    }
+  })
+
+  // 4. Unclaimed issues stand alone; session-branch runs that match no PR too.
+  for (const issue of issues) {
+    if (chains.some((chain) => chain.issues.some((chained) => chained.number === issue.number && sameRepo(chained, issue))))
+      continue
+    chains.push({ key: `${repoKey(issue.repo)}#issue${issue.number}`, prs: [], issues: [issue], runs: [], updatedAt: issue.updatedAt })
+  }
+  for (const run of allRuns) {
     if (takenRuns.has(`${repoKey(run.repo)}#run${run.id}`)) continue
-    chains.push({ key: `${repoKey(run.repo)}#run${run.id}`, runs: [run], updatedAt: run.updatedAt })
+    chains.push({ key: `${repoKey(run.repo)}#run${run.id}`, prs: [], issues: [], runs: [run], updatedAt: run.updatedAt })
   }
 
   return chains.toSorted(byNewest)

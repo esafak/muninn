@@ -219,18 +219,17 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
   // Run-only chains are the exception: they exist because the session explicitly
   // referenced a run, so they stay until a day passes without activity.
   const live = (chain: Chain): boolean =>
-    chain.pr?.state === "open" ||
-    chain.pr?.state === "draft" ||
+    chain.prs.some((pull) => pull.state === "open" || pull.state === "draft") ||
     chain.runs.some((run) => run.status === "queued" || run.status === "running" || run.status === "failed") ||
-    (chain.pr === undefined && chain.issue?.state === "open") ||
-    (chain.pr === undefined && chain.issue === undefined && Date.now() - chain.updatedAt < DAY_MS)
+    (chain.prs.length === 0 && chain.issues.some((issue) => issue.state === "open")) ||
+    (chain.prs.length === 0 && chain.issues.length === 0 && Date.now() - chain.updatedAt < DAY_MS)
 
   // Diagnostics footer: the pill's full decision state, plus which builds are loaded.
   const debugLine = () => {
     const current = session()
     const gate = current?.id === meta.sessionID ? "✓" : "✗"
     const list = chains().filter((chain) => live(chain))
-    const primary = list[0]?.pr ?? list[0]?.issue
+    const primary = list[0]?.prs[0] ?? list[0]?.issues[0]
     const pill =
       list.length === 0
         ? "off: no live chains"
@@ -252,19 +251,19 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
 
       // PR chains are the primary work: they lead the pill regardless of recency,
       // with a danger PR still outranking a calm one.
-      const prChains = list.filter((chain) => chain.pr)
-      const worst = (prChains.find((chain) => chainTone(chain) === "danger") ?? prChains[0]) ?? list[0]!
-      const primary = worst.pr ?? worst.issue
+      const prChains = chains().filter((chain) => chain.prs.length > 0)
+      const worst = (prChains.find((chain) => chainTone(chain) === "danger") ?? prChains[0]) ?? chains()[0]!
+      const lead = worst.prs[0]
+      const failing = worst.runs.find((run) => run.status === "failed")
 
       return {
         icon: pillIcon(meta.provider),
-        label: primary
-          ? `#${primary.number} ${primary.title}`
+        label: lead
+          ? `#${lead.number} ${lead.title}`
           : `run #${worst.runs[0]!.id} · ${ctx.t(`state.${worst.runs[0]!.status}`)}`,
         tone: chainTone(worst),
         title: ctx.t("pill.title"),
         rows: list.slice(0, 3).flatMap((chain) => {
-          const entity = chain.pr ?? chain.issue
           const rows: {
             id: string
             label: string
@@ -273,14 +272,22 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
             detail?: string
             run: () => void
           }[] = []
-          if (entity)
+          for (const pr of chain.prs.slice(0, 2))
             rows.push({
-              id: `${chain.key}:entity`,
-              label: `#${entity.number} ${entity.title}`,
+              id: `${chain.key}:pr${pr.number}`,
+              label: `#${pr.number} ${pr.title}`,
               icon: pillIcon(meta.provider),
               tone: chainTone(chain),
-              detail: chain.pr ? chain.pr.headBranch : undefined,
-              run: () => open(entity.url),
+              detail: pr.headBranch,
+              run: () => open(pr.url),
+            })
+          for (const issue of chain.issues.slice(0, 2))
+            rows.push({
+              id: `${chain.key}:issue${issue.number}`,
+              label: `#${issue.number} ${issue.title}`,
+              icon: pillIcon(meta.provider),
+              detail: ctx.t(`state.${issue.state}`),
+              run: () => open(issue.url),
             })
           for (const run of chain.runs.slice(0, 2))
             rows.push({

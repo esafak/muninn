@@ -1,7 +1,7 @@
 /**
  * The provider-agnostic model Quartermaster's UI renders. Providers (GitHub today,
- * GitLab or a tracker tomorrow) hydrate these; the GUI never sees provider specifics
- * beyond a `provider` mark and a repo slug.
+ * GitLab or a tracker tomorrow) hydrate these; the GUI never sees provider
+ * specifics beyond a `provider` mark and a repo slug.
  */
 
 /** Repositories Quartermaster knows about, parsed from a git remote URL. */
@@ -67,6 +67,8 @@ export interface RunEntity extends Base {
   checks: Check[]
   /** Pull requests this run belongs to, per the provider. */
   pullRequests: number[]
+  url: string
+  updatedAt: number
 }
 
 export interface PullEntity extends Base {
@@ -84,30 +86,34 @@ export interface PullEntity extends Base {
 export type Entity = IssueEntity | PullEntity | RunEntity
 
 /**
- * One history card: an issue, the pull request that closes it, and that pull
- * request's CI runs — or any subset. `key` is stable across refreshes.
+ * One history card: the pull request(s) an issue's work produced, their CI runs —
+ * or any subset. `key` is stable across refreshes; `updatedAt` orders the cards.
  */
 export interface Chain {
   key: string
-  issue?: IssueEntity
-  pr?: PullEntity
-  /** Newest first. */
-  runs: readonly RunEntity[]
+  /** Lead pull request (branch match, else most recent), first of `prs`. */
+  prs: PullEntity[]
+  /** Issues connected to the chain's PRs via closing keywords. */
+  issues: IssueEntity[]
+  /** Newest first; every run whose head SHA belongs to one of the chain's PRs. */
+  runs: RunEntity[]
   updatedAt: number
 }
 
 export const repoKey = (repo: RepoRef): string => `${repo.host}/${repo.owner}/${repo.repo}`
 
-export const refKey = (ref: Ref): string => (ref.repo ? `${repoKey(ref.repo)}#${ref.kind ?? ""}${ref.number}` : `#${ref.kind ?? ""}${ref.number}`)
+export const refKey = (ref: Ref): string =>
+  `${ref.repo ? `${ref.repo.host}/${ref.repo.owner}/${ref.repo.repo}` : "@"}#${ref.kind ?? ""}${ref.number}`
 
 /** Worst-state helper for pill tones: a failing run outranks everything on its chain. */
 export const chainTone = (chain: Chain): "success" | "warning" | "danger" | undefined => {
   if (chain.runs.some((run) => run.status === "failed")) return "danger"
   if (chain.runs.some((run) => run.status === "running" || run.status === "queued")) return "warning"
+  const lead = chain.prs[0]
   // Open PR with every check green: ready to merge.
-  if (chain.pr?.state === "open" && chain.runs.length > 0 && chain.runs.every((run) => run.status === "succeeded"))
+  if (lead?.state === "open" && chain.runs.length > 0 && chain.runs.every((run) => run.status === "succeeded"))
     return "success"
-  if (chain.pr?.state === "merged") return "success"
-  if (chain.pr === undefined && chain.runs.some((run) => run.status === "succeeded")) return "success"
+  if (lead?.state === "merged") return "success"
+  if (chain.prs.length === 0 && chain.runs.some((run) => run.status === "succeeded")) return "success"
   return undefined
 }

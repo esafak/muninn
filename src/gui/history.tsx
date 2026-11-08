@@ -32,13 +32,13 @@ const sameDay = (a: number, b: number): boolean => new Date(a).toDateString() ==
 
 /**
  * The panel body: the session's chains as triplet cards under day headers, newest
- * activity first. Reads everything through props, so the panel stays mounted across
- * session switches and simply re-renders. State is carried by the colored kind and
- * status glyphs alone; hover titles spell it out.
+ * activity first. State is carried by the colored kind/status glyphs; hover titles
+ * spell it out. Ids copy on click.
  */
 export const History = (props: HistoryProps) => {
   const ctx = usePlugin<typeof definition>()
   const [expanded, setExpanded] = createSignal<ReadonlySet<string>>(new Set())
+  const [copied, setCopied] = createSignal<string | null>(null)
 
   const toggle = (key: string) => {
     const next = new Set(expanded())
@@ -47,15 +47,11 @@ export const History = (props: HistoryProps) => {
     setExpanded(next)
   }
 
-  const [copied, setCopied] = createSignal<string | null>(null)
-  const copyTimer = { id: undefined as ReturnType<typeof setTimeout> | undefined }
-  /** Copies an id on click without triggering the row's open action, flashing ✓. */
   const copyId = (event: MouseEvent, text: string, key: string) => {
     event.stopPropagation()
     void ctx.system.copy(text).catch(() => undefined)
     setCopied(key)
-    clearTimeout(copyTimer.id)
-    copyTimer.id = setTimeout(() => setCopied(null), 900)
+    setTimeout(() => setCopied(null), 900)
   }
 
   return (
@@ -72,9 +68,9 @@ export const History = (props: HistoryProps) => {
 
       <Show when={props.repo() && !props.authenticated()}>
         <div class="qm-note">{ctx.t("auth.note")}</div>
-      </Show>
-      <Show when={props.unresolved() > 0}>
-        <div class="qm-note" data-warn>{ctx.t("auth.unresolved", { count: props.unresolved() })}</div>
+        <Show when={props.unresolved() > 0}>
+          <div class="qm-note" data-warn>{ctx.t("auth.unresolved", { count: props.unresolved() })}</div>
+        </Show>
       </Show>
       <Show when={props.error()}>
         <div class="qm-note" data-warn>{ctx.t("panel.error", { message: props.error() ?? "" })}</div>
@@ -98,52 +94,56 @@ export const History = (props: HistoryProps) => {
               <Show when={index() === 0 || !sameDay(props.chains()[index() - 1]!.updatedAt, chain.updatedAt)}>
                 <div class="qm-day">{dayLabel(chain.updatedAt)}</div>
               </Show>
-              <div class="qm-chain" data-tone={chainTone(chain)} data-stale={Date.now() - chain.updatedAt > DAY_MS}>
-                <Show when={chain.issue}>
-                  {(issue) => (
-                    <div class="qm-row" onClick={() => props.onOpen(issue().url)}>
+              <div class="qm-chain" data-tone={chainTone(chain)}>
+                <For each={chain.prs}>
+                  {(pull, prIndex) => (
+                    <div
+                      class="qm-row"
+                      classList={{ sub: prIndex() > 0 }}
+                      onClick={() => props.onOpen(pull.url)}
+                    >
                       <span class="qm-mark">
-                        <Mark provider={issue().provider} />
+                        <Mark provider={pull.provider} />
                       </span>
-                      <span class="qm-kind" data-state={`issue-${issue().state}`} title={ctx.t(`state.${issue().state}`)}>
-                        <IssueGlyph closed={issue().state === "closed"} />
-                      </span>
-                      <span
-                        class="qm-id"
-                        classList={{ copied: copied() === `i${chain.key}` }}
-                        title="Click to copy"
-                        onClick={(event) => copyId(event, `#${issue().number}`, `i${chain.key}`)}
-                      >
-                        {copied() === `i${chain.key}` ? "✓" : `#${issue().number}`}
-                      </span>
-                      <span class="qm-title">{issue().title}</span>
-                    </div>
-                  )}
-                </Show>
-
-                <Show when={chain.pr}>
-                  {(pull) => (
-                    <div class="qm-row sub" onClick={() => props.onOpen(pull().url)}>
-                      <span class="qm-mark">
-                        <Mark provider={pull().provider} />
-                      </span>
-                      <span class="qm-kind" data-state={`pr-${pull().state}`} title={ctx.t(`state.${pull().state}`)}>
-                        <Show when={pull().state === "merged"} fallback={<PullGlyph />}>
+                      <span class="qm-kind" data-state={`pr-${pull.state}`} title={ctx.t(`state.${pull.state}`)}>
+                        <Show when={pull.state === "merged"} fallback={<PullGlyph />}>
                           <MergedGlyph />
                         </Show>
                       </span>
                       <span
                         class="qm-id"
-                        classList={{ copied: copied() === `p${chain.key}` }}
+                        classList={{ copied: copied() === `p${chain.key}${pull.number}` }}
                         title="Click to copy"
-                        onClick={(event) => copyId(event, `#${pull().number}`, `p${chain.key}`)}
+                        onClick={(event) => copyId(event, `#${pull.number}`, `p${chain.key}${pull.number}`)}
                       >
-                        {copied() === `p${chain.key}` ? "✓" : `#${pull().number}`}
+                        {copied() === `p${chain.key}${pull.number}` ? "✓" : `#${pull.number}`}
                       </span>
-                      <span class="qm-title">{pull().title}</span>
+                      <span class="qm-title">{pull.title}</span>
                     </div>
                   )}
-                </Show>
+                </For>
+
+                <For each={chain.issues}>
+                  {(issue) => (
+                    <div class="qm-row sub" onClick={() => props.onOpen(issue.url)}>
+                      <span class="qm-mark">
+                        <Mark provider={issue.provider} />
+                      </span>
+                      <span class="qm-kind" data-state={`issue-${issue.state}`} title={ctx.t(`state.${issue.state}`)}>
+                        <IssueGlyph closed={issue.state === "closed"} />
+                      </span>
+                      <span
+                        class="qm-id"
+                        classList={{ copied: copied() === `i${chain.key}${issue.number}` }}
+                        title="Click to copy"
+                        onClick={(event) => copyId(event, `#${issue.number}`, `i${chain.key}${issue.number}`)}
+                      >
+                        {copied() === `i${chain.key}${issue.number}` ? "✓" : `#${issue.number}`}
+                      </span>
+                      <span class="qm-title">{issue.title}</span>
+                    </div>
+                  )}
+                </For>
 
                 <For each={chain.runs}>
                   {(run) => (
@@ -151,9 +151,11 @@ export const History = (props: HistoryProps) => {
                   )}
                 </For>
 
-                <Show when={chain.pr && chain.issue}>
+                <Show when={chain.prs.length > 0 && chain.issues.length > 0}>
                   <div class="qm-chain-foot">
-                    <span>Closes #{chain.issue!.number}</span>
+                    <span>
+                      Closes {chain.issues.map((issue) => `#${issue.number}`).join(", ")}
+                    </span>
                   </div>
                 </Show>
               </div>
@@ -161,13 +163,6 @@ export const History = (props: HistoryProps) => {
           )}
         </For>
       </Show>
-      <div
-        class="qm-debug"
-        title="Click to copy diagnostics"
-        onClick={() => void ctx.system.copy(props.debug()).catch(() => undefined)}
-      >
-        {props.debug()} · click to copy
-      </div>
     </div>
   )
 }
