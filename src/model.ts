@@ -200,7 +200,7 @@ export interface ArmedEntry {
 
 /** Armed entries whose chain is mergeable right now. Providers without merge or
  * review state fall back to checks — which must be on record (no evidence, no
- * merge), so a state-less minimal forge never drives an armed merge. */
+ * merge), so a state-less forge without known runs never drives an armed merge. */
 export const armedTargets = (
   entries: readonly ArmedEntry[],
   chains: readonly Chain[],
