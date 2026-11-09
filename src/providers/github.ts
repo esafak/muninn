@@ -81,6 +81,16 @@ interface RepoJson {
   delete_branch_on_merge: boolean
 }
 
+export const mergeResponse = (body: unknown): { merged: boolean; message?: string } => {
+  if (!body || typeof body !== "object") return { merged: false, message: "GitHub returned an invalid merge response" }
+  const result = body as { merged?: unknown; message?: unknown }
+  if (result.merged === true) return { merged: true }
+  return {
+    merged: false,
+    message: typeof result.message === "string" ? result.message : "GitHub did not confirm that the pull request merged",
+  }
+}
+
 const request = async <T>(path: string, auth: Auth): Promise<T | undefined> => {
   const token = await auth()
   const response = await fetch(`${API}${path}`, {
@@ -462,6 +472,8 @@ export const github: SourceProvider = {
       const detail = await merge.json().catch(() => ({ message: merge.statusText }))
       return { merged: false, message: `GitHub ${merge.status}: ${(detail as { message?: string }).message ?? merge.statusText}` }
     }
+    const outcome = mergeResponse(await merge.json().catch(() => undefined))
+    if (!outcome.merged) return outcome
     if (!deleteBranch) return { merged: true }
 
     // Delete the PR's head branch after a successful merge.
