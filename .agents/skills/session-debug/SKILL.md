@@ -110,7 +110,8 @@ mn gui <sha+time> · srv <sha> · gate ✓ <sessionID> · chains N · live N
 
 - `gate ✓` — the mounted session matches the pill's session (else pills are off)
 - `pick` — `pillPick` rule that won: `danger` / `newest` / `runs-only` /
-  `none`; `of M` counts PR chains for PR picks, all chains for `runs-only`;
+  `none`; `of M` counts PR chains for PR picks, run-bearing chains for
+  `runs-only`;
   `lead` says whether the chain's lead PR matched the session's checkout branch
   (`branch match`) or is just the most recent (`—` for run-only picks, which
   print `run #id`; `pick: none` omits the lead part entirely)
@@ -123,13 +124,15 @@ mn gui <sha+time> · srv <sha> · gate ✓ <sessionID> · chains N · live N
   number, deleted run, private repo without a credential); refs skipped before
   hydration never appear here
 
-## 5. Known false-positive families
+## 5. Known false-positive families (fixed on this branch — shapes still useful)
 
-- Kind-word regex `\s+` crosses newlines: a tool output that numbers lines
-  (`6: …`) after text ending in `pr`/`run` fabricates `PR 6` / `run 6`.
-  Same for inline-code spans stripped by `stripCode` (`run ` + next line's
-  number). Fix direction: horizontal whitespace only (`[^\S\n]+`).
+- Line-numbered tool output used to fabricate refs: a kind word at end of line
+  plus the next line's number (`…via-pr\n6:`) scanned as `PR 6`; inline-code
+  spans stripped by `stripCode` did the same for `run` (see the scan test "kind
+  words and their numbers must share a line"). The shapes still explain phantom
+  entities in older durable-cache entries and old debug footers.
 - Coincidental collisions hydrate: a fabricated number can resolve to a real,
   unrelated entity (hydrated ≠ deliberate).
-- The pill pick runs over all chains, not just live ones — a dead (merged)
-  chain can win while `live 1` comes from an issue chain elsewhere.
+- The pill pick now runs over live chains only, and `pillPick` never returns a
+  run-less chain — a dead (merged) chain can't win, and an issue-only chain
+  renders no pill at all.
