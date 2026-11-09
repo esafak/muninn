@@ -91,9 +91,10 @@ A ref "in the session" without an entity in the store is **not** automatically
 a hydration failure. It can be:
 
 - *pending* — the debounced message-change hydration hasn't run yet; re-check
-- *skipped* — never sent to the provider: no repo resolvable for the ref, or no
-  provider for its host (dropped silently when the hydrate RPC groups refs) —
-  these never count as unresolved
+- *skipped* — never sent to a provider: an unsupported ref host falls back to
+  the session's own provider, so a ref drops silently only when neither
+  resolves (no repo for the ref, no forge remote for the session) — these
+  never count as unresolved
 - *unresolved* — the provider was asked and returned nothing: wrong number,
   deleted run, private repo without a credential
 
@@ -111,8 +112,8 @@ mn gui <sha+time> · srv <sha> · gate ✓ <sessionID> · chains N · live N
 - `pick` — `pillPick` rule that won: `danger` / `newest` / `runs-only` /
   `none`; `of M` counts PR chains for PR picks, all chains for `runs-only`;
   `lead` says whether the chain's lead PR matched the session's checkout branch
-  (`branch match`) or is just the most recent (`—` when the chain has no PR;
-  run-only picks label `run #id · status`)
+  (`branch match`) or is just the most recent (`—` for run-only picks, which
+  print `run #id`; `pick: none` omits the lead part entirely)
 - `refs` census — extracted candidates by provenance tier; `out` = tool outputs
 - `hits/E` — how many refs hit the durable entity store of E cached entities
 - `hydrated` / `unresolved` — outcome of the last **refresh-cycle** hydration
