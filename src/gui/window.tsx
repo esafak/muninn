@@ -369,10 +369,12 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
   const debugLine = () => {
     const current = session()
     const gate = current?.id === meta.sessionID ? "✓" : "✗"
-    const liveCount = chains().filter((chain) => live(chain)).length
+    const liveChains = chains().filter((chain) => live(chain))
+    const liveCount = liveChains.length
     // The capsule's exact pick, then the why: which rule won and out of how many
-    // candidates, and how the chain chose its lead PR.
-    const picked = pillPick(chains())
+    // candidates, and how the chain chose its lead PR. Picked from the live
+    // chains only, exactly like the capsule.
+    const picked = pillPick(liveChains)
     const lead = picked?.chain.prs[0]
     const pill = !picked
       ? "off: no live chains"
@@ -430,9 +432,10 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
 
       // PR chains are the primary work: the pill leads with the worst-toned PR
       // chain (failing/conflicted/review-blocked beats a calm newer one), else
-      // the most recently updated; run-only chains are the last resort. The same
-      // `pillPick` powers the footer's pick diagnostics.
-      const picked = pillPick(chains())
+      // the most recently updated; run-only chains are the last resort. Picked
+      // from the live chains — a merged chain can't ride along on a live issue
+      // chain elsewhere. The same `pillPick` powers the footer's pick diagnostics.
+      const picked = pillPick(list)
       if (!picked) return undefined
       const worst = picked.chain
       const lead = worst.prs[0]
