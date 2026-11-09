@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { messagesText, scan, textToScan } from "./extract"
+import { deliberateRefs, messageBuckets, messagesText, scan, textToScan, LISTING_THRESHOLD } from "./extract"
 import { githubLexicon } from "./providers/github/lexicon"
 import type { RepoRef } from "./model"
 
@@ -146,6 +146,82 @@ describe("scan", () => {
   test("no lexicons: provider urls don't resolve, generic patterns still do", () => {
     expect(scan("https://github.com/sst/opencode/issues/7", opencode, [])).toEqual([])
     expect(scan("run 42 went green", opencode, [])).toEqual([{ kind: "run", number: 42, repo: opencode }])
+  })
+})
+
+describe("messageBuckets", () => {
+  const userMessage = (text: string) => ({ type: "user", id: "m1", text, time: { created: 0 } })
+  const assistantMessage = (content: unknown[]) => ({ type: "assistant", id: "m2", content, time: { created: 0 } })
+  const toolPart = (input: unknown, output: string) => ({
+    type: "tool",
+    id: "t1",
+    name: "bash",
+    state: { status: "completed", input, content: [{ type: "text", text: output }] },
+  })
+
+  test("user text lands in user, assistant text in prose", () => {
+    const buckets = messageBuckets([userMessage("look at PR 4821"), assistantMessage([{ type: "text", text: "PR 4821 is green" }])])
+    expect(buckets.user).toEqual(["look at PR 4821"])
+    expect(buckets.prose).toEqual(["PR 4821 is green"])
+    expect(buckets.commands).toEqual([])
+    expect(buckets.outputs).toEqual([])
+  })
+
+  test("tool commands and outputs land separately, per tool call", () => {
+    const message = assistantMessage([toolPart({ command: "gh pr view 3670" }, "opened yesterday"), toolPart({ command: "gh run list" }, "run 1\nrun 2")])
+    const buckets = messageBuckets([message])
+    expect(buckets.commands).toEqual(["gh pr view 3670", "gh run list"])
+    expect(buckets.outputs).toEqual([["opened yesterday"], ["run 1\nrun 2"]])
+  })
+
+  test("incomplete tool states contribute nothing", () => {
+    const message = assistantMessage([{ type: "tool", id: "t", name: "bash", state: { status: "running", input: {} } }])
+    expect(messageBuckets([message]).outputs).toEqual([])
+  })
+})
+
+describe("deliberateRefs", () => {
+  const userMessage = (text: string) => ({ type: "user", id: "m1", text, time: { created: 0 } })
+  const assistantMessage = (content: unknown[]) => ({ type: "assistant", id: "m2", content, time: { created: 0 } })
+  const toolPart = (input: unknown, output: string) => ({
+    type: "tool",
+    id: "t1",
+    name: "bash",
+    state: { status: "completed", input, content: [{ type: "text", text: output }] },
+  })
+
+  test("a focused tool output (1-2 refs of a kind) is deliberate", () => {
+    const buckets = messageBuckets([assistantMessage([toolPart({ command: "gh pr view 3670" }, "PR 3670 is open")])])
+    expect(deliberateRefs(buckets, opencode, [githubLexicon]).map((ref) => ref.number)).toContain(3670)
+  })
+
+  test(`a listing (${LISTING_THRESHOLD}+ same-kind refs in one output) drops that kind`, () => {
+    const output = "PR 100 x\nPR 200 y\nPR 300 z"
+    const buckets = messageBuckets([assistantMessage([toolPart({ command: "gh pr list" }, output)])])
+    expect(deliberateRefs(buckets, opencode, [githubLexicon])).toEqual([])
+  })
+
+  test("listing suppression is per kind: 3 issues don't drop 2 prs in the same output", () => {
+    const output = "issue 10\nissue 11\nissue 12\nPR 20 a\nPR 21 b"
+    const buckets = messageBuckets([assistantMessage([toolPart({ command: "gh api things" }, output)])])
+    const numbers = deliberateRefs(buckets, opencode, [githubLexicon]).map((ref) => ref.number).sort((a, b) => a - b)
+    expect(numbers).toEqual([20, 21])
+  })
+
+  test("the same ref keeps its highest tier: user beats output", () => {
+    const buckets = messageBuckets([
+      userMessage("merge PR 4821"),
+      assistantMessage([toolPart({ command: "gh pr view 4821" }, "PR 4821 ready")]),
+    ])
+    const refs = deliberateRefs(buckets, opencode, [githubLexicon])
+    expect(refs.filter((ref) => ref.number === 4821)).toHaveLength(1)
+    expect(refs.find((ref) => ref.number === 4821)?.tier).toBe("user")
+  })
+
+  test("bare-hash listings are suppressed as a group too", () => {
+    const output = "#1 a\n#2 b\n#3 c"
+    const buckets = messageBuckets([assistantMessage([toolPart({ command: "grep -r fix" }, output)])])
+    expect(deliberateRefs(buckets, opencode, [githubLexicon])).toEqual([])
   })
 })
 

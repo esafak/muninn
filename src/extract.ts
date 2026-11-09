@@ -7,6 +7,7 @@
  * passes.
  */
 
+import { refKey } from "./model"
 import type { Ref, RepoRef } from "./model"
 import type { Lexicon } from "./providers/lexicon"
 
@@ -139,6 +140,98 @@ export const messagesText = (messages: readonly unknown[]): string => {
     }
   }
   return out.join("\n")
+}
+
+/** The four provenance buckets Muninn scans, one per message-part kind. Tool
+ * outputs stay grouped per tool call (array of arrays) so the listing rule can
+ * judge each output on its own. */
+export interface Buckets {
+  user: string[]
+  commands: string[]
+  prose: string[]
+  outputs: string[][]
+}
+
+export const messageBuckets = (messages: readonly unknown[]): Buckets => {
+  const buckets: Buckets = { user: [], commands: [], prose: [], outputs: [] }
+  for (const message of messages) {
+    if (!message || typeof message !== "object") continue
+    const m = message as { type?: unknown; text?: unknown; content?: unknown }
+    if (m.type === "user" && typeof m.text === "string") {
+      buckets.user.push(m.text)
+      continue
+    }
+    if (m.type !== "assistant" || !Array.isArray(m.content)) continue
+    for (const part of m.content) {
+      if (!part || typeof part !== "object") continue
+      const p = part as { type?: unknown; text?: unknown; state?: unknown }
+      if ((p.type === "text" || p.type === "reasoning") && typeof p.text === "string") {
+        buckets.prose.push(p.text)
+        continue
+      }
+      if (p.type !== "tool") continue
+      const state = p.state as { status?: unknown; input?: unknown; content?: unknown } | undefined
+      if (!state || state.status !== "completed") continue
+      if (state.input && typeof state.input === "object") {
+        const command = (state.input as { command?: unknown }).command
+        if (typeof command === "string") buckets.commands.push(command)
+      }
+      const output: string[] = []
+      if (Array.isArray(state.content))
+        for (const block of state.content)
+          if (block && typeof block === "object" && (block as { type?: unknown }).type === "text") {
+            const text = (block as { text?: unknown }).text
+            if (typeof text === "string") output.push(text)
+          }
+      if (output.length > 0) buckets.outputs.push(output)
+    }
+  }
+  return buckets
+}
+
+/** How many refs of one kind a single tool output may name before it counts as
+ * an enumeration (`gh pr list`, a search): enumerations are not candidates. */
+export const LISTING_THRESHOLD = 3
+
+export type Tier = "user" | "command" | "prose" | "output"
+export type TieredRef = Ref & { tier: Tier }
+
+/**
+ * Refs worth chains: everything the user typed, the agent committed to (tool
+ * commands) or told the user about (prose) — plus tool outputs, except listings.
+ * One output naming `LISTING_THRESHOLD`+ refs of a kind is an enumeration: that
+ * kind drops from that output. One or two is a focused look: kept. The same ref
+ * seen at several tiers keeps its highest (most deliberate) tier.
+ */
+export const deliberateRefs = (
+  buckets: Buckets,
+  repo: RepoRef | undefined,
+  lexicons: readonly Lexicon[] = [],
+): TieredRef[] => {
+  const tierRank: Record<Tier, number> = { user: 0, command: 1, prose: 2, output: 3 }
+  const byKey = new Map<string, TieredRef>()
+  const put = (ref: Ref, tier: Tier) => {
+    const key = refKey(ref)
+    const existing = byKey.get(key)
+    if (!existing || tierRank[tier] < tierRank[existing.tier]) byKey.set(key, { ...ref, tier })
+  }
+  for (const text of buckets.user) for (const ref of scan(text, repo, lexicons)) put(ref, "user")
+  for (const text of buckets.commands) for (const ref of scan(text, repo, lexicons)) put(ref, "command")
+  for (const text of buckets.prose) for (const ref of scan(text, repo, lexicons)) put(ref, "prose")
+  for (const output of buckets.outputs)
+    for (const text of output) {
+      const refs = scan(text, repo, lexicons)
+      const perKind = new Map<string, number>()
+      for (const ref of refs) {
+        const group = ref.kind ?? "bare"
+        perKind.set(group, (perKind.get(group) ?? 0) + 1)
+      }
+      for (const ref of refs) {
+        const group = ref.kind ?? "bare"
+        if ((perKind.get(group) ?? 0) < LISTING_THRESHOLD) put(ref, "output")
+      }
+    }
+  return [...byKey.values()]
 }
 
 export const textToScan = (parts: readonly unknown[]): string =>

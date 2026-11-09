@@ -3,7 +3,7 @@ import type { JSX } from "solid-js"
 import { createStore } from "solid-js/store"
 import { ComposerPill, MenuItem, Panel, SettingsPage, createKeyed, usePlugin, type IconName, type Plugin } from "@opencode/plugin/gui"
 import { associate } from "../associate"
-import { messagesText, scan } from "../extract"
+import { deliberateRefs, messageBuckets } from "../extract"
 import type { Chain, Entity, PullEntity, RepoRef, RunEntity, RunStatus } from "../model"
 import { chainTone, armedTargets, pillPick, mergeReady, mergeWhy, refKey, repoKey } from "../model"
 import { githubLexicon } from "../providers/github/lexicon"
@@ -73,16 +73,17 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
 
   const session = () => ctx.sessions.current()
 
-  /** All text Muninn may scan, from the mounted session's messages. The
-   * SDK types the list here, so a wrong field fails the build; flattening itself
-   * is `messagesText` in the tested core. */
-  const text = () => {
+  /** The projected messages of the mounted session — the only text Muninn scans. */
+  const messageList = () => {
     const current = session()
-    if (!current) return ""
-    return messagesText(current.server.data.session.message.list(current.id))
+    return current ? current.server.data.session.message.list(current.id) : []
   }
 
-  const refs = createMemo(() => scan(text(), meta.repo ?? undefined, [githubLexicon]))
+  /** Provenance buckets: what the user typed vs what the agent's tools dragged
+   * through, so incidental discoveries never become candidates. */
+  const buckets = createMemo(() => messageBuckets(messageList()))
+
+  const refs = createMemo(() => deliberateRefs(buckets(), meta.repo ?? undefined, [githubLexicon]))
 
   const rechain = () => {
     const repo = meta.repo
@@ -380,13 +381,14 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
         : picked.chain.runs[0]
           ? `run #${picked.chain.runs[0].id}`
           : "off"
-    // Pipeline census: refs by kind, how many hit the entity store, how big the
-    // store is. A PR that reaches hydration but not the pill gets caught here.
+    // Pipeline census: refs by provenance tier, how many hit the entity store,
+    // how big the store is. A PR that reaches hydration but not the pill — or a
+    // tool-discovery that wrongly became a candidate — gets caught here.
     const refList = refs()
-    const kinds = { pr: 0, run: 0, issue: 0, bare: 0 }
+    const tiers = { user: 0, command: 0, prose: 0, output: 0 }
     let hits = 0
     for (const ref of refList) {
-      kinds[ref.kind ?? "bare"]++
+      tiers[ref.tier]++
       const base = ref.repo ? repoKey(ref.repo) : undefined
       const found = ref.kind
         ? entities[refKey(ref)] !== undefined
@@ -399,7 +401,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       : `pick: ${picked.reason}${picked.considered > 1 ? ` of ${picked.considered}` : ""} · lead ${
           picked.chain.prs[0] ? (picked.chain.prs[0].headBranch === meta.branch ? "branch match" : "newest") : "—"
         }`
-    return `mn gui ${__MN_BUILD__}${meta.debug ? ` · ${meta.debug}` : " · srv ?"} · gate ${gate} · chains ${chains().length} · live ${liveCount} · pill: ${pill} · ${pick} · refs ${refList.length} (pr ${kinds.pr} run ${kinds.run} issue ${kinds.issue} bare ${kinds.bare}) → hits ${hits}/${Object.keys(entities).length} ents${meta.stats ? ` · ${meta.stats}` : ""}`
+    return `mn gui ${__MN_BUILD__}${meta.debug ? ` · ${meta.debug}` : " · srv ?"} · gate ${gate} · chains ${chains().length} · live ${liveCount} · pill: ${pill} · ${pick} · refs ${refList.length} (user ${tiers.user} cmd ${tiers.command} prose ${tiers.prose} out ${tiers.output}) → hits ${hits}/${Object.keys(entities).length} ents${meta.stats ? ` · ${meta.stats}` : ""}`
   }
 
   /** The braille spinner frames for the pill's pending-merge indicator. The host
