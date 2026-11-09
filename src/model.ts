@@ -150,10 +150,12 @@ export const mergeReady = (chain: Chain, pull = chain.prs[0]): boolean => {
   if (!chain.runs.filter((run) => run.headSha === pull.headSha).every((run) => run.status === "succeeded")) return false
   if (pull.reviewState === "changes_requested" || pull.mergeState === "conflict") return false
   if (pull.mergeState && pull.mergeState !== "ready") return false
-  // No evidence, no merge. A minimal forge with no run discovery and no merge
-  // state is never auto-mergeable (accepted: GitHub always hydrates state, so
-  // its clean `ready` is itself the evidence when no runs are on record).
-  if (chain.runs.length === 0 && pull.mergeState !== "ready") return false
+  // No evidence, no merge: a green run on this PR's current head, or the
+  // provider's explicit clean state. Stale runs from earlier commits neither
+  // block nor count as evidence, and a minimal forge with no run discovery and
+  // no merge state is never auto-mergeable (accepted: GitHub always hydrates
+  // state, so its clean `ready` is itself the evidence when no runs are known).
+  if (!chain.runs.some((run) => run.headSha === pull.headSha) && pull.mergeState !== "ready") return false
   return true
 }
 
