@@ -105,4 +105,22 @@ describe("associate", () => {
     expect(chains.find((chain) => chain.prs[0]?.repo.owner === repo.owner)?.prs.map((pr) => pr.number)).toEqual([4821])
     expect(chains.find((chain) => chain.prs[0]?.repo.owner === "acme")?.prs.map((pr) => pr.number)).toEqual([1])
   })
+
+  test("run duplicates keep the fresher snapshot, whichever input carries it", () => {
+    // Branch runs are listed later, but a cached entity can be newer (message
+    // hydration refreshes it without re-listing the branch): freshness wins,
+    // never input position — a stale green branch run must not mask a red one,
+    // and a fresh green listing must still recover a stale red cache.
+    const cachedFailure = associate([{ ...run(1, "abc123", 300), status: "failed" }], [run(1, "abc123", 100)])
+    expect(cachedFailure[0]!.runs.map((run) => run.status)).toEqual(["failed"])
+
+    const branchRecovery = associate([{ ...run(1, "abc123", 100), status: "failed" }], [run(1, "abc123", 300)])
+    expect(branchRecovery[0]!.runs.map((run) => run.status)).toEqual(["succeeded"])
+  })
+
+  test("equal-timestamp duplicates keep the branch-run listing", () => {
+    // The tie rule pins `<=` in the dedupe comparison: the later listing wins.
+    const ties = associate([{ ...run(1, "abc123", 200), status: "failed" }], [run(1, "abc123", 200)])
+    expect(ties[0]!.runs.map((run) => run.status)).toEqual(["succeeded"])
+  })
 })

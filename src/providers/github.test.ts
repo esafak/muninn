@@ -3,14 +3,39 @@ import { mergeResponse } from "./github"
 import { PullEntity } from "../rpc"
 
 describe("mergeResponse", () => {
-  test("only reports a confirmed merge", () => {
+  test("a confirmed merge succeeds, with or without a message", () => {
     expect(mergeResponse({ merged: true })).toEqual({ merged: true })
-    expect(mergeResponse({ merged: false, message: "Pull Request is not mergeable" })).toEqual({
+    expect(mergeResponse({ merged: true, message: "squashed" })).toEqual({ merged: true })
+  })
+
+  test("an unconfirmed 200 fails with the provider's message", () => {
+    expect(mergeResponse({ merged: false, message: "Already merged" })).toEqual({
       merged: false,
-      message: "Pull Request is not mergeable",
+      message: "Already merged",
     })
-    expect(mergeResponse({})).toEqual({ merged: false, message: "GitHub did not confirm that the pull request merged" })
-    expect(mergeResponse(undefined)).toEqual({ merged: false, message: "GitHub returned an invalid merge response" })
+    expect(mergeResponse({ merged: false })).toEqual({
+      merged: false,
+      message: "GitHub did not confirm that the pull request merged",
+    })
+  })
+
+  test("an object body without confirmation fails with the unconfirmed message", () => {
+    expect(mergeResponse({})).toEqual({
+      merged: false,
+      message: "GitHub did not confirm that the pull request merged",
+    })
+    expect(mergeResponse({ merged: "yes" })).toEqual({
+      merged: false,
+      message: "GitHub did not confirm that the pull request merged",
+    })
+  })
+
+  test("non-object bodies fail with the invalid-response message", () => {
+    const invalid = { merged: false, message: "GitHub returned an invalid merge response" }
+    expect(mergeResponse(null)).toEqual(invalid)
+    expect(mergeResponse(undefined)).toEqual(invalid)
+    expect(mergeResponse("merged")).toEqual(invalid)
+    expect(mergeResponse(42)).toEqual(invalid)
   })
 })
 
@@ -30,7 +55,8 @@ describe("PullEntity RPC schema", () => {
       url: "https://github.com/octo/repo/pull/1",
       updatedAt: 1,
     }
-    expect(PullEntity.parse({ ...entity, mergedAt: 1_794_192_637_000 }).mergedAt).toBe(1_794_192_637_000)
+    const timestamp = 1_794_192_637_000
+    expect(PullEntity.parse({ ...entity, mergedAt: timestamp }).mergedAt).toBe(timestamp)
     expect(PullEntity.parse(entity).mergedAt).toBeUndefined()
   })
 })

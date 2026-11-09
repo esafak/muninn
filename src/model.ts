@@ -135,9 +135,14 @@ export const pullForRun = (run: RunEntity, pulls: readonly PullEntity[]): PullEn
 export const refKey = (ref: Ref): string =>
   `${ref.repo ? `${ref.repo.host}/${ref.repo.owner}/${ref.repo.repo}` : "@"}#${ref.kind ?? ""}${ref.number}`
 
-/** Whether the chain's lead PR can merge right now: open, checks green, no
- * conflicts, no outstanding change requests. Unknown states (entries hydrated
- * by older code) don't block — they fall back to the checks. */
+/** The store/dedupe key for a hydrated entity: repo-scoped, runs by id. */
+export const entityKey = (entity: Entity): string =>
+  `${repoKey(entity.repo)}#${entity.kind}${entity.kind === "run" ? entity.id : entity.number}`
+
+/** Whether a PR can merge right now: open, checks green, no conflicts, no
+ * outstanding change requests. Defaults to the chain's lead; callers pass an
+ * explicit pull to check another member of the chain. Unknown states (entries
+ * hydrated by older code) don't block — they fall back to the checks. */
 export const mergeReady = (chain: Chain, pull = chain.prs[0]): boolean => {
   if (!pull || pull.state !== "open") return false
   if (!chain.runs.filter((run) => run.headSha === pull.headSha).every((run) => run.status === "succeeded")) return false
@@ -146,7 +151,8 @@ export const mergeReady = (chain: Chain, pull = chain.prs[0]): boolean => {
   return true
 }
 
-/** Why the lead PR can't merge yet — the disabled button's tooltip. */
+/** Why a PR can't merge yet — the disabled button's tooltip. Defaults to the
+ * chain's lead; callers pass an explicit pull to explain another member. */
 export const mergeWhy = (chain: Chain, pull = chain.prs[0]): string => {
   const currentRuns = chain.runs.filter((run) => run.headSha === pull?.headSha)
   const failed = currentRuns.find((run) => run.status === "failed")

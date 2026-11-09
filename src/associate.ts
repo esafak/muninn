@@ -13,16 +13,13 @@
  */
 
 import type { Chain, Entity, IssueEntity, PullEntity, RunEntity } from "./model"
-import { pullsForRun, repoKey } from "./model"
+import { entityKey, pullsForRun, repoKey } from "./model"
 
 const byNewest = (a: { updatedAt: number }, b: { updatedAt: number }): number => b.updatedAt - a.updatedAt
 const sameRepo = (
   a: { repo: { host: string; owner: string; repo: string } },
   b: { repo: { host: string; owner: string; repo: string } },
 ): boolean => a.repo.host === b.repo.host && a.repo.owner === b.repo.owner && a.repo.repo === b.repo.repo
-
-const entityKey = (entity: Entity): string =>
-  `${repoKey(entity.repo)}#${entity.kind}${entity.kind === "run" ? entity.id : entity.number}`
 
 interface PrGroup {
   prs: PullEntity[]
@@ -37,7 +34,16 @@ export const associate = (
   branchRuns: readonly RunEntity[] = [],
   sessionBranch?: string,
 ): Chain[] => {
-  const uniqueEntities = [...new Map([...entities, ...branchRuns].map((entity) => [entityKey(entity), entity])).values()]
+  // Duplicate snapshots (a cached entity and a fresh branch-run listing) resolve
+  // by freshness, not input position: branch runs are fetched later, but the
+  // cached entity can be newer (message hydration updates it without re-listing
+  // the branch). Ties keep the branch-run listing.
+  const snapshots = new Map<string, Entity>()
+  for (const entity of [...entities, ...branchRuns]) {
+    const existing = snapshots.get(entityKey(entity))
+    if (!existing || existing.updatedAt <= entity.updatedAt) snapshots.set(entityKey(entity), entity)
+  }
+  const uniqueEntities = [...snapshots.values()]
   const pulls = uniqueEntities.filter((entity): entity is PullEntity => entity.kind === "pr")
   const issues = uniqueEntities.filter((entity): entity is IssueEntity => entity.kind === "issue")
   const allRuns = uniqueEntities.filter((entity): entity is RunEntity => entity.kind === "run")
