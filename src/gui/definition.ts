@@ -92,6 +92,24 @@ export const definition = Plugin.define({
       }),
       { entries: [] },
     ),
+    /** Evidence of Muninn's own actions: merges fired, branch deletions, failures.
+     * The chain cards render this as the audit line on merged PRs. */
+    activity: Store.global(
+      Schema.Struct({
+        entries: Schema.Array(
+          Schema.Struct({
+            at: Schema.Number,
+            repo: Repo,
+            number: Schema.Number,
+            kind: Schema.Literals(["merged", "branch-deleted", "branch-delete-failed", "merge-failed"]),
+            method: Schema.optional(Schema.Literals(["merge", "squash", "rebase"])),
+            via: Schema.Literals(["manual", "when-ready"]),
+            detail: Schema.optional(Schema.String),
+          }),
+        ),
+      }),
+      { entries: [] },
+    ),
   },
   i18n: {
     en: {

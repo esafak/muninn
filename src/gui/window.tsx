@@ -236,12 +236,39 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       (entry) => repoKey(entry.repo) === repoKey(pull.repo) && entry.number === pull.number,
     ) || !!pull.autoMerge
 
+  /** Appends an evidence entry to the activity ledger, newest first, capped. */
+  const record = (
+    pull: PullEntity,
+    kind: "merged" | "branch-deleted" | "branch-delete-failed" | "merge-failed",
+    via: "manual" | "when-ready",
+    method?: "merge" | "squash" | "rebase",
+    detail?: string,
+  ) =>
+    ctx.stores.activity.update((draft) => {
+      draft.entries.unshift({
+        at: Date.now(),
+        repo: pull.repo,
+        number: pull.number,
+        kind,
+        via,
+        ...(method ? { method } : {}),
+        ...(detail ? { detail } : {}),
+      })
+      if (draft.entries.length > 200) draft.entries.length = 200
+    })
+
   /** Fires the merge RPC (head-SHA guarded; method and delete-branch from settings)
-   * and toasts the outcome. No confirmation — callers own consent. */
-  const fireMerge = async (pull: PullEntity, method: "merge" | "squash" | "rebase"): Promise<boolean> => {
+   * and toasts the outcome. No confirmation — callers own consent. Every outcome
+   * lands in the activity ledger: merges, deletions, failures. */
+  const fireMerge = async (
+    pull: PullEntity,
+    method: "merge" | "squash" | "rebase",
+    via: "manual" | "when-ready",
+  ): Promise<boolean> => {
     const current = session()
     const client = ctx.client
     if (!current || !client) return false
+    const deleteBranch = ctx.stores.settings.value.deleteBranch
     const result = await client
       .rpc(Muninn)
       .merge({
@@ -249,14 +276,26 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
         number: pull.number,
         method,
         expectedHeadSha: pull.headSha,
-        deleteBranch: ctx.stores.settings.value.deleteBranch,
+        deleteBranch,
       })
       .catch((error: unknown) => ({ merged: false as const, message: error instanceof Error ? error.message : String(error) }))
     if (!result.merged) {
+      record(pull, "merge-failed", via, method, result.message)
       ctx.toast.show({ title: `PR #${pull.number} merge failed`, description: result.message, variant: "error" })
       return false
     }
-    ctx.toast.show({ title: `PR #${pull.number} merged`, description: `${method} into ${pull.baseBranch}`, variant: "success" })
+    record(pull, "merged", via, method)
+    // The provider reports deletion failures as a merged-with-message result;
+    // silence means the branch deletion succeeded (or wasn't requested).
+    let description = `${method} into ${pull.baseBranch}`
+    if (result.message) {
+      record(pull, "branch-delete-failed", via, method, result.message)
+      description += ` · ${result.message}`
+    } else if (deleteBranch) {
+      record(pull, "branch-deleted", via, method)
+      description += ` · branch ${pull.headBranch} deleted`
+    }
+    ctx.toast.show({ title: `PR #${pull.number} merged`, description, variant: "success" })
     return true
   }
 
@@ -272,7 +311,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       danger: true,
     })
     if (!ok) return
-    await fireMerge(pull, method)
+    await fireMerge(pull, method, "manual")
     void refresh()
   }
 
@@ -321,7 +360,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
           (entry) => !(repoKey(entry.repo) === repoKey(pull.repo) && entry.number === pull.number),
         )
       })
-      void fireMerge(pull, method).then(() => void refresh())
+      void fireMerge(pull, method, "when-ready").then(() => void refresh())
     }
   }
 
@@ -714,6 +753,12 @@ const STYLES = `
   display: flex; align-items: center; gap: 8px; padding: 5px 12px 6px;
   border-top: 1px solid var(--v2-border-border-muted); margin-top: 3px;
   font-size: 10.5px; color: var(--v2-text-text-faint);
+}
+.mn-audit {
+  display: flex; align-items: center; gap: 8px; padding: 5px 12px 6px;
+  border-top: 1px solid var(--v2-border-border-muted); margin-top: 3px;
+  font-size: 10.5px; font-family: var(--v2-font-family-code);
+  color: var(--v2-state-fg-success, #1a7f37);
 }
 .mn-foot-ago { margin-left: auto; }
 .mn-empty { color: var(--v2-text-text-faint); font-size: 11px; padding: 6px 4px; }

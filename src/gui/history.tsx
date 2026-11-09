@@ -2,7 +2,7 @@ import { For, Match, Show, Switch, createSignal } from "solid-js"
 import type { Accessor, JSX } from "solid-js"
 import { usePlugin } from "@opencode/plugin/gui"
 import type { Chain, PullEntity, RepoRef, RunEntity, RunStatus } from "../model"
-import { chainTone, mergeReady, mergeWhy } from "../model"
+import { chainTone, mergeReady, mergeWhy, repoKey } from "../model"
 import type { definition } from "./definition"
 import { Mark } from "./marks"
 import { CancelledGlyph, CheckGlyph, CrossGlyph, IssueGlyph, MergeGlyph, MergedGlyph, PullGlyph, QueuedGlyph } from "./icons"
@@ -90,6 +90,47 @@ export const MergeButton = (props: {
     </Switch>
   </Show>
 )
+
+/**
+ * The evidence line under a chain's PR rows: what Muninn actually did to the lead
+ * PR — merge, branch deletion, failures — straight from the activity ledger. A
+ * merged PR with no ledger entry was merged on the forge, not by Muninn.
+ */
+const AuditLine = (props: { chain: Chain }): JSX.Element => {
+  const ctx = usePlugin<typeof definition>()
+  return (
+    <Show when={props.chain.prs[0]}>
+      {(lead) => {
+        const match = (kind: "merged" | "branch-deleted" | "branch-delete-failed" | "merge-failed") =>
+          ctx.stores.activity.value.entries.find(
+            (entry) => entry.kind === kind && entry.number === lead().number && repoKey(entry.repo) === repoKey(lead().repo),
+          )
+        const merged = match("merged")
+        const failed = match("merge-failed")
+        const deleted = match("branch-deleted")
+        const deleteFailed = match("branch-delete-failed")
+        return (
+          <Show when={merged || failed || lead().state === "merged"}>
+            <div class="mn-audit">
+              {merged ? (
+                <span>
+                  merged by Muninn ({merged.method ?? "squash"})
+                  {merged.via === "when-ready" ? " · when ready" : ""} · {time(merged.at)}
+                  {deleted ? " · branch deleted" : ""}
+                  {deleteFailed ? " · branch deletion failed" : ""}
+                </span>
+              ) : failed ? (
+                <span title={failed.detail}>merge failed · {time(failed.at)}</span>
+              ) : (
+                <span>merged on the forge — not by Muninn</span>
+              )}
+            </div>
+          </Show>
+        )
+      }}
+    </Show>
+  )
+}
 
 const dayLabel = (epoch: number): string => new Date(epoch).toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" })
 const time = (epoch: number): string =>
@@ -236,6 +277,7 @@ export const History = (props: HistoryProps) => {
                     </span>
                   </div>
                 </Show>
+                <AuditLine chain={chain} />
               </div>
             </>
           )}
