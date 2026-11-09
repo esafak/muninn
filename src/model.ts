@@ -146,7 +146,8 @@ export const mergeWhy = (chain: Chain): string => {
 
 /** The pill's lead chain: the worst-toned PR chain outranks recency (failing
  * checks, conflicts, or a requested review beat a calm newer one); otherwise the
- * most recently updated PR chain; run-only chains are the last resort. */
+ * most recently updated PR chain; run-bearing chains are the last resort. An
+ * issue-only chain never wins — there is nothing to show. */
 export const pillPick = (
   chains: readonly Chain[],
 ): { chain: Chain; reason: "danger" | "newest" | "runs-only"; considered: number } | undefined => {
@@ -155,8 +156,8 @@ export const pillPick = (
   const danger = prChains.find((chain) => chainTone(chain) === "danger")
   if (danger) return { chain: danger, reason: "danger", considered: prChains.length }
   if (prChains[0]) return { chain: prChains[0], reason: "newest", considered: prChains.length }
-  const runChain = chains.toSorted(byNewest)[0]
-  if (runChain) return { chain: runChain, reason: "runs-only", considered: chains.length }
+  const runChains = chains.filter((chain) => chain.runs.length > 0).toSorted(byNewest)
+  if (runChains[0]) return { chain: runChains[0], reason: "runs-only", considered: runChains.length }
   return undefined
 }
 

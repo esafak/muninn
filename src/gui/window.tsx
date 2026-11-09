@@ -439,6 +439,10 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       if (!picked) return undefined
       const worst = picked.chain
       const lead = worst.prs[0]
+      const run = worst.runs[0]
+      // pillPick only returns PR chains or run-bearing chains; guard anyway —
+      // an issue-only chain has nothing to show.
+      if (!lead && !run) return undefined
       const tone = chainTone(worst)
 
       // The capsule reads like GitHub's PR status: a circle icon in the worst
@@ -454,7 +458,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
         icon: circle,
         label: lead
           ? `${pending ? `${SPIN_FRAMES[spin()]} ` : ""}#${lead.number} ${short(lead.title)} ▾`
-          : `run #${worst.runs[0]!.id} · ${ctx.t(`state.${worst.runs[0]!.status}`)} ▾`,
+          : `run #${run!.id} · ${ctx.t(`state.${run!.status}`)} ▾`,
         tone,
         title: lead ? `#${lead.number} ${lead.title}` : ctx.t("pill.title"),
       }
