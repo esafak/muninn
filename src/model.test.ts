@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import type { Chain, IssueEntity, PullEntity, RunEntity } from "./model"
+import type { Chain, IssueEntity, PullEntity, RepoRef, RunEntity } from "./model"
 import { chainTone, mergeReady, mergeWhy, armedTargets, pillPick, type ArmedEntry, pillEligible, pullForRun, pullsForRun } from "./model"
 import { associate } from "./associate"
 
@@ -313,11 +313,42 @@ describe("pillPick", () => {
     expect(picked?.considered).toBe(2)
   })
 
-  test("run-only fallback skips merged PRs and issue-only chains", () => {
+  test("the merged pool outranks settled run-only chains; issue-only never wins", () => {
     const merged = chain({ key: "merged", prs: [pull({ state: "merged" })], runs: [], updatedAt: 500 })
     const issueOnly = chain({ key: "issue", prs: [], runs: [], issues: [issue("open")], updatedAt: 600 })
-    const runOnly = chain({ key: "run", prs: [], runs: [run("succeeded")], updatedAt: 100 })
-    expect(pillPick([merged, issueOnly, runOnly])?.chain.key).toBe("run")
+    const settled = chain({ key: "run", prs: [], runs: [run("succeeded")], updatedAt: 100 })
+    expect(pillPick([merged, issueOnly, settled])?.chain.key).toBe("merged")
+  })
+
+  test("integration (eligible → pick): a failing run-only chain outranks a newer merged chain", () => {
+    const merged = chain({
+      key: "merged",
+      updatedAt: 300,
+      prs: [pull({ state: "merged", number: 1, headBranch: "feat/thing" })],
+      runs: [run("succeeded")],
+    })
+    const failing = chain({ key: "failing", updatedAt: 100, prs: [], runs: [run("failed")] })
+    const eligible = [merged, failing].filter((candidate) => pillEligible(candidate, { sessionBranch: "feat/thing" }))
+    const picked = pillPick(eligible)
+    expect(picked?.chain.key).toBe("failing")
+    expect(picked?.reason).toBe("runs-only")
+  })
+
+  test("integration (eligible → pick): the newest merged chain is the terminal pill when several are eligible", () => {
+    const older = chain({ key: "older", updatedAt: 100, prs: [pull({ state: "merged", number: 1, headBranch: "feat/thing" })], runs: [] })
+    const newer = chain({ key: "newer", updatedAt: 300, prs: [pull({ state: "merged", number: 2, headBranch: "feat/thing" })], runs: [] })
+    const eligible = [older, newer].filter((candidate) => pillEligible(candidate, { sessionBranch: "feat/thing" }))
+    const picked = pillPick(eligible)
+    expect(picked?.chain.key).toBe("newer")
+    expect(picked?.reason).toBe("merged")
+    expect(picked?.considered).toBe(2)
+  })
+
+  test("integration (eligible → pick): a newer open PR outranks the session's merged one", () => {
+    const merged = chain({ key: "merged", updatedAt: 500, prs: [pull({ state: "merged", number: 1, headBranch: "feat/thing" })], runs: [] })
+    const open = chain({ key: "open", updatedAt: 300, prs: [pull({ state: "open", number: 2, headBranch: "feat/thing" })], runs: [] })
+    const eligible = [merged, open].filter((candidate) => pillEligible(candidate, { sessionBranch: "feat/thing" }))
+    expect(pillPick(eligible)?.chain.key).toBe("open")
   })
 
   test("no chains, no pill", () => {
@@ -330,7 +361,10 @@ describe("pillEligible", () => {
   const elsewhere = "fix/other-session"
   const branched = (headBranch: string, over: Partial<PullEntity> = {}): Chain =>
     chain({ prs: [pull({ headBranch, ...over })] })
-  const ctx = (over: { sessionBranch?: string; armedNumbers?: number[] } = {}) => ({ sessionBranch: own, ...over })
+  const ctx = (over: { sessionBranch?: string; armed?: { repo: RepoRef; number: number }[] } = {}) => ({
+    sessionBranch: own,
+    ...over,
+  })
 
   test("the session's own PR is eligible while open or in draft", () => {
     expect(pillEligible(branched(own), ctx())).toBe(true)
@@ -363,10 +397,13 @@ describe("pillEligible", () => {
     expect(pillEligible(chain({ prs: [], runs: [run("failed")] }), ctx())).toBe(true)
   })
 
-  test("an armed open PR is eligible, even non-lead and from another branch", () => {
+  test("an armed open PR is eligible, even non-lead and from another branch — matched by repo and number", () => {
     const multi = chain({ prs: [pull({ headBranch: elsewhere, number: 1 }), pull({ headBranch: elsewhere, number: 2 })] })
-    expect(pillEligible(multi, ctx({ armedNumbers: [2] }))).toBe(true)
-    expect(pillEligible(multi, ctx({ armedNumbers: [99] }))).toBe(false)
+    expect(pillEligible(multi, ctx({ armed: [{ repo, number: 2 }] }))).toBe(true)
+    expect(pillEligible(multi, ctx({ armed: [{ repo, number: 99 }] }))).toBe(false)
+    // Same number, different repository: the armed entry must not recruit it.
+    const otherRepo = { host: "github.com", owner: "other", repo: "repo" }
+    expect(pillEligible(multi, ctx({ armed: [{ repo: otherRepo, number: 1 }] }))).toBe(false)
   })
 
   test("issue-only chains and settled run-only chains stay in the sidebar", () => {
@@ -375,10 +412,10 @@ describe("pillEligible", () => {
   })
 
   test("without a session branch, only the attention rules apply", () => {
-    const attention = { armedNumbers: [], sessionBranch: undefined }
+    const attention = { armed: [], sessionBranch: undefined }
     expect(pillEligible(branched(own), attention)).toBe(false)
     expect(pillEligible(chain({ runs: [run("failed")] }), attention)).toBe(true)
-    expect(pillEligible(branched(elsewhere), { armedNumbers: [4821], sessionBranch: undefined })).toBe(true)
+    expect(pillEligible(branched(elsewhere), { armed: [{ repo, number: 4821 }], sessionBranch: undefined })).toBe(true)
   })
 
   test("regression (PR #5 recruiting incident): a transcript-recruited cross-branch chain forms but never pills", () => {
@@ -390,7 +427,7 @@ describe("pillEligible", () => {
     const recruited = pull({ repo: other, number: 5, headBranch: elsewhere, state: "open" })
     const chains = associate([recruited], [], own)
     expect(chains.length).toBe(1)
-    const eligible = chains.filter((candidate) => pillEligible(candidate, { sessionBranch: own, armedNumbers: [] }))
+    const eligible = chains.filter((candidate) => pillEligible(candidate, { sessionBranch: own, armed: [] }))
     expect(eligible).toEqual([])
   })
 })

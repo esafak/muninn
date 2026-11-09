@@ -179,15 +179,16 @@ export const mergeWhy = (chain: Chain, pull = chain.prs[0]): string => {
 /** Pill eligibility — what deserves the composer's highest-commitment surface.
  * Eligible: the session's own work (a PR from the session's branch — it stays
  * shown after merging; the pill represents the session's work and moves on
- * only when a newer PR appears, which `pillPick`'s newest ranking handles)
- * and anything needing attention now: CI queued/running/failed (status-derived,
- * so a discovered failure pills with no mention at all) and an armed PR
- * pending merge. Everything else is sidebar material: other branches' PRs
- * (mention is not intent — see the PR #5 recruiting incident), issue-only
- * chains, closed-without-merge work, settled run-only chains. */
+ * only when a newer PR appears, which `pillPick`'s ranking handles) and
+ * anything needing attention now: CI queued/running/failed on current heads
+ * (status-derived, so a discovered failure pills with no mention at all) and
+ * an armed PR pending merge, matched by repository and number. Everything else
+ * is sidebar material: other branches' PRs (mention is not intent — see the
+ * PR #5 recruiting incident), issue-only chains, closed-without-merge work,
+ * settled run-only chains. */
 export const pillEligible = (
   chain: Chain,
-  ctx: { sessionBranch?: string; armedNumbers?: readonly number[] } = {},
+  ctx: { sessionBranch?: string; armed?: readonly { repo: RepoRef; number: number }[] } = {},
 ): boolean => {
   if (
     ctx.sessionBranch !== undefined &&
@@ -205,16 +206,25 @@ export const pillEligible = (
       )
   if (current.some((run) => run.status === "queued" || run.status === "running" || run.status === "failed"))
     return true
-  const armed = ctx.armedNumbers ?? []
-  if (armed.length > 0 && chain.prs.some((pull) => pull.state === "open" && armed.includes(pull.number)))
+  const armed = ctx.armed ?? []
+  if (
+    armed.length > 0 &&
+    chain.prs.some(
+      (pull) =>
+        pull.state === "open" &&
+        armed.some((entry) => entry.number === pull.number && repoKey(entry.repo) === repoKey(pull.repo)),
+    )
+  )
     return true
   return false
 }
 
-/** The pill's lead chain: the worst-toned PR chain outranks recency (failing
- * checks, conflicts, or a requested review beat a calm newer one); otherwise the
- * most recently updated PR chain; run-bearing chains are the last resort. An
- * issue-only chain never wins — there is nothing to show. */
+/** The pill's lead chain, among the eligible pool: the worst-toned PR chain
+ * outranks recency (failing checks, conflicts, or a requested review beat a calm
+ * newer one); otherwise the most recently updated open/draft PR chain; then
+ * attention-bearing run-only chains (a discovered failure); then the newest
+ * merged chain as the terminal pill; settled run-bearing chains are the last
+ * resort. An issue-only chain never wins — there is nothing to show. */
 export const pillPick = (
   chains: readonly Chain[],
 ): { chain: Chain; reason: "danger" | "newest" | "runs-only" | "merged"; considered: number } | undefined => {
@@ -223,8 +233,15 @@ export const pillPick = (
   const danger = prChains.find((chain) => chainTone(chain) === "danger")
   if (danger) return { chain: danger, reason: "danger", considered: prChains.length }
   if (prChains[0]) return { chain: prChains[0], reason: "newest", considered: prChains.length }
-  if (chains.length === 1 && chains[0]!.prs.some((pull) => pull.state === "merged"))
-    return { chain: chains[0]!, reason: "merged", considered: 1 }
+  const attention = chains
+    .filter((chain) =>
+      chain.prs.length === 0 &&
+      chain.runs.some((run) => run.status === "queued" || run.status === "running" || run.status === "failed"),
+    )
+    .toSorted(byNewest)
+  if (attention[0]) return { chain: attention[0], reason: "runs-only", considered: attention.length }
+  const mergedChains = chains.filter((chain) => chain.prs.some((pull) => pull.state === "merged")).toSorted(byNewest)
+  if (mergedChains[0]) return { chain: mergedChains[0], reason: "merged", considered: mergedChains.length }
   const runChains = chains.filter((chain) => chain.runs.length > 0).toSorted(byNewest)
   if (runChains[0]) return { chain: runChains[0], reason: "runs-only", considered: runChains.length }
   return undefined

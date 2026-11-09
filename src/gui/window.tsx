@@ -226,9 +226,8 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
   // CI needing attention, an armed merge pending. Mentions of other branches'
   // work stay in the sidebar; settled history never pills.
   const pillState = createMemo(() => {
-    const armedNumbers = ctx.stores.armed.value.entries.map((entry) => entry.number)
     const eligible = chains().filter((chain) =>
-      pillEligible(chain, { sessionBranch: meta.branch || undefined, armedNumbers }),
+      pillEligible(chain, { sessionBranch: meta.branch || undefined, armed: ctx.stores.armed.value.entries }),
     )
     return { eligible, picked: pillPick(eligible) }
   })
