@@ -74,6 +74,21 @@ describe("mergeReady", () => {
     expect(mergeReady(chain({ prs: [pull({ mergeState: "pending" })] }))).toBe(false)
   })
 
+  test("no evidence, no merge: zero runs with unknown or absent merge state is not ready", () => {
+    expect(mergeReady(chain({ runs: [] }))).toBe(false)
+    expect(mergeReady(chain({ runs: [], prs: [pull({ mergeState: null })] }))).toBe(false)
+  })
+
+  test("the provider's explicit clean state is evidence enough without runs", () => {
+    expect(mergeReady(chain({ runs: [], prs: [pull({ mergeState: "ready" })] }))).toBe(true)
+  })
+
+  test("runs-present behavior unchanged", () => {
+    expect(mergeReady(chain({ runs: [run("queued")] }))).toBe(false)
+    expect(mergeReady(chain({ runs: [run("succeeded")] }))).toBe(true)
+    expect(mergeReady(chain({ runs: [run("succeeded"), run("failed")] }))).toBe(false)
+  })
+
   test("red checks, closed and merged PRs are not ready", () => {
     expect(mergeReady(chain({ runs: [run("failed")] }))).toBe(false)
     expect(mergeReady(chain({ prs: [pull({ state: "merged" })] }))).toBe(false)
