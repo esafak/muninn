@@ -45,6 +45,11 @@ jobs:
           permission-contents: write
           permission-pull-requests: write
           permission-issues: write
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      - name: Install project dependencies
+        run: |
+          bun install --frozen-lockfile
+          echo "$GITHUB_WORKSPACE/node_modules/.bin" >> "$GITHUB_PATH"
       - uses: esafak/pi-reviewer@b8c00291c4e9955b612ec2da967f1d79325cbabe
         with:
           github-token: ${{ steps.bot-token.outputs.token }}
