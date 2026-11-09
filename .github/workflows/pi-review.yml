@@ -42,7 +42,7 @@ jobs:
         with:
           client-id: ${{ secrets.PI_REVIEWER_CLIENT_ID }}
           private-key: ${{ secrets.PI_REVIEWER_PK }}
-          permission-contents: read
+          permission-contents: write
           permission-pull-requests: write
           permission-issues: write
       - uses: esafak/pi-reviewer@b8c00291c4e9955b612ec2da967f1d79325cbabe
