@@ -331,6 +331,12 @@ describe("deliberateRefs", () => {
     const refs = deliberateRefs(bare, opencode, [githubLexicon])
     expect(refs).toStrictEqual([{ number: 77, repo: opencode, tier: "user" }])
     expect(Object.keys(refs[0]!).sort()).toEqual(["number", "repo", "tier"])
+    // A merged (deduplicated) bare ref keeps its `kind` slot — the exact shape
+    // the old merge branch produced.
+    const dedup = { user: ["see #77 and #77"], commands: [], prose: [], outputs: [] }
+    const merged = deliberateRefs(dedup, opencode, [githubLexicon])
+    expect(merged).toHaveLength(1)
+    expect(Object.keys(merged[0]!).sort()).toEqual(["kind", "number", "repo", "tier"])
   })
 })
 

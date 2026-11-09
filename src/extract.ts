@@ -254,11 +254,15 @@ export const deliberateRefs = (
 ): TieredRef[] => {
   const tierRank: Record<Tier, number> = { user: 0, command: 1, prose: 2, output: 3 }
   const byKey = new Map<string, TieredRef>()
-  const put = (ref: Ref, tier: Tier) => {
+  const put = (ref: Ref & { origin: Origin }, tier: Tier) => {
     const key = refKey(ref)
     const existing = byKey.get(key)
-    if (!existing || tierRank[tier] < tierRank[existing.tier])
-      byKey.set(key, { number: ref.number, ...(ref.kind ? { kind: ref.kind } : {}), repo: ref.repo, tier })
+    if (!existing || tierRank[tier] < tierRank[existing.tier]) {
+      // Rest-strip keeps each ref's own-key presence exactly (a merged bare ref
+      // keeps its `kind` slot, undefined) — the shape callers have always gotten.
+      const { origin: _origin, ...rest } = ref
+      byKey.set(key, { ...rest, tier })
+    }
   }
   const addBlock = (text: string, tier: Tier) => {
     const detailed = scanDetailed(text, repo, lexicons)
