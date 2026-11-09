@@ -1,0 +1,11 @@
+amends "package://github.com/jdx/hk/releases/download/v2.11.1/hk@2.11.1#/Config.pkl"
+
+hooks {
+  ["pre-push"] {
+    steps {
+      ["tests"] {
+        check = "bun test"
+      }
+    }
+  }
+}

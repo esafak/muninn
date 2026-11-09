@@ -1,0 +1,38 @@
+name: Pi Reviewer
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  pull_request_review_comment:
+    types: [created]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  review:
+    if: >-
+      github.event_name != 'issue_comment' ||
+      (github.event.issue.pull_request &&
+       (startsWith(github.event.comment.body, '/pi-review') ||
+        startsWith(github.event.comment.body, '/pi-summary')))
+    runs-on: ubuntu-latest
+    environment: review
+    concurrency:
+      group: pi-review-${{ github.event.pull_request.number || github.event.issue.number }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: esafak/pi-reviewer@b8c00291c4e9955b612ec2da967f1d79325cbabe
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          pi-api-key: ${{ secrets.PI_API_KEY }}
+          model: ${{ vars.MODEL_NAME }}
