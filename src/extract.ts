@@ -85,7 +85,9 @@ export const scan = (text: string, repo?: RepoRef, lexicons: readonly Lexicon[] 
       })
     }
     for (const match of source.matchAll(bareHashPattern)) {
-      if (explicitNumbers.has(Number(match[1]))) continue
+      const prefix = source.slice(0, match.index)
+      if (explicitNumbers.has(Number(match[1])) || /\b(?:feedback|finding|comment|step|item|option|point)\s+$/i.test(prefix))
+        continue
       add({ number: Number(match[1]), repo })
     }
   }

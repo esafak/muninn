@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import type { Chain, IssueEntity, PullEntity, RunEntity } from "./model"
-import { chainTone, mergeReady, mergeWhy, armedTargets, pillPick, type ArmedEntry } from "./model"
+import { chainTone, mergeReady, mergeWhy, armedTargets, pillPick, pullForRun, pullsForRun, type ArmedEntry } from "./model"
 
 const repo = { host: "github.com", owner: "sst", repo: "opencode" }
 
@@ -79,6 +79,11 @@ describe("mergeReady", () => {
     expect(mergeReady(chain({ prs: [pull({ state: "merged" })] }))).toBe(false)
     expect(mergeReady(chain({ prs: [] }))).toBe(false)
   })
+
+  test("old runs from earlier commits don't block the current PR head", () => {
+    const previousRun = { ...run("failed"), headSha: "previous-head" }
+    expect(mergeReady(chain({ runs: [previousRun] }))).toBe(true)
+  })
 })
 
 describe("mergeWhy", () => {
@@ -99,6 +104,15 @@ describe("chainTone", () => {
     expect(chainTone(chain({ prs: [pull({ reviewState: "changes_requested" })] }))).toBe("danger")
   })
 
+  test("historical runs do not affect the current PR tone", () => {
+    const staleFailedRun = { ...run("failed"), headSha: "previous-head" }
+    const currentQueuedRun = { ...run("queued"), headSha: "previous-head" }
+    expect(chainTone(chain({ runs: [staleFailedRun] }))).toBe("success")
+    expect(chainTone(chain({ runs: [currentQueuedRun] }))).toBe("success")
+    expect(chainTone(chain({ runs: [run("failed")] }))).toBe("danger")
+    expect(chainTone(chain({ runs: [run("running")] }))).toBe("warning")
+  })
+
   test("in-flight work and blocked merges are warning", () => {
     expect(chainTone(chain({ runs: [run("running")] }))).toBe("warning")
     expect(chainTone(chain({ prs: [pull({ mergeState: "blocked" })] }))).toBe("warning")
@@ -116,6 +130,41 @@ describe("chainTone", () => {
   })
 })
 
+describe("pullForRun", () => {
+  test("prefers explicit PR metadata, then SHA, then a unique branch", () => {
+    const bySha = pull({ number: 1, headSha: "sha-1", headBranch: "same" })
+    const byMetadata = pull({ number: 2, headSha: "sha-2", headBranch: "same" })
+    const explicitRun = { ...run("succeeded"), headSha: "other", headBranch: "same", pullRequests: [2] }
+    expect(pullForRun(explicitRun, [bySha, byMetadata])).toBe(byMetadata)
+
+    const shaRun = { ...run("succeeded"), headSha: "sha-1", headBranch: "same", pullRequests: [] }
+    expect(pullForRun(shaRun, [bySha, byMetadata])).toBe(bySha)
+
+    const branchRun = { ...run("succeeded"), headSha: "other", headBranch: "unique", pullRequests: [] }
+    const unique = pull({ number: 3, headBranch: "unique" })
+    expect(pullForRun(branchRun, [unique])).toBe(unique)
+  })
+
+  test("retains every explicit PR association and shared head SHA", () => {
+    const first = pull({ number: 1, headSha: "shared" })
+    const second = pull({ number: 2, headSha: "shared" })
+    const explicitRun = { ...run("failed"), pullRequests: [1, 2] }
+    const shaRun = { ...run("failed"), headSha: "shared", pullRequests: [] }
+    expect(pullsForRun(explicitRun, [first, second])).toEqual([first, second])
+    expect(pullsForRun(shaRun, [first, second])).toEqual([first, second])
+  })
+
+  test("does not guess when branch-only association is ambiguous or metadata is unmatched", () => {
+    const first = pull({ number: 1, headSha: "sha-1", headBranch: "same" })
+    const second = pull({ number: 2, headSha: "sha-2", headBranch: "same" })
+    const ambiguousRun = { ...run("succeeded"), headSha: "other", headBranch: "same", pullRequests: [] }
+    expect(pullForRun(ambiguousRun, [first, second])).toBeUndefined()
+
+    const unmatchedMetadata = { ...ambiguousRun, pullRequests: [99], headSha: "sha-1" }
+    expect(pullForRun(unmatchedMetadata, [first, second])).toBeUndefined()
+  })
+})
+
 describe("armedTargets", () => {
   const entry = (over: Partial<ArmedEntry> = {}): ArmedEntry => ({
     repo,
@@ -127,6 +176,13 @@ describe("armedTargets", () => {
   test("a green chain with a matching entry fires with its armed method", () => {
     const targets = armedTargets([entry({ method: "rebase" })], [chain({ prs: [pull({ mergeState: "ready" })] })])
     expect(targets).toEqual([{ pull: pull({ mergeState: "ready" }), chain: chain({ prs: [pull({ mergeState: "ready" })] }), method: "rebase" }])
+  })
+
+  test("readiness is checked for the armed PR, not another PR leading its chain", () => {
+    const lead = pull({ number: 1, mergeState: "blocked" })
+    const target = pull({ number: 4821, mergeState: "ready" })
+    const grouped = chain({ prs: [lead, target] })
+    expect(armedTargets([entry()], [grouped])).toEqual([{ pull: target, chain: grouped, method: "squash" }])
   })
 
   test("blocked, conflicted and failing chains don't fire yet", () => {
@@ -169,6 +225,19 @@ describe("pillPick", () => {
     expect(picked?.chain.key).toBe("newer")
   })
 
+  test("merged PR chains never win ahead of a live PR", () => {
+    const merged = chain({ key: "merged", updatedAt: 300, prs: [pull({ state: "merged", number: 1 })] })
+    const live = chain({ key: "live", updatedAt: 100, prs: [pull({ state: "open", number: 2 })] })
+    const picked = pillPick([merged, live])
+    expect(picked?.chain.key).toBe("live")
+    expect(picked?.considered).toBe(1)
+  })
+
+  test("a sole merged PR remains available as the terminal pill", () => {
+    const merged = chain({ key: "merged", prs: [pull({ state: "merged", number: 1 })], runs: [] })
+    expect(pillPick([merged])).toEqual({ chain: merged, reason: "merged", considered: 1 })
+  })
+
   test("run-only chains are the last resort", () => {
     const runOnly = chain({ key: "run", prs: [], runs: [run("succeeded")] })
     const picked = pillPick([runOnly])
@@ -176,13 +245,12 @@ describe("pillPick", () => {
     expect(picked?.chain.key).toBe("run")
   })
 
-  test("issue-only chains never win the pill (nothing to show)", () => {
-    expect(pillPick([chain({ key: "issue", prs: [], runs: [], issues: [issue("open")] })])).toBeUndefined()
+  test("issue-only chains do not win when the pill has nothing to show", () => {
+    const issueOnly = chain({ key: "issue", prs: [], runs: [], issues: [issue("open")] })
+    expect(pillPick([issueOnly])).toBeUndefined()
   })
 
-  test("the runs-only fallback picks among run-bearing chains only, newest first", () => {
-    // A merged PR chain filtered out as dead leaves an open issue chain and CI
-    // runs: the pill must land on the runs, never on the run-less issue chain.
+  test("the runs-only fallback ignores issue-only chains and picks the newest run chain", () => {
     const stale = chain({ key: "stale", prs: [], runs: [run("failed")], updatedAt: 100 })
     const issueOnly = chain({ key: "issue", prs: [], runs: [], issues: [issue("open")], updatedAt: 500 })
     const fresh = chain({ key: "fresh", prs: [], runs: [run("running")], updatedAt: 300 })
@@ -190,6 +258,13 @@ describe("pillPick", () => {
     expect(picked?.reason).toBe("runs-only")
     expect(picked?.chain.key).toBe("fresh")
     expect(picked?.considered).toBe(2)
+  })
+
+  test("run-only fallback skips merged PRs and issue-only chains", () => {
+    const merged = chain({ key: "merged", prs: [pull({ state: "merged" })], runs: [], updatedAt: 500 })
+    const issueOnly = chain({ key: "issue", prs: [], runs: [], issues: [issue("open")], updatedAt: 600 })
+    const runOnly = chain({ key: "run", prs: [], runs: [run("succeeded")], updatedAt: 100 })
+    expect(pillPick([merged, issueOnly, runOnly])?.chain.key).toBe("run")
   })
 
   test("no chains, no pill", () => {

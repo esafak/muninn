@@ -52,8 +52,34 @@ describe("associate", () => {
     expect(chains).toHaveLength(2)
   })
 
+  test("review-comment runs with empty PR metadata attach by branch when their SHA differs", () => {
+    const reviewerRun: RunEntity = {
+      ...run(18420, "merge-commit-sha", 250),
+      headBranch: pull.headBranch,
+      pullRequests: [],
+      name: "Pi Reviewer",
+    }
+    const chains = associate([pull], [reviewerRun])
+
+    expect(chains).toHaveLength(1)
+    expect(chains[0]?.runs.map((candidate) => candidate.id)).toEqual([18420])
+  })
+
+  test("branch-only reviewer runs stay unattached when multiple PRs share the branch", () => {
+    const sameBranchPull: PullEntity = { ...pull, number: 4822, headSha: "different-head" }
+    const reviewerRun: RunEntity = {
+      ...run(18421, "merge-commit-sha", 250),
+      pullRequests: [],
+      name: "Pi Reviewer",
+    }
+    const chains = associate([pull, sameBranchPull], [reviewerRun])
+
+    expect(chains).toHaveLength(2)
+    expect(chains.find((chain) => chain.prs.length === 0)?.runs.map((candidate) => candidate.id)).toEqual([18421])
+  })
+
   test("unclaimed branch runs stand alone", () => {
-    const chains = associate([pull], [run(18410, "def456", 400)])
+    const chains = associate([pull], [{ ...run(18410, "def456", 400), headBranch: "unrelated-branch" }])
     const standalone = chains.find((chain) => chain.prs.length === 0)
     expect(standalone?.runs[0]?.id).toBe(18410)
   })
@@ -68,5 +94,15 @@ describe("associate", () => {
     const olderPull: PullEntity = { ...pull, number: 4790, closes: [], headSha: "old", updatedAt: at(90) }
     const chains = associate([olderPull, pull])
     expect(chains[0]?.prs[0]?.number).toBe(4821)
+  })
+
+  test("duplicate references do not duplicate a PR and shared issue numbers stay repository-scoped", () => {
+    const otherRepo = { ...repo, owner: "acme", repo: "api" }
+    const otherPull: PullEntity = { ...pull, repo: otherRepo, number: 1, title: "Other repo PR", updatedAt: 300 }
+    const chains = associate([pull, pull, otherPull])
+
+    expect(chains).toHaveLength(2)
+    expect(chains.find((chain) => chain.prs[0]?.repo.owner === repo.owner)?.prs.map((pr) => pr.number)).toEqual([4821])
+    expect(chains.find((chain) => chain.prs[0]?.repo.owner === "acme")?.prs.map((pr) => pr.number)).toEqual([1])
   })
 })

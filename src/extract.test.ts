@@ -18,6 +18,16 @@ describe("scan", () => {
     expect(scanGh("TUI still loses scroll position — #1043", opencode)).toEqual([{ number: 1043, repo: opencode }])
   })
 
+  test("ordinal feedback numbers are not treated as issue or PR references", () => {
+    expect(scanGh("Also feedback #2 about the toast; see the actual report #1043", opencode)).toEqual([
+      { number: 1043, repo: opencode },
+    ])
+  })
+
+  test("a kind word cannot pair with a line-numbered tool-output line", () => {
+    expect(scanGh("…via-pr\n6: something else", opencode)).toEqual([])
+  })
+
   test("run references", () => {
     expect(scanGh("run 18402 failed; check run 18404 is queued", opencode)).toEqual([
       { kind: "run", number: 18402, repo: opencode },

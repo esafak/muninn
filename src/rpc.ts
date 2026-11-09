@@ -57,6 +57,7 @@ export const PullEntity = z.object({
   number: z.number(),
   title: z.string(),
   state: z.enum(["open", "draft", "merged", "closed"]),
+  mergedAt: z.number().optional(),
   headBranch: z.string(),
   baseBranch: z.string(),
   closes: z.array(z.number()),

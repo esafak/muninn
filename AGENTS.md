@@ -1,5 +1,11 @@
 # Agent notes
 
+## Project
+
+- Upstream repository: https://github.com/anomalyco/opencode
+- OpenCode GUI plugin documentation: https://opencode.ai/docs/build/plugins/gui/
+- This project targets OpenCode v2.
+
 ## Commands
 
 - `bun run check` — canonical verification (`tsc --noEmit`). Never run `tsc` with other flags.

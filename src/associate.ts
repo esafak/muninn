@@ -13,11 +13,16 @@
  */
 
 import type { Chain, Entity, IssueEntity, PullEntity, RunEntity } from "./model"
-import { repoKey } from "./model"
+import { pullsForRun, repoKey } from "./model"
 
 const byNewest = (a: { updatedAt: number }, b: { updatedAt: number }): number => b.updatedAt - a.updatedAt
-const sameRepo = (a: { repo: { owner: string; repo: string } }, b: { repo: { owner: string; repo: string } }): boolean =>
-  a.repo.owner === b.repo.owner && a.repo.repo === b.repo.repo
+const sameRepo = (
+  a: { repo: { host: string; owner: string; repo: string } },
+  b: { repo: { host: string; owner: string; repo: string } },
+): boolean => a.repo.host === b.repo.host && a.repo.owner === b.repo.owner && a.repo.repo === b.repo.repo
+
+const entityKey = (entity: Entity): string =>
+  `${repoKey(entity.repo)}#${entity.kind}${entity.kind === "run" ? entity.id : entity.number}`
 
 interface PrGroup {
   prs: PullEntity[]
@@ -32,14 +37,17 @@ export const associate = (
   branchRuns: readonly RunEntity[] = [],
   sessionBranch?: string,
 ): Chain[] => {
-  const pulls = entities.filter((entity): entity is PullEntity => entity.kind === "pr")
-  const issues = entities.filter((entity): entity is IssueEntity => entity.kind === "issue")
-  const allRuns = [...entities.filter((entity): entity is RunEntity => entity.kind === "run"), ...branchRuns]
+  const uniqueEntities = [...new Map([...entities, ...branchRuns].map((entity) => [entityKey(entity), entity])).values()]
+  const pulls = uniqueEntities.filter((entity): entity is PullEntity => entity.kind === "pr")
+  const issues = uniqueEntities.filter((entity): entity is IssueEntity => entity.kind === "issue")
+  const allRuns = uniqueEntities.filter((entity): entity is RunEntity => entity.kind === "run")
 
   // 1. Merge PRs into groups by shared closing issues.
   const groups: PrGroup[] = []
   for (const pull of pulls.toSorted(byNewest)) {
-    const shared = groups.find((group) => pull.closes.some((number) => group.issueNumbers.has(number)))
+    const shared = groups.find(
+      (group) => sameRepo(group.prs[0]!, pull) && pull.closes.some((number) => group.issueNumbers.has(number)),
+    )
     if (shared) {
       shared.prs.push(pull)
       pull.closes.forEach((number) => shared.issueNumbers.add(number))
@@ -48,14 +56,18 @@ export const associate = (
     }
   }
 
-  // 2. Runs attach to their PR's group by head SHA; issues attach to the group
-  // whose PR closes their number.
+  // 2. Runs attach by GitHub's explicit association, exact head SHA, or branch.
+  // Review-comment runs often omit pull_requests and use an older SHA, but keep
+  // the PR branch name; those historical runs belong in the PR's activity chain.
   const takenRuns = new Set<string>()
   for (const group of groups) {
     for (const pr of group.prs) {
-      const owned = allRuns.filter((run) => run.headSha === pr.headSha && sameRepo(run, pr))
+      const owned = allRuns.filter((run) => {
+        return pullsForRun(run, pulls).some((associatedPull) => associatedPull.number === pr.number && sameRepo(associatedPull, pr))
+      })
       owned.forEach((run) => takenRuns.add(`${repoKey(run.repo)}#run${run.id}`))
-      group.runs.push(...owned)
+      for (const run of owned)
+        if (!group.runs.some((candidate) => candidate.id === run.id && sameRepo(candidate, run))) group.runs.push(run)
     }
     for (const issue of issues) {
       if (sameRepo(issue, group.prs[0]!) && group.issueNumbers.has(issue.number)) group.issues.push(issue)
