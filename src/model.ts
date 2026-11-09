@@ -176,6 +176,32 @@ export const mergeWhy = (chain: Chain, pull = chain.prs[0]): string => {
   return "not ready"
 }
 
+/** Pill eligibility — what deserves the composer's highest-commitment surface.
+ * Eligible: the session's own work (a PR from the session's branch — it stays
+ * shown after merging; the pill represents the session's work and moves on
+ * only when a newer PR appears, which `pillPick`'s newest ranking handles)
+ * and anything needing attention now: CI queued/running/failed (status-derived,
+ * so a discovered failure pills with no mention at all) and an armed PR
+ * pending merge. Everything else is sidebar material: other branches' PRs
+ * (mention is not intent — see the PR #5 recruiting incident), issue-only
+ * chains, closed-without-merge work, settled run-only chains. */
+export const pillEligible = (
+  chain: Chain,
+  ctx: { sessionBranch?: string; armedNumbers?: readonly number[] } = {},
+): boolean => {
+  if (
+    ctx.sessionBranch !== undefined &&
+    chain.prs.some((pull) => pull.headBranch === ctx.sessionBranch && pull.state !== "closed")
+  )
+    return true
+  if (chain.runs.some((run) => run.status === "queued" || run.status === "running" || run.status === "failed"))
+    return true
+  const armed = ctx.armedNumbers ?? []
+  if (armed.length > 0 && chain.prs.some((pull) => pull.state === "open" && armed.includes(pull.number)))
+    return true
+  return false
+}
+
 /** The pill's lead chain: the worst-toned PR chain outranks recency (failing
  * checks, conflicts, or a requested review beat a calm newer one); otherwise the
  * most recently updated PR chain; run-bearing chains are the last resort. An
