@@ -1,0 +1,14 @@
+src/gui/window.tsx
+  h_ea91e2db23540f 431,529,546,830-833
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6d7fe5d7e96b41c1b223bc858cfb09117ffab6c2",
+  "prompts": {},
+  "humans": {
+    "h_ea91e2db23540f": {
+      "author": "Emre Şafak <3928300+esafak@users.noreply.github.com>"
+    }
+  }
+}
