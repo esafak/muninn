@@ -15,7 +15,9 @@ import type { Lexicon } from "./providers/lexicon"
 const stripCode = (text: string): string =>
   text.replace(/```[\s\S]*?```/g, " ").replace(/~~~[\s\S]*?~~~/g, " ").replace(/`[^`\n]*`/g, " ")
 
-const kindWordPattern = /\b(pull request|pr|issue|check run|run)\s+#?(\d+)\b/gi
+// `[^\S\n]` — horizontal whitespace only: a kind word and its number must share a
+// line, so line-numbered tool output ("…via-pr\n6: …") can't fabricate references.
+const kindWordPattern = /\b(pull request|pr|issue|check run|run)[^\S\n]+#?(\d+)\b/gi
 const bareHashPattern = /(?<![/\w&])#(\d+)\b/g
 
 const kindWordMap = {

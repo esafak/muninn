@@ -176,6 +176,22 @@ describe("pillPick", () => {
     expect(picked?.chain.key).toBe("run")
   })
 
+  test("issue-only chains never win the pill (nothing to show)", () => {
+    expect(pillPick([chain({ key: "issue", prs: [], runs: [], issues: [issue("open")] })])).toBeUndefined()
+  })
+
+  test("the runs-only fallback picks among run-bearing chains only, newest first", () => {
+    // A merged PR chain filtered out as dead leaves an open issue chain and CI
+    // runs: the pill must land on the runs, never on the run-less issue chain.
+    const stale = chain({ key: "stale", prs: [], runs: [run("failed")], updatedAt: 100 })
+    const issueOnly = chain({ key: "issue", prs: [], runs: [], issues: [issue("open")], updatedAt: 500 })
+    const fresh = chain({ key: "fresh", prs: [], runs: [run("running")], updatedAt: 300 })
+    const picked = pillPick([stale, issueOnly, fresh])
+    expect(picked?.reason).toBe("runs-only")
+    expect(picked?.chain.key).toBe("fresh")
+    expect(picked?.considered).toBe(2)
+  })
+
   test("no chains, no pill", () => {
     expect(pillPick([])).toBeUndefined()
   })
