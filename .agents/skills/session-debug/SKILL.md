@@ -32,7 +32,7 @@ parts table.
 
 ## 2. Recipes
 
-The debug footer truncates session IDs; prefix match works:
+The debug footer carries the full session ID (`gate ✓ <sessionID>`); `LIKE '<prefix>%'` works when you only have part of it:
 
 ```sh
 sqlite3 -readonly ~/.local/share/opencode/opencode.db \
@@ -43,10 +43,13 @@ Dump the conversation in order (this is exactly what the GUI scans via
 `session.message.list`):
 
 ```sh
-sqlite3 -readonly ~/.local/share/opencode/opencode.db \
-  "SELECT data FROM session_message WHERE session_id='<id>' ORDER BY seq" \
-  > /tmp/session.jsonl
+out=$(mktemp) && sqlite3 -readonly ~/.local/share/opencode/opencode.db \
+  "SELECT data FROM session_message WHERE session_id='<id>' ORDER BY seq" > "$out"
 ```
+
+Transcripts can contain secrets (tokens, auth headers in tool output):
+`mktemp` creates the file 0600 — keep it that way, redact before sharing, and
+`rm "$out"` when done.
 
 Message shapes (what each `data` JSON contains):
 
@@ -71,8 +74,10 @@ dump to attribute each ref to its bucket, message, and exact match:
    (text+reasoning) / outputs (`state.content[]` text blocks, grouped per tool
    call).
 4. `deliberateRefs` — tier rank user < command < prose < output (a ref keeps
-   its best tier); an output naming ≥ `LISTING_THRESHOLD` (3) refs of one kind
-   is a listing and that kind drops.
+   its best tier); **each text block of a tool output is judged on its own**:
+   a block naming ≥ `LISTING_THRESHOLD` (3) refs of one kind is a listing and
+   that kind drops from that block. Three blocks with one PR each keep all
+   three.
 
 Validate the simulation by asserting the debug footer's census matches
 (`refs N (user a cmd b prose c out d)`). Then check hydration upstream:
@@ -82,8 +87,15 @@ gh pr view <n> --repo <owner>/<repo> --json state,title,updatedAt,headRefName
 gh issue view <n> --repo <owner>/<repo> --json state,title
 ```
 
-A ref "in the session" without an entity in the store means hydration failed
-(`1 unresolved` in the footer).
+A ref "in the session" without an entity in the store is **not** automatically
+a hydration failure. It can be:
+
+- *pending* — the debounced message-change hydration hasn't run yet; re-check
+- *skipped* — never sent to the provider: no repo resolvable for the ref, or no
+  provider for its host (dropped silently when the hydrate RPC groups refs) —
+  these never count as unresolved
+- *unresolved* — the provider was asked and returned nothing: wrong number,
+  deleted run, private repo without a credential
 
 ## 4. Reading the debug footer
 
@@ -91,17 +103,24 @@ Built by `debugLine` in src/gui/window.tsx:
 
 ```
 mn gui <sha+time> · srv <sha> · gate ✓ <sessionID> · chains N · live N
-· pill: <#n title> · pick: <danger|newest|runs-only>[ of M] · lead <branch match|newest>
+· pill: <#n title> · pick: <danger|newest|runs-only|none>[ of M] · lead <branch match|newest|—>
 · refs N (user a cmd b prose c out d) → hits H/E ents · N refs → H hydrated (kinds) · U unresolved
 ```
 
 - `gate ✓` — the mounted session matches the pill's session (else pills are off)
+- `pick` — `pillPick` rule that won: `danger` / `newest` / `runs-only` /
+  `none`; `of M` counts PR chains for PR picks, all chains for `runs-only`;
+  `lead` says whether the chain's lead PR matched the session's checkout branch
+  (`branch match`) or is just the most recent (`—` when the chain has no PR;
+  run-only picks label `run #id · status`)
 - `refs` census — extracted candidates by provenance tier; `out` = tool outputs
 - `hits/E` — how many refs hit the durable entity store of E cached entities
-- `hydrated` / `unresolved` — last hydrate RPC outcome; unresolved = provider
-  returned nothing (wrong number, deleted run, private repo)
-- `pick` — `pillPick` rule that won and out of how many PR chains; `lead`
-  says whether the chain's lead PR is the session's checkout branch or just newest
+- `hydrated` / `unresolved` — outcome of the last **refresh-cycle** hydration
+  (session mount or 30s poll). The debounced hydration on message changes
+  updates `unresolved` but not the stats line, so stats can lag the newest
+  messages. Unresolved = the provider was asked and returned nothing (wrong
+  number, deleted run, private repo without a credential); refs skipped before
+  hydration never appear here
 
 ## 5. Known false-positive families
 
