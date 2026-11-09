@@ -119,6 +119,10 @@ export const repoKey = (repo: RepoRef): string => `${repo.host}/${repo.owner}/${
 export const refKey = (ref: Ref): string =>
   `${ref.repo ? `${ref.repo.host}/${ref.repo.owner}/${ref.repo.repo}` : "@"}#${ref.kind ?? ""}${ref.number}`
 
+/** The store/dedupe key for a hydrated entity: repo-scoped, runs by id. */
+export const entityKey = (entity: Entity): string =>
+  `${repoKey(entity.repo)}#${entity.kind}${entity.kind === "run" ? entity.id : entity.number}`
+
 /** Whether a PR can merge right now: open, checks green, no conflicts, no
  * outstanding change requests. Defaults to the chain's lead; callers pass an
  * explicit pull to check another member of the chain. Unknown states (entries

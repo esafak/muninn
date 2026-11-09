@@ -13,16 +13,13 @@
  */
 
 import type { Chain, Entity, IssueEntity, PullEntity, RunEntity } from "./model"
-import { repoKey } from "./model"
+import { entityKey, repoKey } from "./model"
 
 const byNewest = (a: { updatedAt: number }, b: { updatedAt: number }): number => b.updatedAt - a.updatedAt
 const sameRepo = (
   a: { repo: { host: string; owner: string; repo: string } },
   b: { repo: { host: string; owner: string; repo: string } },
 ): boolean => a.repo.host === b.repo.host && a.repo.owner === b.repo.owner && a.repo.repo === b.repo.repo
-
-const entityKey = (entity: Entity): string =>
-  `${repoKey(entity.repo)}#${entity.kind}${entity.kind === "run" ? entity.id : entity.number}`
 
 interface PrGroup {
   prs: PullEntity[]
