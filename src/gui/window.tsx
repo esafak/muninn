@@ -5,7 +5,7 @@ import { ComposerPill, MenuItem, Panel, SettingsPage, createKeyed, usePlugin, ty
 import { associate } from "../associate"
 import { deliberateRefs, messageBuckets } from "../extract"
 import type { Chain, Entity, PullEntity, RepoRef, RunEntity, RunStatus } from "../model"
-import { chainTone, armedTargets, pillPick, mergeReady, mergeWhy, refKey, repoKey } from "../model"
+import { chainTone, armedTargets, pillPick, mergeReady, mergeWhy, refKey, repoKey, entityKey } from "../model"
 import { githubLexicon } from "../providers/github/lexicon"
 import { Muninn } from "../rpc"
 import type { definition } from "./definition"
@@ -16,9 +16,6 @@ import { pillIcon } from "./marks"
 const POLL_MS = 30_000
 /** Debounce for scan → hydrate while a message streams in. */
 const HYDRATE_DEBOUNCE_MS = 600
-
-const entityKey = (entity: Entity): string =>
-  `${repoKey(entity.repo)}#${entity.kind}${entity.kind === "run" ? entity.id : entity.number}`
 
 export const setup: Plugin.Setup<typeof definition> = (ctx) => {
   injectStyles()
@@ -428,7 +425,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     id: "links",
     order: 10,
     show: (input) => {
-      if (input.session.id !== meta.sessionID) return undefined
+      if (!input.session || input.session.id !== meta.sessionID) return undefined
       const list = chains().filter((chain) => live(chain))
       if (list.length === 0) return undefined
 
@@ -526,7 +523,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
                   class="mn-pop-more"
                   onClick={() => {
                     input.close()
-                    if (input.session.id) ctx.layout.open(`${ctx.id}:history`, input.session)
+                    if (input.session?.id) ctx.layout.open(`${ctx.id}:history`, input.session)
                   }}
                 >
                   +{chain.runs.length - 3} runs in the sidebar
@@ -543,7 +540,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
                   class="mn-pop-toggle"
                   title={
                     isArmed(lead().pull)
-                      ? `Muninn is driving the merge (${lead().pull.autoMerge ? "also armed on the forge" : "armed locally"}) — click to cancel`
+                      ? `Muninn is driving the merge (${lead().pull.autoMerge ? "also armed on the forge" : "armed locally"}); ${mergeReady(lead().chain, lead().pull) ? "merging on the next check (within ~30s)" : `waiting: ${mergeWhy(lead().chain, lead().pull)}`} — click to cancel`
                       : mergeReady(lead().chain)
                         ? "green now — Muninn merges on its next check (within ~30s)"
                         : `Muninn merges when checks pass and reviews approve — now blocked: ${mergeWhy(lead().chain)}`
@@ -827,7 +824,10 @@ const STYLES = `
   background: var(--v2-state-bg-success, #1a7f37); border: none;
 }
 .mn-merge:hover { filter: brightness(1.1); }
-.mn-merge.pending { background: var(--v2-state-bg-warning, #9a6700); }
+.mn-merge.pending {
+  background: var(--v2-state-bg-warning, #9a6700);
+  color: var(--v2-text-text-base, #161616);
+}
 .mn-merge.armed {
   background: none; color: var(--v2-state-fg-warning, #9a6700);
   box-shadow: inset 0 0 0 .5px var(--v2-state-border-warning, #9a6700);

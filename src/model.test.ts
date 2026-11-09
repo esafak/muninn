@@ -129,6 +129,13 @@ describe("armedTargets", () => {
     expect(targets).toEqual([{ pull: pull({ mergeState: "ready" }), chain: chain({ prs: [pull({ mergeState: "ready" })] }), method: "rebase" }])
   })
 
+  test("readiness is checked for the armed PR, not another PR leading its chain", () => {
+    const lead = pull({ number: 1, mergeState: "blocked" })
+    const target = pull({ number: 4821, mergeState: "ready" })
+    const grouped = chain({ prs: [lead, target] })
+    expect(armedTargets([entry()], [grouped])).toEqual([{ pull: target, chain: grouped, method: "squash" }])
+  })
+
   test("blocked, conflicted and failing chains don't fire yet", () => {
     const blocked = chain({ prs: [pull({ mergeState: "blocked" })] })
     const conflicted = chain({ prs: [pull({ mergeState: "conflict" })] })
