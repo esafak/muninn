@@ -19,6 +19,7 @@ const stripCode = (text: string): string =>
 // line, so line-numbered tool output ("…via-pr\n6: …") can't fabricate references.
 const kindWordPattern = /\b(pull request|pr|issue|check run|run)[^\S\n]+#?(\d+)\b/gi
 const bareHashPattern = /(?<![/\w&])#(\d+)\b/g
+const ordinalHashPattern = /\b(?:feedback|finding|comment|step|item|option|point)[^\S\n]+(#\d+)\b/gi
 
 const kindWordMap = {
   "pull request": "pr",
@@ -72,6 +73,11 @@ export const scan = (text: string, repo?: RepoRef, lexicons: readonly Lexicon[] 
   }
 
   if (repo) {
+    const ordinalHashPositions = new Set<number>()
+    for (const match of source.matchAll(ordinalHashPattern)) {
+      if (match.index !== undefined && match[1])
+        ordinalHashPositions.add(match.index + match[0].length - match[1].length)
+    }
     for (const match of source.matchAll(kindWordPattern)) {
       const number = Number(match[2])
       // Intent is recorded even when an explicit URL also has the number: a
@@ -85,7 +91,7 @@ export const scan = (text: string, repo?: RepoRef, lexicons: readonly Lexicon[] 
       })
     }
     for (const match of source.matchAll(bareHashPattern)) {
-      if (explicitNumbers.has(Number(match[1]))) continue
+      if (explicitNumbers.has(Number(match[1])) || ordinalHashPositions.has(match.index!)) continue
       add({ number: Number(match[1]), repo })
     }
   }

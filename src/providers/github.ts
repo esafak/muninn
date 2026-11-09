@@ -245,6 +245,7 @@ const toPullEntity = (repo: RepoRef, pull: PullJson): PullEntity => ({
   number: pull.number,
   title: pull.title,
   state: pull.merged_at ? "merged" : pull.draft ? "draft" : pull.state,
+  mergedAt: pull.merged_at ? epoch(pull.merged_at) : undefined,
   headBranch: pull.head.ref,
   baseBranch: pull.base.ref,
   closes: closingIssues(pull.body),

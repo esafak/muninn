@@ -5,7 +5,7 @@ import { ComposerPill, MenuItem, Panel, SettingsPage, createKeyed, usePlugin, ty
 import { associate } from "../associate"
 import { deliberateRefs, messageBuckets } from "../extract"
 import type { Chain, Entity, PullEntity, RepoRef, RunEntity, RunStatus } from "../model"
-import { chainTone, armedTargets, pillPick, mergeReady, mergeWhy, refKey, repoKey, entityKey } from "../model"
+import { chainTone, armedTargets, pillPick, mergeReady, mergeWhy, pullForRun, refKey, repoKey, entityKey } from "../model"
 import { githubLexicon } from "../providers/github/lexicon"
 import { Muninn } from "../rpc"
 import type { definition } from "./definition"
@@ -221,11 +221,28 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
   // (the history panel keeps it) — so backfilling an old session stays quiet.
   // Run-only chains are the exception: they exist because the session explicitly
   // referenced a run, so they stay until a day passes without activity.
-  const live = (chain: Chain): boolean =>
-    chain.prs.some((pull) => pull.state === "open" || pull.state === "draft") ||
-    chain.runs.some((run) => run.status === "queued" || run.status === "running" || run.status === "failed") ||
+  const live = (chain: Chain): boolean => {
+    const currentRuns = chain.prs.length === 0
+      ? chain.runs
+      : chain.runs.filter((run) =>
+          chain.prs.some((pull) => (pull.state === "open" || pull.state === "draft") && pull.headSha === run.headSha),
+        )
+    return chain.prs.some((pull) => pull.state === "open" || pull.state === "draft") ||
+    currentRuns.some((run) => run.status === "queued" || run.status === "running" || run.status === "failed") ||
     (chain.prs.length === 0 && chain.issues.some((issue) => issue.state === "open")) ||
     (chain.prs.length === 0 && chain.issues.length === 0 && Date.now() - chain.updatedAt < DAY_MS)
+  }
+
+  /** Keep a sole completed PR visible as a terminal pill; otherwise show live work only. */
+  const pillChains = (): readonly Chain[] => {
+    const active = chains().filter(live)
+    if (active.length > 0) return active
+    const pullChains = chains().filter((chain) => chain.prs.length > 0)
+    return pullChains.length === 1 && pullChains[0]!.prs.some((pull) => pull.state === "merged") ? pullChains : []
+  }
+  const menuLead = createMemo(() =>
+    pillChains().flatMap((chain) => chain.prs.filter((pull) => pull.state === "open").map((pull) => ({ chain, pull })))[0],
+  )
 
   /** Whether a PR is armed for Muninn-driven merge-when-ready — ours, or already
    * armed on the forge's side (shown the same; cancel handles both). */
@@ -369,16 +386,16 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     const liveChains = chains().filter((chain) => live(chain))
     const liveCount = liveChains.length
     // The capsule's exact pick, then the why: which rule won and out of how many
-    // candidates, and how the chain chose its lead PR. Picked from the live
-    // chains only, exactly like the capsule.
-    const picked = pillPick(liveChains)
-    const lead = picked?.chain.prs[0]
+    // candidates, and how the chain chose its lead PR.
+    const picked = pillPick(pillChains())
+    const lead = picked?.chain.prs.find((pull) => pull.state === "open" || pull.state === "draft") ??
+      (picked?.reason === "merged" ? picked.chain.prs.find((pull) => pull.state === "merged") : undefined)
     const pill = !picked
       ? liveCount > 0
         ? "off: no eligible chains"
         : "off: no live chains"
       : lead
-        ? `#${lead.number} ${lead.title.slice(0, 36)}`
+        ? `#${lead.number} ${lead.title.slice(0, 36)}${lead.state === "merged" ? " · merged" : ""}`
         : picked.chain.runs[0]
           ? `run #${picked.chain.runs[0].id}`
           : "off"
@@ -421,45 +438,53 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     return <QueuedGlyph />
   }
 
+  const copyLink = (event: MouseEvent, url: string): void => {
+    event.stopPropagation()
+    void ctx.system.copy(url).catch(() => undefined)
+  }
+
   ctx.add(ComposerPill, {
     id: "links",
     order: 10,
     show: (input) => {
       if (!input.session || input.session.id !== meta.sessionID) return undefined
-      const list = chains().filter((chain) => live(chain))
+      const list = pillChains()
       if (list.length === 0) return undefined
 
       // PR chains are the primary work: the pill leads with the worst-toned PR
       // chain (failing/conflicted/review-blocked beats a calm newer one), else
-      // the most recently updated; run-only chains are the last resort. Picked
-      // from the live chains — a merged chain can't ride along on a live issue
-      // chain elsewhere. The same `pillPick` powers the footer's pick diagnostics.
+      // the most recently updated; run-only chains are the last resort. The same
+      // `pillPick` powers the footer's pick diagnostics.
       const picked = pillPick(list)
       if (!picked) return undefined
       const worst = picked.chain
-      const lead = worst.prs[0]
+      const lead = worst.prs.find((pull) => pull.state === "open" || pull.state === "draft") ??
+        (picked.reason === "merged" ? worst.prs.find((pull) => pull.state === "merged") : undefined)
       const run = worst.runs[0]
-      // pillPick only returns PR chains or run-bearing chains; guard anyway —
-      // an issue-only chain has nothing to show.
       if (!lead && !run) return undefined
-      const tone = chainTone(worst)
+      const chainStatus = chainTone(worst)
+      const tone = lead?.state === "merged" && chainStatus === "success" ? undefined : chainStatus
 
       // The capsule reads like GitHub's PR status: a circle icon in the worst
       // state's color, then `#number title ⌄` — short enough that the chevron
       // (the affordance that this opens a menu) survives truncation. An armed
       // lead PR puts a ticking braille spinner in front: a merge is pending.
       const circle =
-        tone === "success" ? "circle-check" : tone === "warning" ? "circle-exclamation" : tone === "danger" ? "circle-xmark" : pillIcon(meta.provider)
+        lead?.state === "merged" ? "circle-check" : tone === "success" ? "circle-check" : tone === "warning" ? "circle-exclamation" : tone === "danger" ? "circle-xmark" : pillIcon(meta.provider)
       const short = (title: string): string => (title.length > 24 ? `${title.slice(0, 24)}…` : title)
-      const pending = lead ? isArmed(lead) : false
+      const pending = lead?.state === "open" ? isArmed(lead) : false
 
       return {
         icon: circle,
         label: lead
-          ? `${pending ? `${SPIN_FRAMES[spin()]} ` : ""}#${lead.number} ${short(lead.title)} ▾`
-          : `run #${run!.id} · ${ctx.t(`state.${run!.status}`)} ▾`,
+          ? `${pending ? `${SPIN_FRAMES[spin()]} ` : ""}#${lead.number} ${short(lead.title)}${lead.state === "merged" ? " · merged" : ""} ▾`
+          : `run #${run!.id}${run!.status === "succeeded" ? "" : ` · ${ctx.t(`state.${run!.status}`)}`} ▾`,
         tone,
-        title: lead ? `#${lead.number} ${lead.title}` : ctx.t("pill.title"),
+        title: lead
+          ? `#${lead.number} ${lead.title}${lead.state === "merged"
+            ? ` · merged${lead.mergedAt === undefined ? "" : ` · ${new Date(lead.mergedAt).toLocaleString()}`}`
+            : ""}`
+          : ctx.t("pill.title"),
       }
     },
     // The pill's dropdown: the full chain picture with the merge controls the
@@ -468,12 +493,9 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     menu: (input) => {
       // The lead open PR across live chains: the footer's merge-when-ready
       // toggle binds to it. Reactive — the popover updates while it's open.
-      const lead = chains()
-        .filter((chain) => live(chain))
-        .flatMap((chain) => chain.prs.filter((pull) => pull.state === "open").map((pull) => ({ chain, pull })))[0]
       return (
       <div class="mn-pop">
-        <For each={chains().filter((chain) => live(chain)).slice(0, 3)}>
+        <For each={pillChains().slice(0, 3)}>
           {(chain) => (
             <div class="mn-pop-chain">
               <For each={chain.prs}>
@@ -493,6 +515,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
                     <span class="mn-pop-id">#{pull.number}</span>
                     <span class="mn-pop-title">{pull.title}</span>
                     <MergeButton chain={chain} pull={pull} isArmed={isArmed} onMerge={mergePull} onArm={armPull} />
+                    <button class="mn-copy-link" type="button" title="Copy PR link" aria-label="Copy PR link" onClick={(event) => copyLink(event, pull.url)}>copy</button>
                   </div>
                 )}
               </For>
@@ -504,19 +527,26 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
                     </span>
                     <span class="mn-pop-id">#{issue.number}</span>
                     <span class="mn-pop-title">{issue.title}</span>
+                    <button class="mn-copy-link" type="button" title="Copy issue link" aria-label="Copy issue link" onClick={(event) => copyLink(event, issue.url)}>copy</button>
                   </div>
                 )}
               </For>
               <For each={chain.runs.slice(0, 3)}>
-                {(run) => (
-                  <div class="mn-pop-row" onClick={() => { input.close(); open(run.url) }}>
-                    <span class="mn-kind" data-state={run.status} title={ctx.t(`state.${run.status}`)}>
-                      {runGlyph(run.status)}
-                    </span>
-                    <span class="mn-pop-id">#{run.id}</span>
-                    <span class="mn-pop-title">{run.name}</span>
-                  </div>
-                )}
+                {(run) => {
+                  const relatedPull = pullForRun(run, chain.prs)
+                  return (
+                    <div class="mn-pop-row" onClick={() => { input.close(); open(run.url) }}>
+                      <span class="mn-kind" data-state={run.status} title={ctx.t(`state.${run.status}`)}>
+                        {runGlyph(run.status)}
+                      </span>
+                      <span class="mn-pop-id">#{run.id}</span>
+                      <span class="mn-pop-title" title={relatedPull ? `${run.name} · associated with PR #${relatedPull.number}` : run.name}>
+                        {run.name}{relatedPull ? ` · PR #${relatedPull.number}` : ""}
+                      </span>
+                      <button class="mn-copy-link" type="button" title="Copy run link" aria-label="Copy run link" onClick={(event) => copyLink(event, run.url)}>copy</button>
+                    </div>
+                  )
+                }}
               </For>
               <Show when={chain.runs.length > 3}>
                 <div
@@ -532,18 +562,19 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
             </div>
           )}
         </For>
+        <Show when={menuLead()}>
         <div class="mn-pop-foot">
           <div class="mn-pop-line">
-            <Show when={lead}>
+            <Show when={menuLead()}>
               {(lead) => (
                 <label
                   class="mn-pop-toggle"
                   title={
                     isArmed(lead().pull)
                       ? `Muninn is driving the merge (${lead().pull.autoMerge ? "also armed on the forge" : "armed locally"}); ${mergeReady(lead().chain, lead().pull) ? "merging on the next check (within ~30s)" : `waiting: ${mergeWhy(lead().chain, lead().pull)}`} — click to cancel`
-                      : mergeReady(lead().chain)
+                      : mergeReady(lead().chain, lead().pull)
                         ? "green now — Muninn merges on its next check (within ~30s)"
-                        : `Muninn merges when checks pass and reviews approve — now blocked: ${mergeWhy(lead().chain)}`
+                        : `Muninn merges when checks pass and reviews approve — now blocked: ${mergeWhy(lead().chain, lead().pull)}`
                     }
                 >
                   <input
@@ -578,6 +609,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
             delete branch
           </label>
         </div>
+        </Show>
       </div>
       )
     },
@@ -791,6 +823,8 @@ const STYLES = `
 .mn-pop-chain + .mn-pop-chain { margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--v2-border-border-muted); }
 .mn-pop-row { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: 7px; font-size: 12px; min-width: 0; }
 .mn-pop-row:hover { background: var(--v2-overlay-simple-overlay-hover); cursor: pointer; }
+.mn-copy-link { flex: none; border: 0; border-radius: 4px; padding: 2px 5px; background: transparent; color: var(--v2-text-text-muted); font: inherit; font-size: 10px; cursor: pointer; }
+.mn-copy-link:hover { background: var(--v2-overlay-simple-overlay-hover); color: var(--v2-text-text-base); }
 .mn-pop-id { font-family: var(--v2-font-family-code); font-size: 11px; color: var(--v2-text-text-muted); flex: none; }
 .mn-pop-title { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--v2-text-text-base); }
 .mn-pop-more { padding: 4px 8px; font-size: 11px; color: var(--v2-text-text-faint); cursor: pointer; border-radius: 7px; }

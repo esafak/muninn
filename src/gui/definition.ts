@@ -40,6 +40,7 @@ const Entity = Schema.Union([
     number: Schema.Number,
     title: Schema.String,
     state: Schema.Literals(["open", "draft", "merged", "closed"]),
+    mergedAt: Schema.optional(Schema.Number),
     headBranch: Schema.String,
     baseBranch: Schema.String,
     closes: Schema.Array(Schema.Number),

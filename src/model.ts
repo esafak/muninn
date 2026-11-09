@@ -84,6 +84,8 @@ export interface PullEntity extends Base {
   number: number
   title: string
   state: PullState
+  /** Merge timestamp from the provider, in epoch milliseconds. */
+  mergedAt?: number
   headBranch: string
   baseBranch: string
   /** Issue numbers the pull request closes, parsed from its body. */
@@ -116,6 +118,20 @@ export interface Chain {
 
 export const repoKey = (repo: RepoRef): string => `${repo.host}/${repo.owner}/${repo.repo}`
 
+/** Resolve all PRs a run belongs to, using explicit metadata, SHA, then unique branch. */
+export const pullsForRun = (run: RunEntity, pulls: readonly PullEntity[]): PullEntity[] => {
+  const sameRepoPulls = pulls.filter((pull) => repoKey(pull.repo) === repoKey(run.repo))
+  if (run.pullRequests.length > 0) return sameRepoPulls.filter((pull) => run.pullRequests.includes(pull.number))
+  const bySha = sameRepoPulls.filter((pull) => pull.headSha === run.headSha)
+  if (bySha.length > 0) return bySha
+  const byBranch = sameRepoPulls.filter((pull) => pull.headBranch === run.headBranch)
+  return byBranch.length === 1 ? byBranch : []
+}
+
+/** Resolve the most relevant single PR for labels that can display only one. */
+export const pullForRun = (run: RunEntity, pulls: readonly PullEntity[]): PullEntity | undefined =>
+  pullsForRun(run, pulls)[0]
+
 export const refKey = (ref: Ref): string =>
   `${ref.repo ? `${ref.repo.host}/${ref.repo.owner}/${ref.repo.repo}` : "@"}#${ref.kind ?? ""}${ref.number}`
 
@@ -129,7 +145,7 @@ export const entityKey = (entity: Entity): string =>
  * hydrated by older code) don't block — they fall back to the checks. */
 export const mergeReady = (chain: Chain, pull = chain.prs[0]): boolean => {
   if (!pull || pull.state !== "open") return false
-  if (!chain.runs.every((run) => run.status === "succeeded")) return false
+  if (!chain.runs.filter((run) => run.headSha === pull.headSha).every((run) => run.status === "succeeded")) return false
   if (pull.reviewState === "changes_requested" || pull.mergeState === "conflict") return false
   if (pull.mergeState && pull.mergeState !== "ready") return false
   return true
@@ -138,9 +154,10 @@ export const mergeReady = (chain: Chain, pull = chain.prs[0]): boolean => {
 /** Why a PR can't merge yet — the disabled button's tooltip. Defaults to the
  * chain's lead; callers pass an explicit pull to explain another member. */
 export const mergeWhy = (chain: Chain, pull = chain.prs[0]): string => {
-  const failed = chain.runs.find((run) => run.status === "failed")
+  const currentRuns = chain.runs.filter((run) => run.headSha === pull?.headSha)
+  const failed = currentRuns.find((run) => run.status === "failed")
   if (failed) return `checks failed (run #${failed.id})`
-  if (chain.runs.some((run) => run.status === "queued" || run.status === "running")) return "checks still running"
+  if (currentRuns.some((run) => run.status === "queued" || run.status === "running")) return "checks still running"
   if (pull?.reviewState === "changes_requested") return "changes requested"
   if (pull?.mergeState === "conflict") return "merge conflicts with the base branch"
   if (pull?.mergeState === "blocked") return "blocked by branch rules or a missing review"
@@ -154,12 +171,14 @@ export const mergeWhy = (chain: Chain, pull = chain.prs[0]): string => {
  * issue-only chain never wins — there is nothing to show. */
 export const pillPick = (
   chains: readonly Chain[],
-): { chain: Chain; reason: "danger" | "newest" | "runs-only"; considered: number } | undefined => {
+): { chain: Chain; reason: "danger" | "newest" | "runs-only" | "merged"; considered: number } | undefined => {
   const byNewest = (a: { updatedAt: number }, b: { updatedAt: number }): number => b.updatedAt - a.updatedAt
-  const prChains = chains.filter((chain) => chain.prs.length > 0).toSorted(byNewest)
+  const prChains = chains.filter((chain) => chain.prs.some((pull) => pull.state === "open" || pull.state === "draft")).toSorted(byNewest)
   const danger = prChains.find((chain) => chainTone(chain) === "danger")
   if (danger) return { chain: danger, reason: "danger", considered: prChains.length }
   if (prChains[0]) return { chain: prChains[0], reason: "newest", considered: prChains.length }
+  if (chains.length === 1 && chains[0]!.prs.some((pull) => pull.state === "merged"))
+    return { chain: chains[0]!, reason: "merged", considered: 1 }
   const runChains = chains.filter((chain) => chain.runs.length > 0).toSorted(byNewest)
   if (runChains[0]) return { chain: runChains[0], reason: "runs-only", considered: runChains.length }
   return undefined
@@ -201,12 +220,17 @@ export const armedTargets = (
  * chain reads as success.
  */
 export const chainTone = (chain: Chain): "success" | "warning" | "danger" | undefined => {
-  if (chain.runs.some((run) => run.status === "failed")) return "danger"
-  const lead = chain.prs[0]
+  const lead = chain.prs.find((pull) => pull.state === "open" || pull.state === "draft") ?? chain.prs[0]
+  const relevantRuns = lead
+    ? chain.runs.filter((run) => run.headSha === lead.headSha)
+    : chain.prs.length === 0
+      ? chain.runs
+      : []
+  if (relevantRuns.some((run) => run.status === "failed")) return "danger"
   if (lead?.mergeState === "conflict" || lead?.reviewState === "changes_requested") return "danger"
-  if (chain.runs.some((run) => run.status === "running" || run.status === "queued")) return "warning"
+  if (relevantRuns.some((run) => run.status === "running" || run.status === "queued")) return "warning"
   if (lead?.state === "open" && (lead.mergeState === "blocked" || lead.mergeState === "pending")) return "warning"
-  if (lead?.state === "open" && mergeReady(chain)) return "success"
+  if (lead?.state === "open" && mergeReady(chain, lead)) return "success"
   if (lead?.state === "merged") return "success"
   if (chain.prs.length === 0 && chain.runs.some((run) => run.status === "succeeded")) return "success"
   return undefined

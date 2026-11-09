@@ -13,7 +13,7 @@
  */
 
 import type { Chain, Entity, IssueEntity, PullEntity, RunEntity } from "./model"
-import { entityKey, repoKey } from "./model"
+import { entityKey, pullsForRun, repoKey } from "./model"
 
 const byNewest = (a: { updatedAt: number }, b: { updatedAt: number }): number => b.updatedAt - a.updatedAt
 const sameRepo = (
@@ -62,14 +62,18 @@ export const associate = (
     }
   }
 
-  // 2. Runs attach to their PR's group by head SHA; issues attach to the group
-  // whose PR closes their number.
+  // 2. Runs attach by GitHub's explicit association, exact head SHA, or branch.
+  // Review-comment runs often omit pull_requests and use an older SHA, but keep
+  // the PR branch name; those historical runs belong in the PR's activity chain.
   const takenRuns = new Set<string>()
   for (const group of groups) {
     for (const pr of group.prs) {
-      const owned = allRuns.filter((run) => run.headSha === pr.headSha && sameRepo(run, pr))
+      const owned = allRuns.filter((run) => {
+        return pullsForRun(run, pulls).some((associatedPull) => associatedPull.number === pr.number && sameRepo(associatedPull, pr))
+      })
       owned.forEach((run) => takenRuns.add(`${repoKey(run.repo)}#run${run.id}`))
-      group.runs.push(...owned)
+      for (const run of owned)
+        if (!group.runs.some((candidate) => candidate.id === run.id && sameRepo(candidate, run))) group.runs.push(run)
     }
     for (const issue of issues) {
       if (sameRepo(issue, group.prs[0]!) && group.issueNumbers.has(issue.number)) group.issues.push(issue)

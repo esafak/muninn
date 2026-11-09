@@ -52,8 +52,34 @@ describe("associate", () => {
     expect(chains).toHaveLength(2)
   })
 
+  test("review-comment runs with empty PR metadata attach by branch when their SHA differs", () => {
+    const reviewerRun: RunEntity = {
+      ...run(18420, "merge-commit-sha", 250),
+      headBranch: pull.headBranch,
+      pullRequests: [],
+      name: "Pi Reviewer",
+    }
+    const chains = associate([pull], [reviewerRun])
+
+    expect(chains).toHaveLength(1)
+    expect(chains[0]?.runs.map((candidate) => candidate.id)).toEqual([18420])
+  })
+
+  test("branch-only reviewer runs stay unattached when multiple PRs share the branch", () => {
+    const sameBranchPull: PullEntity = { ...pull, number: 4822, headSha: "different-head" }
+    const reviewerRun: RunEntity = {
+      ...run(18421, "merge-commit-sha", 250),
+      pullRequests: [],
+      name: "Pi Reviewer",
+    }
+    const chains = associate([pull, sameBranchPull], [reviewerRun])
+
+    expect(chains).toHaveLength(2)
+    expect(chains.find((chain) => chain.prs.length === 0)?.runs.map((candidate) => candidate.id)).toEqual([18421])
+  })
+
   test("unclaimed branch runs stand alone", () => {
-    const chains = associate([pull], [run(18410, "def456", 400)])
+    const chains = associate([pull], [{ ...run(18410, "def456", 400), headBranch: "unrelated-branch" }])
     const standalone = chains.find((chain) => chain.prs.length === 0)
     expect(standalone?.runs[0]?.id).toBe(18410)
   })
