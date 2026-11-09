@@ -134,5 +134,5 @@ mn gui <sha+time> · srv <sha> · gate ✓ <sessionID> · chains N · live N
 - Coincidental collisions hydrate: a fabricated number can resolve to a real,
   unrelated entity (hydrated ≠ deliberate).
 - The pill pick now runs over live chains only, and `pillPick` never returns a
-  run-less chain — a dead (merged) chain can't win, and an issue-only chain
-  renders no pill at all.
+  chain lacking both PRs and runs — a dead (merged) chain can't win, and an
+  issue-only chain renders no pill at all.

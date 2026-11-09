@@ -377,7 +377,9 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     const picked = pillPick(liveChains)
     const lead = picked?.chain.prs[0]
     const pill = !picked
-      ? "off: no live chains"
+      ? liveCount > 0
+        ? "off: no eligible chains"
+        : "off: no live chains"
       : lead
         ? `#${lead.number} ${lead.title.slice(0, 36)}`
         : picked.chain.runs[0]
