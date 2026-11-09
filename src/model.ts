@@ -142,12 +142,20 @@ export const entityKey = (entity: Entity): string =>
 /** Whether a PR can merge right now: open, checks green, no conflicts, no
  * outstanding change requests. Defaults to the chain's lead; callers pass an
  * explicit pull to check another member of the chain. Unknown states (entries
- * hydrated by older code) don't block — they fall back to the checks. */
+ * hydrated by older code) don't block — they fall back to the checks. No
+ * evidence, no merge: zero known runs merges only on the provider's explicit
+ * clean state, never on absence of data. */
 export const mergeReady = (chain: Chain, pull = chain.prs[0]): boolean => {
   if (!pull || pull.state !== "open") return false
   if (!chain.runs.filter((run) => run.headSha === pull.headSha).every((run) => run.status === "succeeded")) return false
   if (pull.reviewState === "changes_requested" || pull.mergeState === "conflict") return false
   if (pull.mergeState && pull.mergeState !== "ready") return false
+  // No evidence, no merge: a green run on this PR's current head, or the
+  // provider's explicit clean state. Stale runs from earlier commits neither
+  // block nor count as evidence, and a minimal forge with no run discovery and
+  // no merge state is never auto-mergeable (accepted: GitHub always hydrates
+  // state, so its clean `ready` is itself the evidence when no runs are known).
+  if (!chain.runs.some((run) => run.headSha === pull.headSha) && pull.mergeState !== "ready") return false
   return true
 }
 
@@ -162,6 +170,9 @@ export const mergeWhy = (chain: Chain, pull = chain.prs[0]): string => {
   if (pull?.mergeState === "conflict") return "merge conflicts with the base branch"
   if (pull?.mergeState === "blocked") return "blocked by branch rules or a missing review"
   if (!pull || pull.state !== "open") return "pull request is not open"
+  // Mirror the evidence gate: this is the chain that just lost merge readiness.
+  if (!chain.runs.some((run) => run.headSha === pull?.headSha) && pull?.mergeState !== "ready")
+    return "no checks on record for the current head"
   return "not ready"
 }
 
@@ -193,7 +204,8 @@ export interface ArmedEntry {
 }
 
 /** Armed entries whose chain is mergeable right now. Providers without merge or
- * review state fall back to checks, so this drives identically on any forge. */
+ * review state fall back to checks — which must be on record (no evidence, no
+ * merge), so a state-less forge without known runs never drives an armed merge. */
 export const armedTargets = (
   entries: readonly ArmedEntry[],
   chains: readonly Chain[],

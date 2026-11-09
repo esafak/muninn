@@ -74,15 +74,35 @@ describe("mergeReady", () => {
     expect(mergeReady(chain({ prs: [pull({ mergeState: "pending" })] }))).toBe(false)
   })
 
+  test("no evidence, no merge: zero runs with unknown or absent merge state is not ready", () => {
+    expect(mergeReady(chain({ runs: [] }))).toBe(false)
+    expect(mergeReady(chain({ runs: [], prs: [pull({ mergeState: null })] }))).toBe(false)
+  })
+
+  test("the provider's explicit clean state is evidence enough without runs", () => {
+    expect(mergeReady(chain({ runs: [], prs: [pull({ mergeState: "ready" })] }))).toBe(true)
+  })
+
+  test("runs-present behavior unchanged", () => {
+    expect(mergeReady(chain({ runs: [run("queued")] }))).toBe(false)
+    expect(mergeReady(chain({ runs: [run("succeeded")] }))).toBe(true)
+    expect(mergeReady(chain({ runs: [run("succeeded"), run("failed")] }))).toBe(false)
+  })
+
   test("red checks, closed and merged PRs are not ready", () => {
     expect(mergeReady(chain({ runs: [run("failed")] }))).toBe(false)
     expect(mergeReady(chain({ prs: [pull({ state: "merged" })] }))).toBe(false)
     expect(mergeReady(chain({ prs: [] }))).toBe(false)
   })
 
-  test("old runs from earlier commits don't block the current PR head", () => {
+  test("stale runs from earlier commits neither block nor fabricate evidence", () => {
     const previousRun = { ...run("failed"), headSha: "previous-head" }
-    expect(mergeReady(chain({ runs: [previousRun] }))).toBe(true)
+    // No current-head evidence and no merge state: not mergeable (no evidence, no merge)…
+    expect(mergeReady(chain({ runs: [previousRun] }))).toBe(false)
+    // …but the provider's explicit clean state is evidence on its own…
+    expect(mergeReady(chain({ runs: [previousRun], prs: [pull({ mergeState: "ready" })] }))).toBe(true)
+    // …and a current green run still merges despite the stale failure.
+    expect(mergeReady(chain({ runs: [previousRun, run("succeeded")] }))).toBe(true)
   })
 
   test("readiness can be evaluated for a selected PR in a grouped chain", () => {
@@ -105,6 +125,18 @@ describe("mergeWhy", () => {
     expect(mergeWhy(chain({ prs: [pull({ mergeState: "blocked" })] }))).toBe("blocked by branch rules or a missing review")
     expect(mergeWhy(chain({ prs: [pull({ state: "merged" })] }))).toBe("pull request is not open")
   })
+
+  test("names the missing-evidence block instead of a generic not ready", () => {
+    // Zero runs, unknown state: the exact chain the evidence gate newly blocks.
+    expect(mergeWhy(chain({ runs: [] }))).toBe("no checks on record for the current head")
+    // Stale runs from earlier heads are not evidence either.
+    const stale = chain({ runs: [{ ...run("failed"), headSha: "previous-head" }] })
+    expect(mergeWhy(stale)).toBe("no checks on record for the current head")
+    // But the provider's clean state is evidence — nothing to explain here, and
+    // a run on the current head keeps the ordinary reasons in charge.
+    expect(mergeWhy(chain({ runs: [], prs: [pull({ mergeState: "ready" })] }))).toBe("not ready")
+    expect(mergeWhy(chain({ runs: [run("failed")] }))).toBe("checks failed (run #906)")
+  })
 })
 
 describe("chainTone", () => {
@@ -114,11 +146,13 @@ describe("chainTone", () => {
     expect(chainTone(chain({ prs: [pull({ reviewState: "changes_requested" })] }))).toBe("danger")
   })
 
-  test("historical runs do not affect the current PR tone", () => {
+  test("historical runs neither block the tone nor fabricate success", () => {
     const staleFailedRun = { ...run("failed"), headSha: "previous-head" }
-    const currentQueuedRun = { ...run("queued"), headSha: "previous-head" }
-    expect(chainTone(chain({ runs: [staleFailedRun] }))).toBe("success")
-    expect(chainTone(chain({ runs: [currentQueuedRun] }))).toBe("success")
+    const staleQueuedRun = { ...run("queued"), headSha: "previous-head" }
+    // No current-head evidence and no merge state: calm/unknown — historical
+    // runs read as neither danger/warning nor a green chain (no evidence, no merge).
+    expect(chainTone(chain({ runs: [staleFailedRun] }))).toBeUndefined()
+    expect(chainTone(chain({ runs: [staleQueuedRun] }))).toBeUndefined()
     expect(chainTone(chain({ runs: [run("failed")] }))).toBe("danger")
     expect(chainTone(chain({ runs: [run("running")] }))).toBe("warning")
   })
