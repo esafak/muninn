@@ -1,5 +1,5 @@
 ---
-name: Session Debug
+name: session-debug
 description: Inspect an OpenCode v2 session's storage and messages (opencode.db SQLite) and trace why Muninn's pill/footer shows a given issue, PR, or run. Triggers on "why is X in this session", debug-footer questions, ref-provenance questions, and session-data forensics.
 ---
 
