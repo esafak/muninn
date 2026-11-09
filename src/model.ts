@@ -194,7 +194,16 @@ export const pillEligible = (
     chain.prs.some((pull) => pull.headBranch === ctx.sessionBranch && pull.state !== "closed")
   )
     return true
-  if (chain.runs.some((run) => run.status === "queued" || run.status === "running" || run.status === "failed"))
+  // CI needing attention, scoped to current work: runs on open/draft PR heads,
+  // or any run when the chain has no PRs (a discovered failure pills with no
+  // mention at all). Stale runs — earlier heads, merged/closed PRs — are
+  // history, not attention.
+  const current = chain.prs.length === 0
+    ? chain.runs
+    : chain.runs.filter((run) =>
+        chain.prs.some((pull) => (pull.state === "open" || pull.state === "draft") && pull.headSha === run.headSha),
+      )
+  if (current.some((run) => run.status === "queued" || run.status === "running" || run.status === "failed"))
     return true
   const armed = ctx.armedNumbers ?? []
   if (armed.length > 0 && chain.prs.some((pull) => pull.state === "open" && armed.includes(pull.number)))

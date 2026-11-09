@@ -350,12 +350,17 @@ describe("pillEligible", () => {
     expect(pillEligible(branched(elsewhere, { state: "merged" }), ctx())).toBe(false)
   })
 
-  test("CI needing attention makes any chain eligible, mention or not", () => {
-    const ignored = { prs: [pull({ headBranch: elsewhere, state: "closed" })] }
-    expect(pillEligible(chain({ ...ignored, runs: [run("queued")] }), ctx())).toBe(true)
-    expect(pillEligible(chain({ ...ignored, runs: [run("running")] }), ctx())).toBe(true)
-    expect(pillEligible(chain({ ...ignored, runs: [run("failed")] }), ctx())).toBe(true)
-    expect(pillEligible(chain({ ...ignored, runs: [run("cancelled")] }), ctx())).toBe(false)
+  test("CI needing attention makes any chain eligible — scoped to current heads", () => {
+    const open = { prs: [pull({ headBranch: elsewhere })] }
+    expect(pillEligible(chain({ ...open, runs: [run("queued")] }), ctx())).toBe(true)
+    expect(pillEligible(chain({ ...open, runs: [run("running")] }), ctx())).toBe(true)
+    expect(pillEligible(chain({ ...open, runs: [run("failed")] }), ctx())).toBe(true)
+    expect(pillEligible(chain({ ...open, runs: [run("cancelled")] }), ctx())).toBe(false)
+    // A closed PR's runs are history: a stale failure doesn't recruit the chain.
+    const closed = { prs: [pull({ headBranch: elsewhere, state: "closed" })] }
+    expect(pillEligible(chain({ ...closed, runs: [{ ...run("failed"), headSha: "older-head" }] }), ctx())).toBe(false)
+    // Run-only chains have no head to be stale against: a discovered failure pills bare.
+    expect(pillEligible(chain({ prs: [], runs: [run("failed")] }), ctx())).toBe(true)
   })
 
   test("an armed open PR is eligible, even non-lead and from another branch", () => {
