@@ -119,28 +119,28 @@ export const repoKey = (repo: RepoRef): string => `${repo.host}/${repo.owner}/${
 export const refKey = (ref: Ref): string =>
   `${ref.repo ? `${ref.repo.host}/${ref.repo.owner}/${ref.repo.repo}` : "@"}#${ref.kind ?? ""}${ref.number}`
 
-/** Whether the chain's lead PR can merge right now: open, checks green, no
- * conflicts, no outstanding change requests. Unknown states (entries hydrated
- * by older code) don't block — they fall back to the checks. */
-export const mergeReady = (chain: Chain): boolean => {
-  const lead = chain.prs[0]
-  if (!lead || lead.state !== "open") return false
+/** Whether a PR can merge right now: open, checks green, no conflicts, no
+ * outstanding change requests. Defaults to the chain's lead; callers pass an
+ * explicit pull to check another member of the chain. Unknown states (entries
+ * hydrated by older code) don't block — they fall back to the checks. */
+export const mergeReady = (chain: Chain, pull = chain.prs[0]): boolean => {
+  if (!pull || pull.state !== "open") return false
   if (!chain.runs.every((run) => run.status === "succeeded")) return false
-  if (lead.reviewState === "changes_requested" || lead.mergeState === "conflict") return false
-  if (lead.mergeState && lead.mergeState !== "ready") return false
+  if (pull.reviewState === "changes_requested" || pull.mergeState === "conflict") return false
+  if (pull.mergeState && pull.mergeState !== "ready") return false
   return true
 }
 
-/** Why the lead PR can't merge yet — the disabled button's tooltip. */
-export const mergeWhy = (chain: Chain): string => {
-  const lead = chain.prs[0]
+/** Why a PR can't merge yet — the disabled button's tooltip. Defaults to the
+ * chain's lead; callers pass an explicit pull to explain another member. */
+export const mergeWhy = (chain: Chain, pull = chain.prs[0]): string => {
   const failed = chain.runs.find((run) => run.status === "failed")
   if (failed) return `checks failed (run #${failed.id})`
   if (chain.runs.some((run) => run.status === "queued" || run.status === "running")) return "checks still running"
-  if (lead?.reviewState === "changes_requested") return "changes requested"
-  if (lead?.mergeState === "conflict") return "merge conflicts with the base branch"
-  if (lead?.mergeState === "blocked") return "blocked by branch rules or a missing review"
-  if (!lead || lead.state !== "open") return "pull request is not open"
+  if (pull?.reviewState === "changes_requested") return "changes requested"
+  if (pull?.mergeState === "conflict") return "merge conflicts with the base branch"
+  if (pull?.mergeState === "blocked") return "blocked by branch rules or a missing review"
+  if (!pull || pull.state !== "open") return "pull request is not open"
   return "not ready"
 }
 
@@ -182,9 +182,11 @@ export const armedTargets = (
         (pull) => pull.state === "open" && pull.number === entry.number && repoKey(pull.repo) === repoKey(entry.repo),
       ),
     )
-    if (!chain || !mergeReady(chain)) continue
-    const pull = chain.prs.find((candidate) => candidate.number === entry.number)
-    if (pull) out.push({ pull, chain, method: entry.method })
+    if (!chain) continue
+    const pull = chain.prs.find(
+      (candidate) => candidate.number === entry.number && repoKey(candidate.repo) === repoKey(entry.repo),
+    )
+    if (pull && mergeReady(chain, pull)) out.push({ pull, chain, method: entry.method })
   }
   return out
 }
