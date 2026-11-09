@@ -170,6 +170,9 @@ export const mergeWhy = (chain: Chain, pull = chain.prs[0]): string => {
   if (pull?.mergeState === "conflict") return "merge conflicts with the base branch"
   if (pull?.mergeState === "blocked") return "blocked by branch rules or a missing review"
   if (!pull || pull.state !== "open") return "pull request is not open"
+  // Mirror the evidence gate: this is the chain that just lost merge readiness.
+  if (!chain.runs.some((run) => run.headSha === pull?.headSha) && pull?.mergeState !== "ready")
+    return "no checks on record for the current head"
   return "not ready"
 }
 
