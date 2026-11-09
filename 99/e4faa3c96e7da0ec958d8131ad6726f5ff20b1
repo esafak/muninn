@@ -1,0 +1,21 @@
+src/model.test.ts
+  s_ead79fcbaf3d99::t_224faeaba87834 108-119
+src/model.ts
+  s_ead79fcbaf3d99::t_2d0339fd410da1 165-167
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "99e4faa3c96e7da0ec958d8131ad6726f5ff20b1",
+  "prompts": {},
+  "sessions": {
+    "s_ead79fcbaf3d99": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_e3d822d00ffeIMnw1HHJEOBJnk",
+        "model": "unknown"
+      },
+      "human_author": "Emre Şafak <3928300+esafak@users.noreply.github.com>"
+    }
+  }
+}
