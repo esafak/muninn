@@ -224,7 +224,7 @@ export const chainTone = (chain: Chain): "success" | "warning" | "danger" | unde
   if (lead?.mergeState === "conflict" || lead?.reviewState === "changes_requested") return "danger"
   if (relevantRuns.some((run) => run.status === "running" || run.status === "queued")) return "warning"
   if (lead?.state === "open" && (lead.mergeState === "blocked" || lead.mergeState === "pending")) return "warning"
-  if (lead?.state === "open" && mergeReady(chain)) return "success"
+  if (lead?.state === "open" && mergeReady(chain, lead)) return "success"
   if (lead?.state === "merged") return "success"
   if (chain.prs.length === 0 && chain.runs.some((run) => run.status === "succeeded")) return "success"
   return undefined

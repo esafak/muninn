@@ -84,6 +84,16 @@ describe("mergeReady", () => {
     const previousRun = { ...run("failed"), headSha: "previous-head" }
     expect(mergeReady(chain({ runs: [previousRun] }))).toBe(true)
   })
+
+  test("readiness can be evaluated for a selected PR in a grouped chain", () => {
+    const closedLead = pull({ state: "merged", number: 1, headSha: "old-head" })
+    const openTarget = pull({ state: "open", number: 2, headSha: "current-head" })
+    const oldFailure = { ...run("failed"), headSha: "old-head" }
+    const currentSuccess = { ...run("succeeded"), headSha: "current-head" }
+    const grouped = chain({ prs: [closedLead, openTarget], runs: [oldFailure, currentSuccess] })
+    expect(mergeReady(grouped, openTarget)).toBe(true)
+    expect(mergeWhy(grouped, openTarget)).toBe("not ready")
+  })
 })
 
 describe("mergeWhy", () => {
@@ -122,6 +132,14 @@ describe("chainTone", () => {
   test("a fully green open chain and a merged PR are success", () => {
     expect(chainTone(chain({ prs: [pull({ mergeState: "ready", reviewState: "approved" })] }))).toBe("success")
     expect(chainTone(chain({ prs: [pull({ state: "merged" })] }))).toBe("success")
+  })
+
+  test("chain tone evaluates the open PR even when a merged PR leads the group", () => {
+    const merged = pull({ state: "merged", number: 1, headSha: "merged-head" })
+    const open = pull({ state: "open", number: 2, headSha: "open-head" })
+    const failureOnMergedHead = { ...run("failed"), headSha: "merged-head" }
+    const currentSuccess = { ...run("succeeded"), headSha: "open-head" }
+    expect(chainTone(chain({ prs: [merged, open], runs: [failureOnMergedHead, currentSuccess] }))).toBe("success")
   })
 
   test("issues alone carry no tone until open", () => {

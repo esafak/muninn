@@ -575,9 +575,9 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
                   title={
                     isArmed(lead().pull)
                       ? `Muninn is driving the merge (${lead().pull.autoMerge ? "also armed on the forge" : "armed locally"}) — click to cancel`
-                      : mergeReady(lead().chain)
+                      : mergeReady(lead().chain, lead().pull)
                         ? "green now — Muninn merges on its next check (within ~30s)"
-                        : `Muninn merges when checks pass and reviews approve — now blocked: ${mergeWhy(lead().chain)}`
+                        : `Muninn merges when checks pass and reviews approve — now blocked: ${mergeWhy(lead().chain, lead().pull)}`
                     }
                 >
                   <input

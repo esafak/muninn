@@ -63,7 +63,7 @@ export const MergeButton = (props: {
           Armed
         </button>
       </Match>
-      <Match when={mergeReady(props.chain)}>
+      <Match when={mergeReady(props.chain, props.pull)}>
         <button
           class="mn-merge"
           title="Merge now — method and delete-branch follow the pill menu's choices"
@@ -78,7 +78,7 @@ export const MergeButton = (props: {
       <Match when={props.pull.state === "open"}>
         <button
           class="mn-merge pending"
-          title={`${mergeWhy(props.chain)} — click to merge when ready (auto-merge)`}
+          title={`${mergeWhy(props.chain, props.pull)} — click to merge when ready (auto-merge)`}
           onClick={(event) => {
             event.stopPropagation()
             void props.onArm(props.pull, true)
