@@ -40,7 +40,10 @@ describe("scan", () => {
   })
 
   test("bare hashes keep an unknown kind", () => {
-    expect(scanGh("TUI still loses scroll position — #1043", opencode)).toEqual([{ number: 1043, repo: opencode }])
+    const refs = scanGh("TUI still loses scroll position — #1043", opencode)
+    expect(refs).toStrictEqual([{ number: 1043, repo: opencode }])
+    // Shape-exact: no `kind` own property when the syntax didn't say.
+    expect(Object.keys(refs[0]!).sort()).toEqual(["number", "repo"])
   })
 
   test("ordinal feedback numbers are not treated as issue or PR references", () => {
@@ -298,14 +301,36 @@ describe("deliberateRefs", () => {
 
   test(`the run-listing rule (${RUN_LISTING_LIMIT}+ run refs in one block) applies at every tier`, () => {
     const listing = Array.from({ length: 6 }, (_, i) => `https://github.com/sst/opencode/actions/runs/${900 + i}`).join("\n")
-    const buckets = (text: string) => ({ user: [text], commands: [text], prose: [text], outputs: [] })
-    // The plain listing drops from user, command and prose alike.
-    expect(deliberateRefs(buckets(listing), opencode, [githubLexicon])).toEqual([])
+    // The plain listing drops from user, command and prose alike — tested per
+    // tier so one tier's dedupe can't mask another's miss.
+    for (const buckets of [
+      { user: [listing], commands: [], prose: [], outputs: [] },
+      { user: [], commands: [listing], prose: [], outputs: [] },
+      { user: [], commands: [], prose: [listing], outputs: [] },
+    ])
+      expect(deliberateRefs(buckets, opencode, [githubLexicon])).toEqual([])
     // A kind-worded run is singled out: it survives the listing at every tier.
     const singled = `${listing}\nbut run 906 is the one that failed`
-    expect(deliberateRefs(buckets(singled), opencode, [githubLexicon]).map((ref) => ref.number)).toEqual([906])
+    const tiers = [
+      { user: [singled], commands: [], prose: [], outputs: [] },
+      { user: [], commands: [singled], prose: [], outputs: [] },
+      { user: [], commands: [], prose: [singled], outputs: [] },
+    ]
+    for (const buckets of tiers)
+      expect(deliberateRefs(buckets, opencode, [githubLexicon]).map((ref) => ref.number)).toEqual([906])
     const outputBuckets = messageBuckets([assistantMessage([toolPart({ command: "gh run list" }, singled)])])
     expect(deliberateRefs(outputBuckets, opencode, [githubLexicon]).map((ref) => ref.number)).toEqual([906])
+  })
+
+  test("candidates keep the exact TieredRef shape — no origin leak", () => {
+    const buckets = { user: ["pasted https://github.com/sst/opencode/pull/4821"], commands: [], prose: [], outputs: [] }
+    expect(deliberateRefs(buckets, opencode, [githubLexicon])).toStrictEqual([
+      { number: 4821, kind: "pr", repo: opencode, tier: "user" },
+    ])
+    const bare = { user: ["see #77"], commands: [], prose: [], outputs: [] }
+    const refs = deliberateRefs(bare, opencode, [githubLexicon])
+    expect(refs).toStrictEqual([{ number: 77, repo: opencode, tier: "user" }])
+    expect(Object.keys(refs[0]!).sort()).toEqual(["number", "repo", "tier"])
   })
 })
 

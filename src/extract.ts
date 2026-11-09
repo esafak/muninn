@@ -135,7 +135,7 @@ const listedRunKeys = (refs: readonly (Ref & { origin: Origin })[]): Set<string>
 export const scan = (text: string, repo?: RepoRef, lexicons: readonly Lexicon[] = []): Ref[] => {
   const detailed = scanDetailed(text, repo, lexicons)
   const listed = listedRunKeys(detailed)
-  return detailed.filter((ref) => !listed.has(refKey(ref))).map((ref) => ({ number: ref.number, kind: ref.kind, repo: ref.repo }))
+  return detailed.filter((ref) => !listed.has(refKey(ref))).map(({ origin: _origin, ...ref }) => ref)
 }
 
 /** Flattens a session's parts into the text Muninn should scan: text parts
@@ -257,7 +257,8 @@ export const deliberateRefs = (
   const put = (ref: Ref, tier: Tier) => {
     const key = refKey(ref)
     const existing = byKey.get(key)
-    if (!existing || tierRank[tier] < tierRank[existing.tier]) byKey.set(key, { ...ref, tier })
+    if (!existing || tierRank[tier] < tierRank[existing.tier])
+      byKey.set(key, { number: ref.number, ...(ref.kind ? { kind: ref.kind } : {}), repo: ref.repo, tier })
   }
   const addBlock = (text: string, tier: Tier) => {
     const detailed = scanDetailed(text, repo, lexicons)
