@@ -124,6 +124,19 @@ describe("scan", () => {
     expect(scanGh("### 1. Steps\n## 42", opencode)).toEqual([])
   })
 
+  test("kind words and their numbers must share a line", () => {
+    // Real case: a read of renovate.json5 numbered `…via-pr` as line 5, `6:` as
+    // line 6, and `run` + inline command as line 310 above `311:` — the newline
+    // in `\s+` fabricated PR 6 and run 311 out of line numbers.
+    expect(scanGh('# https://docs.renovatebot.com/getting-started/#reconfigure-via-pr\n6:   "$schema"', opencode)).toEqual([])
+    expect(scanGh("run \n311:       // in ci/ to refresh", opencode)).toEqual([])
+    expect(scanGh("run\n\t311: indented", opencode)).toEqual([])
+    // stripCode replaces an inline span with a space: the number stays across the newline.
+    expect(scanGh("run `mise exec uv lock` \n311: refresh", opencode)).toEqual([])
+    // Same-line references are unaffected, even with numbered lines below.
+    expect(scanGh("see PR 4821\n6: something else", opencode)).toEqual([{ kind: "pr", number: 4821, repo: opencode }])
+  })
+
   test("markdown-linked PR reference (reported miss)", () => {
     const text =
       "Merged [PR #2494](https://github.com/archipelagoAI/configs/pull/2494) as `e8a6a2f9`. Checks passed, and I removed the worktree and local branch."
