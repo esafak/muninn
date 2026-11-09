@@ -22,6 +22,8 @@ jobs:
         startsWith(github.event.comment.body, '/pi-summary')))
     runs-on: ubuntu-latest
     environment: review
+    env:
+      THINKING: ${{ vars.THINKING }}
     concurrency:
       group: pi-review-${{ github.event.pull_request.number || github.event.issue.number }}
       cancel-in-progress: false
@@ -36,3 +38,4 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           pi-api-key: ${{ secrets.PI_API_KEY }}
           model: ${{ vars.MODEL_NAME }}
+          thinking: ${{ env.THINKING }}
