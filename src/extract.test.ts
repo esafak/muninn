@@ -1,10 +1,35 @@
 import { describe, expect, test } from "bun:test"
-import { deliberateRefs, messageBuckets, messagesText, scan, textToScan, LISTING_THRESHOLD } from "./extract"
+import { deliberateRefs, messageBuckets, messagesText, scan, scanDetailed, textToScan, LISTING_THRESHOLD, RUN_LISTING_LIMIT } from "./extract"
 import { githubLexicon } from "./providers/github/lexicon"
 import type { RepoRef } from "./model"
 
 const opencode: RepoRef = { host: "github.com", owner: "sst", repo: "opencode" }
 const scanGh = (text: string, repo?: RepoRef) => scan(text, repo, [githubLexicon])
+
+describe("scanDetailed", () => {
+  test("origin tags reflect the syntax that produced each reference", () => {
+    const refs = scanDetailed(
+      [
+        "pasted https://github.com/sst/opencode/pull/4821,",
+        "cross-repo esafak/muninn#5,",
+        "see PR 1043 or run 906, plus bare #77",
+      ].join("\n"),
+      opencode,
+      [githubLexicon],
+    )
+    const originOf = (number: number) => refs.find((ref) => ref.number === number)?.origin
+    expect(originOf(4821)).toBe("url")
+    expect(originOf(5)).toBe("shorthand")
+    expect(originOf(1043)).toBe("kindword")
+    expect(originOf(906)).toBe("kindword")
+    expect(originOf(77)).toBe("bare")
+  })
+
+  test("a kind word marks an explicitly referenced number as singled out — its origin wins", () => {
+    const refs = scanDetailed("https://github.com/sst/opencode/actions/runs/906 — run 906 is the one", opencode, [githubLexicon])
+    expect(refs).toEqual([{ number: 906, kind: "run", repo: opencode, origin: "kindword" }])
+  })
+})
 
 describe("scan", () => {
   test("kind words resolve against the session repository", () => {
@@ -109,6 +134,23 @@ describe("scan", () => {
     expect(scan(`${listing}\nbut run ${906} is the one that failed`, opencode, [githubLexicon])).toEqual([
       { kind: "run", number: 906, repo: opencode },
     ])
+  })
+
+  test(`a mixed listing (${RUN_LISTING_LIMIT} distinct run refs) suppresses the url runs and keeps the kind-worded ones`, () => {
+    const fourUrls = Array.from({ length: 4 }, (_, i) => `https://github.com/sst/opencode/actions/runs/${800 + i}`).join("\n")
+    const refs = scan(`${fourUrls}\nbut run 901 and run 902 are the interesting ones`, opencode, [githubLexicon])
+    expect(refs.map((ref) => ref.number).sort((a, b) => a - b)).toEqual([901, 902])
+  })
+
+  test("a kind word over an already-referenced run neither duplicates it nor counts toward a listing", () => {
+    const fourUrls = Array.from({ length: 4 }, (_, i) => `https://github.com/sst/opencode/actions/runs/${800 + i}`).join("\n")
+    const refs = scan(`${fourUrls}\nrun 801 and run 802 are the interesting ones`, opencode, [githubLexicon])
+    expect(refs.map((ref) => ref.number).sort((a, b) => a - b)).toEqual([800, 801, 802, 803])
+  })
+
+  test("a five-run url block is a focused look, not a listing", () => {
+    const five = Array.from({ length: 5 }, (_, i) => `https://github.com/sst/opencode/actions/runs/${700 + i}`).join("\n")
+    expect(scan(five, opencode, [githubLexicon])).toHaveLength(5)
   })
 
   test("pull urls with deep-link suffixes", () => {
@@ -252,6 +294,18 @@ describe("deliberateRefs", () => {
     const output = "#1 a\n#2 b\n#3 c"
     const buckets = messageBuckets([assistantMessage([toolPart({ command: "grep -r fix" }, output)])])
     expect(deliberateRefs(buckets, opencode, [githubLexicon])).toEqual([])
+  })
+
+  test(`the run-listing rule (${RUN_LISTING_LIMIT}+ run refs in one block) applies at every tier`, () => {
+    const listing = Array.from({ length: 6 }, (_, i) => `https://github.com/sst/opencode/actions/runs/${900 + i}`).join("\n")
+    const buckets = (text: string) => ({ user: [text], commands: [text], prose: [text], outputs: [] })
+    // The plain listing drops from user, command and prose alike.
+    expect(deliberateRefs(buckets(listing), opencode, [githubLexicon])).toEqual([])
+    // A kind-worded run is singled out: it survives the listing at every tier.
+    const singled = `${listing}\nbut run 906 is the one that failed`
+    expect(deliberateRefs(buckets(singled), opencode, [githubLexicon]).map((ref) => ref.number)).toEqual([906])
+    const outputBuckets = messageBuckets([assistantMessage([toolPart({ command: "gh run list" }, singled)])])
+    expect(deliberateRefs(outputBuckets, opencode, [githubLexicon]).map((ref) => ref.number)).toEqual([906])
   })
 })
 
