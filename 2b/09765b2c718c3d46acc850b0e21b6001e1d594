@@ -1,0 +1,21 @@
+bun.lock
+  s_355aaa98356527::t_000641af275aeb 15,353-366,761-762
+package.json
+  s_355aaa98356527::t_942fe762e8d212 26
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2b09765b2c718c3d46acc850b0e21b6001e1d594",
+  "prompts": {},
+  "sessions": {
+    "s_355aaa98356527": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_e3da40b2dffebnXunQZhQm0nw3",
+        "model": "unknown"
+      },
+      "human_author": "Emre Şafak <3928300+esafak@users.noreply.github.com>"
+    }
+  }
+}
