@@ -328,7 +328,7 @@ describe("pillPick", () => {
       runs: [run("succeeded")],
     })
     const failing = chain({ key: "failing", updatedAt: 100, prs: [], runs: [run("failed")] })
-    const eligible = [merged, failing].filter((candidate) => pillEligible(candidate, { sessionBranch: "feat/thing" }))
+    const eligible = [merged, failing].filter((candidate) => pillEligible(candidate, { sessionBranch: "feat/thing", sessionRepo: repo }))
     const picked = pillPick(eligible)
     expect(picked?.chain.key).toBe("failing")
     expect(picked?.reason).toBe("runs-only")
@@ -337,7 +337,7 @@ describe("pillPick", () => {
   test("integration (eligible → pick): the newest merged chain is the terminal pill when several are eligible", () => {
     const older = chain({ key: "older", updatedAt: 100, prs: [pull({ state: "merged", number: 1, headBranch: "feat/thing" })], runs: [] })
     const newer = chain({ key: "newer", updatedAt: 300, prs: [pull({ state: "merged", number: 2, headBranch: "feat/thing" })], runs: [] })
-    const eligible = [older, newer].filter((candidate) => pillEligible(candidate, { sessionBranch: "feat/thing" }))
+    const eligible = [older, newer].filter((candidate) => pillEligible(candidate, { sessionBranch: "feat/thing", sessionRepo: repo }))
     const picked = pillPick(eligible)
     expect(picked?.chain.key).toBe("newer")
     expect(picked?.reason).toBe("merged")
@@ -347,7 +347,7 @@ describe("pillPick", () => {
   test("integration (eligible → pick): a newer open PR outranks the session's merged one", () => {
     const merged = chain({ key: "merged", updatedAt: 500, prs: [pull({ state: "merged", number: 1, headBranch: "feat/thing" })], runs: [] })
     const open = chain({ key: "open", updatedAt: 300, prs: [pull({ state: "open", number: 2, headBranch: "feat/thing" })], runs: [] })
-    const eligible = [merged, open].filter((candidate) => pillEligible(candidate, { sessionBranch: "feat/thing" }))
+    const eligible = [merged, open].filter((candidate) => pillEligible(candidate, { sessionBranch: "feat/thing", sessionRepo: repo }))
     expect(pillPick(eligible)?.chain.key).toBe("open")
   })
 
@@ -361,8 +361,9 @@ describe("pillEligible", () => {
   const elsewhere = "fix/other-session"
   const branched = (headBranch: string, over: Partial<PullEntity> = {}): Chain =>
     chain({ prs: [pull({ headBranch, ...over })] })
-  const ctx = (over: { sessionBranch?: string; armed?: { repo: RepoRef; number: number }[] } = {}) => ({
+  const ctx = (over: { sessionBranch?: string; sessionRepo?: RepoRef; armed?: { repo: RepoRef; number: number }[] } = {}) => ({
     sessionBranch: own,
+    sessionRepo: repo,
     ...over,
   })
 
@@ -384,15 +385,25 @@ describe("pillEligible", () => {
     expect(pillEligible(branched(elsewhere, { state: "merged" }), ctx())).toBe(false)
   })
 
+  test("a foreign repo's PR on a coincidentally identical branch name never pills", () => {
+    // The PR #5 incident itself was cross-repo: two agents can both cut
+    // `feat/thing`, and a mention-recruited foreign PR must not pass the
+    // branch rule — repo scoping is what makes it "the session's own work".
+    const foreign = { host: "github.com", owner: "other", repo: "repo" }
+    expect(pillEligible(branched(own, { repo: foreign }), ctx())).toBe(false)
+    expect(pillEligible(branched(own, { repo: foreign, state: "merged" }), ctx())).toBe(false)
+  })
+
   test("CI needing attention makes any chain eligible — scoped to current heads", () => {
     const open = { prs: [pull({ headBranch: elsewhere })] }
     expect(pillEligible(chain({ ...open, runs: [run("queued")] }), ctx())).toBe(true)
     expect(pillEligible(chain({ ...open, runs: [run("running")] }), ctx())).toBe(true)
     expect(pillEligible(chain({ ...open, runs: [run("failed")] }), ctx())).toBe(true)
     expect(pillEligible(chain({ ...open, runs: [run("cancelled")] }), ctx())).toBe(false)
-    // A closed PR's runs are history: a stale failure doesn't recruit the chain.
+    // A closed PR's runs are history — same head, so only `state: "closed"`
+    // can carry this assertion.
     const closed = { prs: [pull({ headBranch: elsewhere, state: "closed" })] }
-    expect(pillEligible(chain({ ...closed, runs: [{ ...run("failed"), headSha: "older-head" }] }), ctx())).toBe(false)
+    expect(pillEligible(chain({ ...closed, runs: [run("failed")] }), ctx())).toBe(false)
     // Run-only chains have no head to be stale against: a discovered failure pills bare.
     expect(pillEligible(chain({ prs: [], runs: [run("failed")] }), ctx())).toBe(true)
   })
@@ -427,7 +438,9 @@ describe("pillEligible", () => {
     const recruited = pull({ repo: other, number: 5, headBranch: elsewhere, state: "open" })
     const chains = associate([recruited], [], own)
     expect(chains.length).toBe(1)
-    const eligible = chains.filter((candidate) => pillEligible(candidate, { sessionBranch: own, armed: [] }))
+    const eligible = chains.filter((candidate) =>
+      pillEligible(candidate, { sessionBranch: own, sessionRepo: repo, armed: [] }),
+    )
     expect(eligible).toEqual([])
   })
 })

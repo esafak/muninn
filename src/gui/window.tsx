@@ -227,7 +227,11 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
   // work stay in the sidebar; settled history never pills.
   const pillState = createMemo(() => {
     const eligible = chains().filter((chain) =>
-      pillEligible(chain, { sessionBranch: meta.branch || undefined, armed: ctx.stores.armed.value.entries }),
+      pillEligible(chain, {
+        sessionBranch: meta.branch || undefined,
+        sessionRepo: meta.repo || undefined,
+        armed: ctx.stores.armed.value.entries,
+      }),
     )
     return { eligible, picked: pillPick(eligible) }
   })

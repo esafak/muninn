@@ -177,10 +177,11 @@ export const mergeWhy = (chain: Chain, pull = chain.prs[0]): string => {
 }
 
 /** Pill eligibility — what deserves the composer's highest-commitment surface.
- * Eligible: the session's own work (a PR from the session's branch — it stays
- * shown after merging; the pill represents the session's work and moves on
- * only when a newer PR appears, which `pillPick`'s ranking handles) and
- * anything needing attention now: CI queued/running/failed on current heads
+ * Eligible: the session's own work (a PR from the session's repository on the
+ * session's branch — repo-scoped, since a foreign PR can share a branch name;
+ * it stays shown after merging; the pill represents the session's work and
+ * moves on only when a newer PR appears, which `pillPick`'s ranking handles)
+ * and anything needing attention now: CI queued/running/failed on current heads
  * (status-derived, so a discovered failure pills with no mention at all) and
  * an armed PR pending merge, matched by repository and number. Everything else
  * is sidebar material: other branches' PRs (mention is not intent — see the
@@ -188,11 +189,23 @@ export const mergeWhy = (chain: Chain, pull = chain.prs[0]): string => {
  * settled run-only chains. */
 export const pillEligible = (
   chain: Chain,
-  ctx: { sessionBranch?: string; armed?: readonly { repo: RepoRef; number: number }[] } = {},
+  ctx: {
+    sessionBranch?: string
+    sessionRepo?: RepoRef
+    armed?: readonly { repo: RepoRef; number: number }[]
+  } = {},
 ): boolean => {
+  // The session's own work: repository-scoped, since a foreign PR can share a
+  // branch name (the PR #5 incident itself was cross-repo).
   if (
     ctx.sessionBranch !== undefined &&
-    chain.prs.some((pull) => pull.headBranch === ctx.sessionBranch && pull.state !== "closed")
+    ctx.sessionRepo !== undefined &&
+    chain.prs.some(
+      (pull) =>
+        pull.headBranch === ctx.sessionBranch &&
+        pull.state !== "closed" &&
+        repoKey(pull.repo) === repoKey(ctx.sessionRepo!),
+    )
   )
     return true
   // CI needing attention, scoped to current work: runs on open/draft PR heads,
