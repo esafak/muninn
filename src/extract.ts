@@ -317,3 +317,31 @@ export const textToScan = (parts: readonly unknown[]): string =>
       return out
     })
     .join("\n")
+
+// ── The hydrate wire contract ───────────────────────────────────────────────
+// `Rpc` rejects the whole call when one ref violates the input schema, so the
+// GUI shapes extraction output before every hydrate: a bare "#0" from prose
+// (a counter, a version string) must not wedge a session's panel error on.
+
+/** `z.array(Ref).max(64)` — the hydrate RPC's input cap. */
+export const WIRE_REF_CAP = 64
+
+export interface WireRefs {
+  /** Refs that satisfy the wire contract, at most `cap` of them. */
+  refs: TieredRef[]
+  /** Refs dropped as invalid (non-positive or unsafe numbers). */
+  dropped: number
+  /** Whether the cap truncated the valid set (most deliberate tiers kept). */
+  capped: boolean
+}
+
+const tierOrder: Record<Tier, number> = { user: 0, command: 1, prose: 2, output: 3 }
+
+export const wireRefs = (refs: readonly TieredRef[], cap: number = WIRE_REF_CAP): WireRefs => {
+  const valid = refs.filter((ref) => Number.isSafeInteger(ref.number) && ref.number > 0)
+  const dropped = refs.length - valid.length
+  if (valid.length <= cap) return { refs: valid, dropped, capped: false }
+  // Stable sort: within a tier, first-seen order (deliberateRefs') is kept.
+  const ranked = [...valid].sort((a, b) => tierOrder[a.tier] - tierOrder[b.tier])
+  return { refs: ranked.slice(0, cap), dropped, capped: true }
+}
