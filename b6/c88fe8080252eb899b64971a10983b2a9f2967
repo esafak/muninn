@@ -1,0 +1,20 @@
+docs/design/decisions.md
+  h_ea91e2db23540f 8-12
+src/gui/window.tsx
+  h_ea91e2db23540f 230-234
+src/model.test.ts
+  h_ea91e2db23540f 297,306,316,330,332,354-362,369-370,372,407-409
+src/model.ts
+  h_ea91e2db23540f 169-173,181-185,187-188,191-197
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b6c88fe8080252eb899b64971a10983b2a9f2967",
+  "prompts": {},
+  "humans": {
+    "h_ea91e2db23540f": {
+      "author": "Emre Şafak <3928300+esafak@users.noreply.github.com>"
+    }
+  }
+}
