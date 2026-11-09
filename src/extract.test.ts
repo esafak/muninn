@@ -24,6 +24,13 @@ describe("scan", () => {
     ])
   })
 
+  test("ordinal hashes match same-line spacing without suppressing other references", () => {
+    const longSpaces = " ".repeat(40)
+    expect(scanGh(`feedback${longSpaces}#2; actual report #2`, opencode)).toEqual([{ number: 2, repo: opencode }])
+    expect(scanGh(`notfeedback${longSpaces}#2`, opencode)).toEqual([{ number: 2, repo: opencode }])
+    expect(scanGh("feedback\n#2", opencode)).toEqual([{ number: 2, repo: opencode }])
+  })
+
   test("a kind word cannot pair with a line-numbered tool-output line", () => {
     expect(scanGh("…via-pr\n6: something else", opencode)).toEqual([])
   })
