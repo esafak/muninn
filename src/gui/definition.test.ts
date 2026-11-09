@@ -28,3 +28,21 @@ describe("cache schema", () => {
     expect(oldCache.entries.pull?.kind === "pr" && oldCache.entries.pull.mergedAt).toBeUndefined()
   })
 })
+
+describe("i18n catalog", () => {
+  const en = definition.i18n!.en
+
+  // The host interpolates only `{{name}}` (resolveTemplate); a single-brace
+  // placeholder renders raw — `({message})` showed verbatim in the panel.
+  test("templates interpolate with {{name}} placeholders, never single braces", () => {
+    for (const [key, template] of Object.entries(en)) {
+      const single = template.match(/(?<!\{)\{(\w+)\}(?!\})/g)
+      expect(single, `${key} has a single-brace placeholder`).toBeNull()
+    }
+  })
+
+  test("plural messages exist as .one/.other and interpolate {{count}}", () => {
+    expect(en["auth.unresolved.one"]).toContain("{{count}}")
+    expect(en["auth.unresolved.other"]).toContain("{{count}}")
+  })
+})

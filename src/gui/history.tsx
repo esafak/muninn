@@ -177,7 +177,7 @@ export const History = (props: HistoryProps) => {
       <Show when={props.repo() && !props.authenticated()}>
         <div class="mn-note">{ctx.t("auth.note")}</div>
         <Show when={props.unresolved() > 0}>
-          <div class="mn-note" data-warn>{ctx.t("auth.unresolved", { count: props.unresolved() })}</div>
+          <div class="mn-note" data-warn>{ctx.plural("auth.unresolved", props.unresolved())}</div>
         </Show>
       </Show>
       <Show when={props.error()}>
