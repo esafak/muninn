@@ -10,16 +10,18 @@ on:
 
 permissions:
   contents: read
-  pull-requests: write
-  issues: write
 
 jobs:
   review:
     if: >-
-      github.event_name != 'issue_comment' ||
-      (github.event.issue.pull_request &&
-       (startsWith(github.event.comment.body, '/pi-review') ||
-        startsWith(github.event.comment.body, '/pi-summary')))
+      (github.event_name != 'issue_comment' ||
+       (github.event.issue.pull_request &&
+        (startsWith(github.event.comment.body, '/pi-review') ||
+         startsWith(github.event.comment.body, '/pi-summary')))) &&
+      (github.event_name != 'pull_request' ||
+       github.event.pull_request.head.repo.full_name == github.repository) &&
+      (github.event_name != 'pull_request_review_comment' ||
+       github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
     environment: review
     env:
@@ -33,9 +35,17 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510
+        id: bot-token
+        with:
+          client-id: ${{ secrets.PI_REVIEWER_CLIENT_ID }}
+          private-key: ${{ secrets.PI_REVIEWER_PK }}
+          permission-contents: read
+          permission-pull-requests: write
+          permission-issues: write
       - uses: esafak/pi-reviewer@b8c00291c4e9955b612ec2da967f1d79325cbabe
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ steps.bot-token.outputs.token }}
           pi-api-key: ${{ secrets.PI_API_KEY }}
           model: ${{ vars.MODEL_NAME }}
           thinking: ${{ env.THINKING }}
