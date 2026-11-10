@@ -38,6 +38,7 @@ export const RunEntity = z.object({
   name: z.string(),
   headBranch: z.string(),
   headSha: z.string(),
+  series: z.object({ key: z.string(), sequence: z.number() }).optional(),
   status: z.enum(["queued", "running", "succeeded", "failed", "cancelled"]),
   checks: z.array(Check),
   pullRequests: z.array(z.number()).default([]),

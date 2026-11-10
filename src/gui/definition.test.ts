@@ -30,6 +30,27 @@ describe("cache schema", () => {
     const withChecks = decodeCache({ entries: { pull: { ...basePull, statusChecks } }, at: {} })
     expect(withChecks.entries.pull?.kind === "pr" && withChecks.entries.pull.statusChecks).toEqual(statusChecks)
   })
+
+  test("accepts cached run snapshots with and without workflow-series metadata", () => {
+    const baseRun = {
+      kind: "run",
+      provider: "github",
+      repo: { host: "github.com", owner: "octo", repo: "repo" },
+      id: 1,
+      name: "CI",
+      headBranch: "feature",
+      headSha: "abc",
+      status: "succeeded",
+      checks: [],
+      pullRequests: [1],
+      url: "https://github.com/octo/repo/actions/runs/1",
+      updatedAt: 1,
+    }
+    const oldCache = decodeCache({ entries: { run: baseRun }, at: {} })
+    const nextCache = decodeCache({ entries: { run: { ...baseRun, series: { key: "workflow-1", sequence: 1 } } }, at: {} })
+    expect(oldCache.entries.run?.kind === "run" && oldCache.entries.run.series).toBeUndefined()
+    expect(nextCache.entries.run?.kind === "run" && nextCache.entries.run.series).toEqual({ key: "workflow-1", sequence: 1 })
+  })
 })
 
 describe("settings schema", () => {

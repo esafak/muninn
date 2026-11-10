@@ -777,14 +777,6 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
             />
             fast-forward base branch
           </label>
-          <label class="mn-pop-toggle" title={ctx.t("settings.waitForAllStatusChecks.description")}>
-            <input
-              type="checkbox"
-              checked={waitForAllStatusChecks()}
-              onChange={(event) => ctx.stores.settings.update((draft) => { draft.waitForAllStatusChecks = event.currentTarget.checked })}
-            />
-            {ctx.t("settings.waitForAllStatusChecks")}
-          </label>
         </div>
         </Show>
       </div>
@@ -902,6 +894,20 @@ const MuninnSettings = (): JSX.Element => {
             label={ctx.t("settings.debug")}
             hideLabel
             onChange={(checked) => ctx.stores.settings.update((draft) => { draft.debugMode = checked })}
+          />
+        </ui.SettingsRow>
+      </ui.SettingsSection>
+      <ui.SettingsSection title={ctx.t("settings.section.merging")}>
+        <ui.SettingsRow
+          id="wait-for-all-status-checks"
+          title={ctx.t("settings.waitForAllStatusChecks")}
+          description={ctx.t("settings.waitForAllStatusChecks.description")}
+        >
+          <ui.Switch
+            checked={ctx.stores.settings.value.waitForAllStatusChecks !== false}
+            label={ctx.t("settings.waitForAllStatusChecks")}
+            hideLabel
+            onChange={(checked) => ctx.stores.settings.update((draft) => { draft.waitForAllStatusChecks = checked })}
           />
         </ui.SettingsRow>
       </ui.SettingsSection>
