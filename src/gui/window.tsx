@@ -70,6 +70,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
   const [chains, setChains] = createSignal<readonly Chain[]>([])
   const [sessionReady, setSessionReady] = createSignal(false)
   const mergeInFlight = new Set<string>()
+  const serverBusyUntil = new Map<string, number>()
   const rejectedHeadByPR = new Map<string, string>()
   const mergedAwaitingRefresh = new Set<string>()
   const refreshedPullByPR = new Map<string, PullEntity>()
@@ -390,7 +391,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     pull: PullEntity,
     method: "merge" | "squash" | "rebase",
     via: "manual" | "when-ready",
-  ): Promise<"merged" | "failed" | "head-changed"> => {
+  ): Promise<"merged" | "failed" | "head-changed" | "in-flight" | "already-handled"> => {
     const current = session()
     const client = ctx.client
     if (!current || !client) return "failed"
@@ -404,8 +405,24 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
         method,
         expectedHeadSha: pull.headSha,
       })
-      .catch((error: unknown) => ({ merged: false as const, message: error instanceof Error ? error.message : String(error), headChanged: false }))
+      .catch((error: unknown) => ({
+        merged: false as const,
+        message: error instanceof Error ? error.message : String(error),
+        headChanged: false,
+        inFlight: false,
+        alreadyHandled: false,
+      }))
     if (!result.merged) {
+      if (result.inFlight) {
+        if (via === "manual")
+          ctx.toast.show({ title: `PR #${pull.number} merge already in progress`, variant: "default" })
+        return "in-flight"
+      }
+      if (result.alreadyHandled) {
+        if (via === "manual")
+          ctx.toast.show({ title: `PR #${pull.number} was already merged`, variant: "default" })
+        return "already-handled"
+      }
       if (result.headChanged) {
         ctx.toast.show({
           title: `PR #${pull.number} head changed`,
@@ -498,7 +515,11 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
   const driveArmedMerges = () => {
     for (const { pull, method } of armedTargets(ctx.stores.armed.value.entries, chains(), waitForAllStatusChecks())) {
       const key = mergeKey(pull.repo, pull.number)
-      if (mergeInFlight.has(key) || mergedAwaitingRefresh.has(key)) continue
+      if (
+        mergeInFlight.has(key) ||
+        mergedAwaitingRefresh.has(key) ||
+        (serverBusyUntil.get(key) ?? 0) > Date.now()
+      ) continue
       const entry = ctx.stores.armed.value.entries.find(
         (candidate) => mergeKey(candidate.repo, candidate.number) === key && candidate.method === method,
       )
@@ -531,6 +552,14 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
           rejectedHeadByPR.delete(key)
         }
         if (outcome === "failed") removeArm(attempt)
+        if (outcome === "already-handled") removeArm(attempt)
+
+        if (outcome === "in-flight") {
+          serverBusyUntil.set(key, Date.now() + 25_000)
+          mergeInFlight.delete(key)
+          return
+        }
+        serverBusyUntil.delete(key)
 
         if (
           !sessionAttemptCurrent(attemptSession, session())

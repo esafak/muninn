@@ -28,7 +28,9 @@ export interface MergeSettings {
 
 export type Auth = () => Promise<string | undefined>
 
-export type MergeResult = { merged: true } | { merged: false; message?: string; headChanged?: boolean }
+export type MergeResult =
+  | { merged: true }
+  | { merged: false; message?: string; headChanged?: boolean; inFlight?: boolean; alreadyHandled?: boolean }
 
 export interface SourceProvider {
   /** Registry id, e.g. "github". */

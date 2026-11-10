@@ -24,6 +24,8 @@ Muninn's merge-when-ready flow can pass a cached PR head SHA to GitHub. GitHub c
 - [x] On GitHub's stale-head conflict, confirm the current PR head differs from `expectedHeadSha`; unrelated merge conflicts remain ordinary failures.
 - [x] Keep the armed entry during an in-flight attempt, using a per-PR in-flight guard to prevent duplicate merges; remove it on success or ordinary failure, but preserve it on a confirmed stale-head result only if the user has not disarmed/replaced it meanwhile.
 - [x] Record the rejected SHA per PR and refuse another attempt against that same SHA; only retry when a successful refresh observes a different SHA and the normal `armedTargets`/`mergeReady` gates still pass.
+- [x] Coordinate concurrent windows at the server RPC boundary; report in-flight/already-handled outcomes distinctly and do not convert them into merge failures or duplicate local cleanup.
+- [x] Invalidate GitHub PR/branch snapshots on a confirmed stale head and fence in-flight cache loads so invalidated snapshots are not re-published.
 - [x] Failed refreshes do not retry from cached data; confirmed closed/merged PRs drop the arm, while unresolved PRs retain consent and open-but-not-ready PRs remain armed for normal future polling.
 - [x] Keep manual merges one-shot and preserve the expected-head guard; surface a useful stale-head message and refresh their displayed state.
 - [x] Add pure tests for stale-head classification and retry decisions: confirmed different SHA, same SHA, failed refresh/no current SHA, readiness blocked, repeated rejected SHA, in-flight duplicate, disarmed/replaced consent, and ordinary/manual failure.
