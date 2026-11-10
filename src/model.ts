@@ -152,11 +152,10 @@ export const entityKey = (entity: Entity): string =>
 /** Whether an open PR should show the conflict-specific glyph. */
 export const prConflicted = (pull: PullEntity): boolean => pull.state === "open" && pull.mergeState === "conflict"
 
-const currentRunsForPull = (chain: Chain, pull: PullEntity): RunEntity[] => {
+export const latestRuns = (runs: readonly RunEntity[]): RunEntity[] => {
   const independent: RunEntity[] = []
   const grouped = new Map<string, { sequence: number; runs: RunEntity[] }>()
-  for (const run of chain.runs) {
-    if (run.headSha !== pull.headSha || repoKey(run.repo) !== repoKey(pull.repo)) continue
+  for (const run of runs) {
     if (!run.series?.key || !Number.isFinite(run.series.sequence)) {
       independent.push(run)
       continue
@@ -178,6 +177,10 @@ const currentRunsForPull = (chain: Chain, pull: PullEntity): RunEntity[] => {
       .flatMap(([, group]) => group.runs.toSorted(byIdentity)),
   ]
 }
+
+const currentRunsForPull = (chain: Chain, pull: PullEntity): RunEntity[] => latestRuns(
+  chain.runs.filter((run) => run.headSha === pull.headSha && repoKey(run.repo) === repoKey(pull.repo)),
+)
 
 /** Whether a PR can merge right now: open, checks green, no conflicts, no
  * outstanding change requests. Defaults to the chain's lead; callers pass an
@@ -271,7 +274,7 @@ export const pillEligible = (
   // mention at all). Stale runs — earlier heads, merged/closed PRs — are
   // history, not attention.
   const current = chain.prs.length === 0
-    ? chain.runs
+    ? latestRuns(chain.runs)
     : chain.prs
         .filter((pull) => pull.state === "open" || pull.state === "draft")
         .flatMap((pull) => currentRunsForPull(chain, pull))
@@ -308,7 +311,7 @@ export const pillPick = (
   const attention = chains
     .filter((chain) =>
       chain.prs.length === 0 &&
-      chain.runs.some((run) => run.status === "queued" || run.status === "running" || run.status === "failed"),
+      latestRuns(chain.runs).some((run) => run.status === "queued" || run.status === "running" || run.status === "failed"),
     )
     .toSorted(byNewest)
   if (attention[0]) return { chain: attention[0], reason: "runs-only", considered: attention.length }
@@ -361,7 +364,7 @@ export const chainTone = (chain: Chain, waitForAllStatusChecks = true): "success
   const relevantRuns = lead
     ? currentRunsForPull(chain, lead)
     : chain.prs.length === 0
-      ? chain.runs
+      ? latestRuns(chain.runs)
       : []
   if (relevantRuns.some((run) => run.status === "failed")) return "danger"
   if (lead?.mergeState === "conflict" || lead?.reviewState === "changes_requested") return "danger"
@@ -370,7 +373,7 @@ export const chainTone = (chain: Chain, waitForAllStatusChecks = true): "success
   if (lead?.state === "open" && lead.mergeState === "pending") return "warning"
   if (lead?.state === "open" && mergeReady(chain, lead, waitForAllStatusChecks)) return "success"
   if (lead?.state === "merged") return "success"
-  if (chain.prs.length === 0 && chain.runs.some((run) => run.status === "succeeded")) return "success"
+  if (chain.prs.length === 0 && relevantRuns.some((run) => run.status === "succeeded")) return "success"
   return undefined
 }
 

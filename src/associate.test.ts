@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { associate } from "./associate"
-import type { IssueEntity, PullEntity, RunEntity } from "./model"
+import { chainTone, latestRuns, pillEligible, pillPick, type IssueEntity, type PullEntity, type RunEntity } from "./model"
 
 const repo = { host: "github.com", owner: "sst", repo: "opencode" } as const
 const at = (ms: number) => ms
@@ -82,6 +82,45 @@ describe("associate", () => {
     const chains = associate([pull], [{ ...run(18410, "def456", 400), headBranch: "unrelated-branch" }])
     const standalone = chains.find((chain) => chain.prs.length === 0)
     expect(standalone?.runs[0]?.id).toBe(18410)
+  })
+
+  test("unclaimed runs in one workflow series group stably and use sequence over completion time", () => {
+    const oldFailure = { ...run(18430, "standalone-head", 500), status: "failed" as const, series: { key: "workflow-1", sequence: 10 } }
+    const newSuccess = { ...run(18431, "standalone-head", 400), status: "succeeded" as const, series: { key: "workflow-1", sequence: 11 } }
+    const grouped = associate([], [oldFailure, newSuccess])
+    const permuted = associate([], [newSuccess, oldFailure])
+    expect(grouped).toHaveLength(1)
+    expect(grouped[0]?.runs.map((candidate) => candidate.id)).toEqual([18430, 18431])
+    expect(permuted[0]?.key).toBe(grouped[0]?.key)
+    expect(pillEligible(grouped[0]!)).toBe(false)
+    expect(chainTone(grouped[0]!)).toBe("success")
+    expect(latestRuns(grouped[0]!.runs).map((candidate) => candidate.id)).toEqual([18431])
+    const eligible = grouped.filter((chain) => pillEligible(chain))
+    expect(eligible).toEqual([])
+    expect(pillPick(eligible)).toBeUndefined()
+  })
+
+  test("distinct workflows remain separate; latest standalone failure still attracts attention", () => {
+    const passed = { ...run(18440, "same-head", 100), series: { key: "workflow-1", sequence: 1 } }
+    const failed = { ...run(18441, "same-head", 110), status: "failed" as const, series: { key: "workflow-2", sequence: 2 } }
+    const chains = associate([], [passed, failed])
+    expect(chains).toHaveLength(2)
+    const failedChain = chains.find((chain) => chain.runs[0]?.status === "failed")!
+    expect(pillEligible(failedChain)).toBe(true)
+    expect(chainTone(failedChain)).toBe("danger")
+    expect(pillPick(chains)?.chain).toBe(failedChain)
+  })
+
+  test("different repo/head and missing series metadata do not group", () => {
+    const series = { key: "workflow-1", sequence: 1 }
+    const runs = [
+      { ...run(18450, "head-a", 1), series },
+      { ...run(18451, "head-b", 2), series },
+      { ...run(18452, "head-a", 3), repo: { host: "github.com", owner: "acme", repo: "api" }, series },
+      run(18453, "head-a", 4),
+      run(18454, "head-a", 5),
+    ]
+    expect(associate([], runs)).toHaveLength(5)
   })
 
   test("issues with no closing PR stand alone", () => {

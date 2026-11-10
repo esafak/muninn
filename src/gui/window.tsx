@@ -5,7 +5,7 @@ import { ComposerPill, MenuItem, Panel, SettingsPage, createKeyed, usePlugin, ty
 import { associate } from "../associate"
 import { deliberateRefs, messageBuckets, wireRefs } from "../extract"
 import type { Chain, Entity, PullEntity, RepoRef, RunEntity, RunStatus } from "../model"
-import { chainTone, armedTargets, pillPick, pillEligible, mergeReady, mergeWhy, pullForRun, prConflicted, refKey, repoKey, entityKey } from "../model"
+import { chainTone, armedTargets, pillPick, pillEligible, mergeReady, mergeWhy, latestRuns, pullForRun, prConflicted, refKey, repoKey, entityKey } from "../model"
 import { githubLexicon } from "../providers/github/lexicon"
 import { baseCheckoutDecision, cleanupDecision, cleanupResultMessage, cleanupSessionMatches, safeFastForward, sessionMoveConfirmed, shouldFastForwardBase, shouldRecordCleanupFailure, worktreeOccupancyDecision } from "../local-cleanup"
 import { Muninn } from "../rpc"
@@ -610,7 +610,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       const worst = picked.chain
       const lead = worst.prs.find((pull) => pull.state === "open" || pull.state === "draft") ??
         (picked.reason === "merged" ? worst.prs.find((pull) => pull.state === "merged") : undefined)
-      const run = worst.runs[0]
+      const run = latestRuns(worst.runs)[0]
       if (!lead && !run) return undefined
       const chainStatus = chainTone(worst, waitForAllStatusChecks())
       const tone = lead?.state === "merged" && chainStatus === "success" ? undefined : chainStatus
