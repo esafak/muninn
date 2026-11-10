@@ -142,6 +142,6 @@ mn gui <sha+time> · srv <sha> · gate ✓ <sessionID> · chains N · eligible N
   entities in older durable-cache entries and old debug footers.
 - Coincidental collisions hydrate: a fabricated number can resolve to a real,
   unrelated entity (hydrated ≠ deliberate).
-- The pill pick now runs over live chains only, and `pillPick` never returns a
+- The pill pick now runs over eligible chains only, and `pillPick` never returns a
   chain lacking both PRs and runs — a dead (merged) chain can't win, and an
   issue-only chain renders no pill at all.
