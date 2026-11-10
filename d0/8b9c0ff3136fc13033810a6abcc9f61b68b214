@@ -1,0 +1,35 @@
+src/gui/window.tsx
+  h_ea91e2db23540f 626-628,629,632,637,643-645
+  s_070cc877228df1::t_3108bf3f3b49ae 16,495-501,630
+docs/design/decisions.md
+  h_ea91e2db23540f 11-13
+src/gui/pill-status.test.ts
+  s_070cc877228df1::t_c0a68dca3c57a0 1-33
+src/gui/pill-status.ts
+  s_070cc877228df1::t_9fd4c92828ccde 1-20
+src/local-cleanup.test.ts
+  s_070cc877228df1::t_5965a22ed69ecd 35-79,83,90,93-94,97-101
+src/local-cleanup.ts
+  s_070cc877228df1::t_56df408082060c 21-27,32-42,44-45
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d08b9c0ff3136fc13033810a6abcc9f61b68b214",
+  "prompts": {},
+  "humans": {
+    "h_ea91e2db23540f": {
+      "author": "Emre Şafak <3928300+esafak@users.noreply.github.com>"
+    }
+  },
+  "sessions": {
+    "s_070cc877228df1": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_e39da0c9affelve7t9Pb0N7Ko8",
+        "model": "unknown"
+      },
+      "human_author": "Emre Şafak <3928300+esafak@users.noreply.github.com>"
+    }
+  }
+}
