@@ -216,7 +216,7 @@ export const History = (props: HistoryProps) => {
               <Show when={index() === 0 || !sameDay(props.chains()[index() - 1]!.updatedAt, chain.updatedAt)}>
                 <div class="mn-day">{dayLabel(chain.updatedAt)}</div>
               </Show>
-              <div class="mn-chain" data-tone={chainTone(chain)}>
+              <div class="mn-chain" data-tone={chainTone(chain, props.waitForAllStatusChecks())}>
                 <For each={chain.prs}>
                   {(pull, prIndex) => (
                     <div

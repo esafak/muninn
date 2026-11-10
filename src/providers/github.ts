@@ -178,7 +178,7 @@ const statusContextStatus = (state: string): RunEntity["status"] => {
 const checkRunStatus = (check: CheckRunJson): RunEntity["status"] => {
   if (check.status === "queued") return "queued"
   if (check.status === "in_progress") return "running"
-  return check.status === "completed" && check.conclusion === "success" ? "succeeded" : "failed"
+  return check.status === "completed" && ["success", "neutral", "skipped"].includes(check.conclusion ?? "") ? "succeeded" : "failed"
 }
 
 const statusPageHasMore = (count: number): boolean => count === 100

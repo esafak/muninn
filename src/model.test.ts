@@ -203,6 +203,18 @@ describe("chainTone", () => {
     expect(chainTone(chain({ prs: [pull({ state: "merged" })] }))).toBe("success")
   })
 
+  test("status-check policy controls green tone without hiding actual danger", () => {
+    const waiting = chain({ prs: [pull({ statusChecks: { headSha: "abc123", state: "available", contexts: [{ name: "gate", status: "running" }] } })] })
+    expect(chainTone(waiting)).toBeUndefined()
+    expect(chainTone(waiting, false)).toBe("success")
+    expect(pillPick([waiting])?.reason).toBe("newest")
+    expect(pillPick([waiting], false)?.reason).toBe("newest")
+
+    const danger = chain({ prs: [pull({ reviewState: "changes_requested", statusChecks: { headSha: "abc123", state: "available", contexts: [{ name: "gate", status: "running" }] } })] })
+    expect(chainTone(danger, false)).toBe("danger")
+    expect(pillPick([waiting, danger], false)?.chain).toBe(danger)
+  })
+
   test("chain tone evaluates the open PR even when a merged PR leads the group", () => {
     const merged = pull({ state: "merged", number: 1, headSha: "merged-head" })
     const open = pull({ state: "open", number: 2, headSha: "open-head" })

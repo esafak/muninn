@@ -262,10 +262,11 @@ export const pillEligible = (
  * resort. An issue-only chain never wins — there is nothing to show. */
 export const pillPick = (
   chains: readonly Chain[],
+  waitForAllStatusChecks = true,
 ): { chain: Chain; reason: "danger" | "newest" | "runs-only" | "merged"; considered: number } | undefined => {
   const byNewest = (a: { updatedAt: number }, b: { updatedAt: number }): number => b.updatedAt - a.updatedAt
   const prChains = chains.filter((chain) => chain.prs.some((pull) => pull.state === "open" || pull.state === "draft")).toSorted(byNewest)
-  const danger = prChains.find((chain) => chainTone(chain) === "danger")
+  const danger = prChains.find((chain) => chainTone(chain, waitForAllStatusChecks) === "danger")
   if (danger) return { chain: danger, reason: "danger", considered: prChains.length }
   if (prChains[0]) return { chain: prChains[0], reason: "newest", considered: prChains.length }
   const attention = chains
@@ -319,7 +320,7 @@ export const armedTargets = (
  * outrank everything; blocked and in-flight work read as warning; a fully green
  * chain reads as success.
  */
-export const chainTone = (chain: Chain): "success" | "warning" | "danger" | undefined => {
+export const chainTone = (chain: Chain, waitForAllStatusChecks = true): "success" | "warning" | "danger" | undefined => {
   const lead = chain.prs.find((pull) => pull.state === "open" || pull.state === "draft") ?? chain.prs[0]
   const relevantRuns = lead
     ? chain.runs.filter((run) => run.headSha === lead.headSha)
@@ -330,7 +331,7 @@ export const chainTone = (chain: Chain): "success" | "warning" | "danger" | unde
   if (lead?.mergeState === "conflict" || lead?.reviewState === "changes_requested") return "danger"
   if (relevantRuns.some((run) => run.status === "running" || run.status === "queued")) return "warning"
   if (lead?.state === "open" && (lead.mergeState === "blocked" || lead.mergeState === "pending")) return "warning"
-  if (lead?.state === "open" && mergeReady(chain, lead)) return "success"
+  if (lead?.state === "open" && mergeReady(chain, lead, waitForAllStatusChecks)) return "success"
   if (lead?.state === "merged") return "success"
   if (chain.prs.length === 0 && chain.runs.some((run) => run.status === "succeeded")) return "success"
   return undefined

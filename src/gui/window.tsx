@@ -250,6 +250,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
   // pill is the session's work, and a newer PR outranks it through `pillPick`),
   // CI needing attention, an armed merge pending. Mentions of other branches'
   // work stay in the sidebar; settled history never pills.
+  const waitForAllStatusChecks = () => ctx.stores.settings.value.waitForAllStatusChecks !== false
   const pillState = createMemo(() => {
     const eligible = chains().filter((chain) =>
       pillEligible(chain, {
@@ -258,7 +259,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
         armed: ctx.stores.armed.value.entries,
       }),
     )
-    return { eligible, picked: pillPick(eligible) }
+    return { eligible, picked: pillPick(eligible, waitForAllStatusChecks()) }
   })
   // The menu's merge-when-ready toggle binds to the first open PR across
   // eligible chains. Reactive — the popover updates while it's open.
@@ -391,7 +392,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
    * green. Runs after every refresh cycle; consumes the entry before firing so a
    * concurrent refresh can't double-fire. */
   const driveArmedMerges = () => {
-    for (const { pull, method } of armedTargets(ctx.stores.armed.value.entries, chains(), ctx.stores.settings.value.waitForAllStatusChecks !== false)) {
+    for (const { pull, method } of armedTargets(ctx.stores.armed.value.entries, chains(), waitForAllStatusChecks())) {
       ctx.stores.armed.update((draft) => {
         draft.entries = draft.entries.filter(
           (entry) => !(repoKey(entry.repo) === repoKey(pull.repo) && entry.number === pull.number),
@@ -482,7 +483,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
         (picked.reason === "merged" ? worst.prs.find((pull) => pull.state === "merged") : undefined)
       const run = worst.runs[0]
       if (!lead && !run) return undefined
-      const chainStatus = chainTone(worst)
+      const chainStatus = chainTone(worst, waitForAllStatusChecks())
       const tone = lead?.state === "merged" && chainStatus === "success" ? undefined : chainStatus
 
       // The capsule reads like GitHub's PR status: a circle icon in the worst
@@ -538,7 +539,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
                       chain={chain}
                       pull={pull}
                       isArmed={isArmed}
-                      waitForAllStatusChecks={() => ctx.stores.settings.value.waitForAllStatusChecks !== false}
+                      waitForAllStatusChecks={waitForAllStatusChecks}
                       onMerge={mergePull}
                       onArm={armPull}
                     />
@@ -598,10 +599,10 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
                   class="mn-pop-toggle"
                   title={
                     isArmed(lead().pull)
-                      ? `Muninn is driving the merge (${lead().pull.autoMerge ? "also armed on the forge" : "armed locally"}); ${mergeReady(lead().chain, lead().pull, ctx.stores.settings.value.waitForAllStatusChecks !== false) ? "merging on the next check (within ~30s)" : `waiting: ${mergeWhy(lead().chain, lead().pull, ctx.stores.settings.value.waitForAllStatusChecks !== false)}`} — click to cancel`
-                      : mergeReady(lead().chain, lead().pull, ctx.stores.settings.value.waitForAllStatusChecks !== false)
+                      ? `Muninn is driving the merge (${lead().pull.autoMerge ? "also armed on the forge" : "armed locally"}); ${mergeReady(lead().chain, lead().pull, waitForAllStatusChecks()) ? "merging on the next check (within ~30s)" : `waiting: ${mergeWhy(lead().chain, lead().pull, waitForAllStatusChecks())}`} — click to cancel`
+                      : mergeReady(lead().chain, lead().pull, waitForAllStatusChecks())
                         ? "green now — Muninn merges on its next check (within ~30s)"
-                        : `Muninn merges when checks pass and reviews approve — now blocked: ${mergeWhy(lead().chain, lead().pull, ctx.stores.settings.value.waitForAllStatusChecks !== false)}`
+                        : `Muninn merges when checks pass and reviews approve — now blocked: ${mergeWhy(lead().chain, lead().pull, waitForAllStatusChecks())}`
                   }
                 >
                   <input
@@ -635,10 +636,10 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
             />
             delete branch
           </label>
-          <label class="mn-pop-toggle" title="Wait for every GitHub check-run and commit status context on the PR's current head SHA">
+          <label class="mn-pop-toggle" title={ctx.t("settings.waitForAllStatusChecks.description")}>
             <input
               type="checkbox"
-              checked={ctx.stores.settings.value.waitForAllStatusChecks !== false}
+              checked={waitForAllStatusChecks()}
               onChange={(event) => ctx.stores.settings.update((draft) => { draft.waitForAllStatusChecks = event.currentTarget.checked })}
             />
             {ctx.t("settings.waitForAllStatusChecks")}
@@ -699,7 +700,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
             error={() => meta.error}
             debug={debugLine}
             showDebug={() => ctx.stores.settings.value.debugMode}
-            waitForAllStatusChecks={() => ctx.stores.settings.value.waitForAllStatusChecks !== false}
+            waitForAllStatusChecks={waitForAllStatusChecks}
             sessionReady={sessionReady}
             onOpen={open}
             onMerge={mergePull}

@@ -111,19 +111,27 @@ describe("statusCheckSnapshot", () => {
     })
   })
 
-  test("uses the latest attempt per app and check name; only success passes", () => {
+  test("uses the latest attempt per app and check name; GitHub treats success, neutral, and skipped as passed", () => {
     const snapshot = statusCheckSnapshot("head-2", [], [
       { id: 1, name: "Build", status: "completed", conclusion: "failure", app: { id: 10 } },
       { id: 2, name: "Build", status: "completed", conclusion: "success", app: { id: 10 } },
       { id: 3, name: "Build", status: "completed", conclusion: "success", app: { id: 11 } },
       { id: 4, name: "Deploy", status: "completed", conclusion: "skipped", app: { id: 10 } },
+      { id: 6, name: "Lint", status: "completed", conclusion: "neutral", app: { id: 10 } },
       { id: 5, name: "Test", status: "in_progress", conclusion: null, app: { id: 10 } },
+      { id: 7, name: "Audit", status: "completed", conclusion: "timed_out", app: { id: 10 } },
+      { id: 8, name: "Missing conclusion", status: "completed", conclusion: null, app: { id: 10 } },
+      { id: 9, name: "Unknown conclusion", status: "completed", conclusion: "future", app: { id: 10 } },
     ])
     expect(snapshot.contexts).toEqual([
       { name: "check-run:10:Build", status: "succeeded" },
       { name: "check-run:11:Build", status: "succeeded" },
-      { name: "check-run:10:Deploy", status: "failed" },
+      { name: "check-run:10:Deploy", status: "succeeded" },
+      { name: "check-run:10:Lint", status: "succeeded" },
       { name: "check-run:10:Test", status: "running" },
+      { name: "check-run:10:Audit", status: "failed" },
+      { name: "check-run:10:Missing conclusion", status: "failed" },
+      { name: "check-run:10:Unknown conclusion", status: "failed" },
     ])
   })
 

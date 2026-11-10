@@ -143,6 +143,7 @@ export const definition = Plugin.define({
       "settings.debug": "Debug mode",
       "settings.debug.description": "Show the diagnostics footer (build SHAs, pill state, hydration stats) at the bottom of the panel.",
       "settings.waitForAllStatusChecks": "Wait for all status checks",
+      "settings.waitForAllStatusChecks.description": "Wait for all check-runs and commit status contexts on the current pull request head. Neutral and skipped check-runs count as complete.",
       "state.open": "open",
       "state.draft": "draft",
       "state.merged": "merged",
