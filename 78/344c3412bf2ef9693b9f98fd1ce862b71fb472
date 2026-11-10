@@ -1,0 +1,18 @@
+src/gui/pill-diagnostics.test.ts
+  h_ea91e2db23540f 1-37
+src/gui/pill-diagnostics.ts
+  h_ea91e2db23540f 1-13
+src/gui/window.tsx
+  h_ea91e2db23540f 17,643-644
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "78344c3412bf2ef9693b9f98fd1ce862b71fb472",
+  "prompts": {},
+  "humans": {
+    "h_ea91e2db23540f": {
+      "author": "Emre Şafak <3928300+esafak@users.noreply.github.com>"
+    }
+  }
+}
