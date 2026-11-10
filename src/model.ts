@@ -147,6 +147,9 @@ export const refKey = (ref: Ref): string =>
 export const entityKey = (entity: Entity): string =>
   `${repoKey(entity.repo)}#${entity.kind}${entity.kind === "run" ? entity.id : entity.number}`
 
+/** Whether an open PR should show the conflict-specific glyph. */
+export const prConflicted = (pull: PullEntity): boolean => pull.state === "open" && pull.mergeState === "conflict"
+
 /** Whether a PR can merge right now: open, checks green, no conflicts, no
  * outstanding change requests. Defaults to the chain's lead; callers pass an
  * explicit pull to check another member of the chain. Unknown states (entries
@@ -255,8 +258,8 @@ export const pillEligible = (
 }
 
 /** The pill's lead chain, among the eligible pool: the worst-toned PR chain
- * outranks recency (failing checks, conflicts, or a requested review beat a calm
- * newer one); otherwise the most recently updated open/draft PR chain; then
+ * outranks recency (failing checks, conflicts, blocked merges, or a requested
+ * review beat a calm newer one); otherwise the most recently updated open/draft PR chain; then
  * attention-bearing run-only chains (a discovered failure); then the newest
  * merged chain as the terminal pill; settled run-bearing chains are the last
  * resort. An issue-only chain never wins — there is nothing to show. */
@@ -316,9 +319,9 @@ export const armedTargets = (
 }
 
 /**
- * Worst-state helper for pill tones: failing runs and conflicted/revoked work
- * outrank everything; blocked and in-flight work read as warning; a fully green
- * chain reads as success.
+ * Worst-state helper for pill and history tones: failing runs, conflicts,
+ * requested changes, and blocked merges are danger; pending and in-flight work
+ * are warning; a fully green chain reads as success.
  */
 export const chainTone = (chain: Chain, waitForAllStatusChecks = true): "success" | "warning" | "danger" | undefined => {
   const lead = chain.prs.find((pull) => pull.state === "open" || pull.state === "draft") ?? chain.prs[0]
@@ -329,8 +332,9 @@ export const chainTone = (chain: Chain, waitForAllStatusChecks = true): "success
       : []
   if (relevantRuns.some((run) => run.status === "failed")) return "danger"
   if (lead?.mergeState === "conflict" || lead?.reviewState === "changes_requested") return "danger"
+  if (lead?.state === "open" && lead.mergeState === "blocked") return "danger"
   if (relevantRuns.some((run) => run.status === "running" || run.status === "queued")) return "warning"
-  if (lead?.state === "open" && (lead.mergeState === "blocked" || lead.mergeState === "pending")) return "warning"
+  if (lead?.state === "open" && lead.mergeState === "pending") return "warning"
   if (lead?.state === "open" && mergeReady(chain, lead, waitForAllStatusChecks)) return "success"
   if (lead?.state === "merged") return "success"
   if (chain.prs.length === 0 && chain.runs.some((run) => run.status === "succeeded")) return "success"

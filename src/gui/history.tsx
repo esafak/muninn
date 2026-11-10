@@ -2,10 +2,10 @@ import { For, Match, Show, Switch, createSignal } from "solid-js"
 import type { Accessor, JSX } from "solid-js"
 import { usePlugin } from "@opencode/plugin/gui"
 import type { Chain, PullEntity, RepoRef, RunEntity, RunStatus } from "../model"
-import { chainTone, mergeReady, mergeWhy, repoKey } from "../model"
+import { chainTone, mergeReady, mergeWhy, prConflicted, repoKey } from "../model"
 import type { definition } from "./definition"
 import { Mark } from "./marks"
-import { CancelledGlyph, CheckGlyph, CrossGlyph, IssueGlyph, MergeGlyph, MergedGlyph, PullGlyph, QueuedGlyph } from "./icons"
+import { CancelledGlyph, CheckGlyph, CrossGlyph, IssueGlyph, MergeGlyph, MergedGlyph, PullConflictGlyph, PullGlyph, QueuedGlyph, UnknownGlyph } from "./icons"
 
 const DAY_MS = 24 * 60 * 60 * 1000
 
@@ -227,10 +227,12 @@ export const History = (props: HistoryProps) => {
                       <span class="mn-mark">
                         <Mark provider={pull.provider} />
                       </span>
-                      <span class="mn-kind" data-state={`pr-${pull.state}`} title={ctx.t(`state.${pull.state}`)}>
-                        <Show when={pull.state === "merged"} fallback={<PullGlyph />}>
-                          <MergedGlyph />
-                        </Show>
+                      <span
+                        class="mn-kind"
+                        data-state={prConflicted(pull) ? "pr-conflict" : `pr-${pull.state}`}
+                        title={ctx.t(prConflicted(pull) ? "state.pr-conflict" : `state.${pull.state}`)}
+                      >
+                        {pull.state === "merged" ? <MergedGlyph /> : prConflicted(pull) ? <PullConflictGlyph /> : <PullGlyph />}
                       </span>
                       <Show when={pull.state === "open"}>
                         <span
@@ -239,7 +241,7 @@ export const History = (props: HistoryProps) => {
                           data-armed={props.isArmed(pull) ? "" : undefined}
                           title={`merge: ${pull.mergeState ?? "unknown"}${pull.reviewState ? ` · reviews: ${pull.reviewState}` : ""}${props.isArmed(pull) ? " · Muninn is watching" : ""}`}
                         >
-                          <MergeGlyph />
+                          {pull.state === "open" && pull.mergeState == null ? <UnknownGlyph /> : <MergeGlyph />}
                         </span>
                       </Show>
                       <span

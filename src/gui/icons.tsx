@@ -39,6 +39,28 @@ export const PullGlyph = (): JSX.Element =>
     </g>,
   )
 
+/** Tabler-style pull request with conflicts, matched to Muninn's stroke and node sizing. */
+export const PullConflictGlyph = (): JSX.Element => (
+  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <path d="M15.375 20.2a2.625 2.625 0 1 0 5.25 0a2.625 2.625 0 0 0 -5.25 0" />
+    <path d="M11 6h5a2 2 0 0 1 2 2v8" />
+    <path d="M3.375 20.2a2.625 2.625 0 1 0 5.25 0a2.625 2.625 0 0 0 -5.25 0" />
+    <path d="M6 11v5" />
+    <path d="M4 4l4 4" />
+    <path d="M8 4l-4 4" />
+  </svg>
+)
+
+/** Unknown merge status. */
+export const UnknownGlyph = (): JSX.Element =>
+  svg(
+    <g fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="8" cy="8" r="6" />
+      <path d="M6.5 6.2a1.6 1.6 0 1 1 2.8 1c-.6.7-1.3.8-1.3 1.8" />
+      <circle cx="8" cy="11.3" r=".45" fill="currentColor" stroke="none" />
+    </g>,
+  )
+
 /** ⊙→ merged pull request. */
 export const MergedGlyph = (): JSX.Element =>
   svg(
@@ -88,7 +110,7 @@ export const CancelledGlyph = (): JSX.Element =>
   )
 
 /** GitHub's merge-status mark: a circle with a center dot, colored by the
- * chain's merge state (green mergeable, amber settling, red conflicted). */
+ * chain's merge state (green ready, amber pending, red blocked). */
 export const MergeGlyph = (): JSX.Element =>
   svg(
     <>

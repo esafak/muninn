@@ -145,6 +145,7 @@ export const definition = Plugin.define({
       "settings.waitForAllStatusChecks": "Wait for all status checks",
       "settings.waitForAllStatusChecks.description": "Wait for all check-runs and commit status contexts on the current pull request head. Neutral and skipped check-runs count as complete.",
       "state.open": "open",
+      "state.pr-conflict": "Pull request has merge conflicts",
       "state.draft": "draft",
       "state.merged": "merged",
       "state.closed": "closed",

@@ -5,12 +5,12 @@ import { ComposerPill, MenuItem, Panel, SettingsPage, createKeyed, usePlugin, ty
 import { associate } from "../associate"
 import { deliberateRefs, messageBuckets, wireRefs } from "../extract"
 import type { Chain, Entity, PullEntity, RepoRef, RunEntity, RunStatus } from "../model"
-import { chainTone, armedTargets, pillPick, pillEligible, mergeReady, mergeWhy, pullForRun, refKey, repoKey, entityKey } from "../model"
+import { chainTone, armedTargets, pillPick, pillEligible, mergeReady, mergeWhy, pullForRun, prConflicted, refKey, repoKey, entityKey } from "../model"
 import { githubLexicon } from "../providers/github/lexicon"
 import { Muninn } from "../rpc"
 import type { definition } from "./definition"
 import { History, MergeButton } from "./history"
-import { CancelledGlyph, CheckGlyph, CrossGlyph, IssueGlyph, MergeGlyph, MergedGlyph, PullGlyph, QueuedGlyph } from "./icons"
+import { CancelledGlyph, CheckGlyph, CrossGlyph, IssueGlyph, MergeGlyph, MergedGlyph, PullConflictGlyph, PullGlyph, QueuedGlyph, UnknownGlyph } from "./icons"
 import { pillIcon } from "./marks"
 
 const POLL_MS = 30_000
@@ -522,8 +522,12 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
               <For each={chain.prs}>
                 {(pull) => (
                   <div class="mn-pop-row" onClick={() => { input.close(); open(pull.url) }}>
-                    <span class="mn-kind" data-state={`pr-${pull.state}`} title={ctx.t(`state.${pull.state}`)}>
-                      {pull.state === "merged" ? <MergedGlyph /> : <PullGlyph />}
+                    <span
+                      class="mn-kind"
+                      data-state={prConflicted(pull) ? "pr-conflict" : `pr-${pull.state}`}
+                      title={ctx.t(prConflicted(pull) ? "state.pr-conflict" : `state.${pull.state}`)}
+                    >
+                      {pull.state === "merged" ? <MergedGlyph /> : prConflicted(pull) ? <PullConflictGlyph /> : <PullGlyph />}
                     </span>
                     <span
                       class="mn-merge-state"
@@ -531,7 +535,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
                       data-armed={isArmed(pull) ? "" : undefined}
                       title={`merge: ${pull.mergeState ?? "unknown"}${pull.reviewState ? ` · reviews: ${pull.reviewState}` : ""}${isArmed(pull) ? " · Muninn is watching" : ""}`}
                     >
-                      <MergeGlyph />
+                      {pull.state === "open" && pull.mergeState == null ? <UnknownGlyph /> : <MergeGlyph />}
                     </span>
                     <span class="mn-pop-id">#{pull.number}</span>
                     <span class="mn-pop-title">{pull.title}</span>
@@ -807,6 +811,7 @@ const STYLES = `
 .mn-kind[data-state="pr-draft"] { color: var(--v2-icon-icon-faint); }
 .mn-kind[data-state="pr-merged"], .mn-kind[data-state="issue-closed"] { color: var(--v2-text-text-accent); }
 .mn-kind[data-state="pr-closed"] { color: var(--v2-state-fg-danger); }
+.mn-kind[data-state="pr-conflict"] { color: var(--v2-icon-icon-muted); }
 .mn-id { font-family: var(--v2-font-family-code); font-size: 11.5px; font-weight: 600; flex: none; cursor: copy; }
 .mn-id.copied { color: var(--v2-state-fg-success); }
 .mn-chain[data-stale="true"] { opacity: .55; }
@@ -915,8 +920,10 @@ const STYLES = `
 /* Merge-status glyph: GitHub's circle-dot, colored by merge state. */
 .mn-merge-state { color: var(--v2-icon-icon-muted); flex: none; display: inline-flex; }
 .mn-merge-state[data-state="ready"] { color: var(--v2-state-fg-success, #1a7f37); }
-.mn-merge-state[data-state="pending"], .mn-merge-state[data-state="blocked"], .mn-merge-state[data-state="unknown"] { color: var(--v2-state-fg-warning, #9a6700); }
-.mn-merge-state[data-state="conflict"] { color: var(--v2-state-fg-danger, #cf222e); }
+.mn-merge-state[data-state="pending"] { color: var(--v2-state-fg-warning, #9a6700); }
+.mn-merge-state[data-state="blocked"] { color: var(--v2-state-fg-danger, #cf222e); }
+.mn-merge-state[data-state="unknown"] { color: var(--v2-icon-icon-muted); }
+.mn-merge-state[data-state="conflict"] { color: var(--v2-icon-icon-muted); }
 /* Armed: Muninn is watching — the dot pulses until the merge fires. */
 .mn-merge-state[data-armed] { color: var(--v2-state-fg-warning, #9a6700); animation: mn-pulse 1.6s ease-in-out infinite; }
 @keyframes mn-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
