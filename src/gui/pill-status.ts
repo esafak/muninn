@@ -18,3 +18,11 @@ export const pillStatusIcon = (
   if (tone === "danger") return "circle-xmark"
   return fallback
 }
+
+export const pillStatusTone = (
+  state: PullState | undefined,
+  tone: ComposerPillTone | undefined,
+): ComposerPillTone | undefined => {
+  if (state === "merged" && (tone === undefined || tone === "success")) return "success"
+  return tone
+}

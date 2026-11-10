@@ -99,6 +99,7 @@ export const definition = Plugin.define({
             repo: Repo,
             number: Schema.Number,
             method: Schema.Literals(["merge", "squash", "rebase"]),
+            armID: Schema.optional(Schema.String),
           }),
         ),
       }),

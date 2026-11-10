@@ -16,6 +16,7 @@ import { fastForwardDecision } from "./local-cleanup"
 import { execFile } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { promisify } from "node:util"
+import { coordinateMerge } from "./merge-coordinator"
 
 const exec = promisify(execFile)
 const safeBranch = (branch: string): boolean => Boolean(branch) && !branch.startsWith("-") && !branch.includes("..")
@@ -186,7 +187,10 @@ export default Plugin.define({
         if (!repo) return { merged: false, message: "no repository resolved for this directory" }
         const source = sourceFor(repo.host)
         if (!source) return { merged: false, message: `no provider for ${repo.host}` }
-        return source.merge(repo, input.number, input.method, input.expectedHeadSha, () => source.auth(ctx))
+        const key = `${repo.host.toLowerCase()}/${repo.owner.toLowerCase()}/${repo.repo.toLowerCase()}#${input.number}`
+        return coordinateMerge(key, input.expectedHeadSha, () =>
+          source.merge(repo, input.number, input.method, input.expectedHeadSha, () => source.auth(ctx)),
+        )
       },
       checkLocalWorktree: async (input) => checkLocalWorktree(input.directory, input.branch, input.expectedHeadSha),
       deleteLocalBranch: async (input) => deleteLocalBranch(input.directory, input.branch, input.expectedHeadSha),

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import type { Chain, IssueEntity, PullEntity, RepoRef, RunEntity } from "./model"
-import { chainTone, mergeReady, mergeWhy, armedTargets, pillPick, type ArmedEntry, pillEligible, pullForRun, pullsForRun, jsonReady, prConflicted } from "./model"
+import { chainTone, mergeReady, mergeWhy, armedTargets, staleHeadRetryEligible, staleHeadEvidenceUsable, sessionAttemptCurrent, targetRefreshConfirmed, pillPick, type ArmedEntry, pillEligible, pullForRun, pullsForRun, jsonReady, prConflicted } from "./model"
 import { associate } from "./associate"
 
 const repo = { host: "github.com", owner: "sst", repo: "opencode" }
@@ -396,6 +396,60 @@ describe("armedTargets", () => {
   test("providers without merge state still fire on green checks alone", () => {
     // mergeState undefined: the fallback path — what a minimal forge returns.
     expect(armedTargets([entry()], [chain()]).length).toBe(1)
+  })
+})
+
+describe("staleHeadRetryEligible", () => {
+  const ready = {
+    via: "when-ready" as const,
+    headChanged: true,
+    armed: true,
+    refreshSucceeded: true,
+    inFlight: false,
+    rejectedHeadSha: "old-head",
+    currentHeadSha: "new-head",
+    ready: true,
+  }
+
+  test("retries only an armed, refreshed, newly changed head that is ready", () => {
+    expect(staleHeadRetryEligible(ready)).toBe(true)
+    expect(staleHeadRetryEligible({ ...ready, via: "manual" })).toBe(false)
+    expect(staleHeadRetryEligible({ ...ready, headChanged: false })).toBe(false)
+    expect(staleHeadRetryEligible({ ...ready, armed: false })).toBe(false)
+    expect(staleHeadRetryEligible({ ...ready, refreshSucceeded: false })).toBe(false)
+    expect(staleHeadRetryEligible({ ...ready, inFlight: true })).toBe(false)
+    expect(staleHeadRetryEligible({ ...ready, currentHeadSha: "old-head" })).toBe(false)
+    expect(staleHeadRetryEligible({ ...ready, currentHeadSha: undefined })).toBe(false)
+    expect(staleHeadRetryEligible({ ...ready, ready: false })).toBe(false)
+  })
+})
+
+describe("sessionAttemptCurrent", () => {
+  test("rejects completions from a replaced session or directory", () => {
+    const original = { id: "session-a", directory: "/repo/a" }
+    expect(sessionAttemptCurrent(original, original)).toBe(true)
+    expect(sessionAttemptCurrent(original, { ...original, id: "session-b" })).toBe(false)
+    expect(sessionAttemptCurrent(original, { ...original, directory: "/repo/b" })).toBe(false)
+    expect(sessionAttemptCurrent(original, undefined)).toBe(false)
+  })
+})
+
+describe("targetRefreshConfirmed", () => {
+  test("publishes no evidence after any stage fails, even if hydrate returned the PR", () => {
+    expect(targetRefreshConfirmed({ refreshSucceeded: true, targetReturned: true, targetUnresolved: false })).toBe(true)
+    expect(targetRefreshConfirmed({ refreshSucceeded: true, targetReturned: false, targetUnresolved: false })).toBe(false)
+    // Hydration may succeed, but a later branch-run stage can fail; do not publish it.
+    expect(targetRefreshConfirmed({ refreshSucceeded: false, targetReturned: true, targetUnresolved: false })).toBe(false)
+    expect(targetRefreshConfirmed({ refreshSucceeded: true, targetReturned: false, targetUnresolved: true })).toBe(false)
+  })
+})
+
+describe("staleHeadEvidenceUsable", () => {
+  test("requires a confirmed refreshed head different from the rejected head and candidate", () => {
+    expect(staleHeadEvidenceUsable({ rejectedHeadSha: "old", candidateHeadSha: "new", confirmedHeadSha: "new" })).toBe(true)
+    expect(staleHeadEvidenceUsable({ rejectedHeadSha: "old", candidateHeadSha: "old", confirmedHeadSha: "old" })).toBe(false)
+    expect(staleHeadEvidenceUsable({ rejectedHeadSha: "old", candidateHeadSha: "new", confirmedHeadSha: "other" })).toBe(false)
+    expect(staleHeadEvidenceUsable({ rejectedHeadSha: "old", candidateHeadSha: "new" })).toBe(false)
   })
 })
 

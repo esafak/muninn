@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { mergeResponse, toPullEntity, runEntity, toIssueEntity, statusCheckSnapshot, combineStatusCheckResults, decodeStatusPage, collectStatusPages, cachedPromise, statusCheckCacheKey, shouldLoadStatusChecks } from "./github"
+import { mergeResponse, staleHeadConflict, toPullEntity, runEntity, toIssueEntity, statusCheckSnapshot, combineStatusCheckResults, decodeStatusPage, collectStatusPages, cachedPromise, statusCheckCacheKey, shouldLoadStatusChecks } from "./github"
 import { PullEntity, RunEntity as RunEntitySchema } from "../rpc"
 
 describe("mergeResponse", () => {
@@ -36,6 +36,15 @@ describe("mergeResponse", () => {
     expect(mergeResponse(undefined)).toEqual(invalid)
     expect(mergeResponse("merged")).toEqual(invalid)
     expect(mergeResponse(42)).toEqual(invalid)
+  })
+})
+
+describe("staleHeadConflict", () => {
+  test("classifies only a 409 confirmed against a different current head", () => {
+    expect(staleHeadConflict(409, "old-head", "new-head")).toBe(true)
+    expect(staleHeadConflict(409, "head", "head")).toBe(false)
+    expect(staleHeadConflict(409, "head", undefined)).toBe(false)
+    expect(staleHeadConflict(422, "old-head", "new-head")).toBe(false)
   })
 })
 

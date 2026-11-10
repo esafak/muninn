@@ -28,6 +28,10 @@ export interface MergeSettings {
 
 export type Auth = () => Promise<string | undefined>
 
+export type MergeResult =
+  | { merged: true }
+  | { merged: false; message?: string; headChanged?: boolean; inFlight?: boolean; alreadyHandled?: boolean }
+
 export interface SourceProvider {
   /** Registry id, e.g. "github". */
   id: string
@@ -48,7 +52,7 @@ export interface SourceProvider {
     method: "merge" | "squash" | "rebase",
     expectedHeadSha: string,
     auth: Auth,
-  ) => Promise<{ merged: boolean; message?: string }>
+  ) => Promise<MergeResult>
   /** Arms (or disarms) auto-merge: merge when checks pass and required reviews approve. */
   setAutoMerge: (
     repo: RepoRef,

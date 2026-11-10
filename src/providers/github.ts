@@ -108,6 +108,9 @@ export const mergeResponse = (body: unknown): { merged: boolean; message?: strin
   }
 }
 
+export const staleHeadConflict = (status: number, expectedHeadSha: string, currentHeadSha: string | undefined): boolean =>
+  status === 409 && currentHeadSha !== undefined && currentHeadSha !== expectedHeadSha
+
 const request = async <T>(path: string, auth: Auth): Promise<T | undefined> => {
   const token = await auth()
   const response = await fetch(`${API}${path}`, {
@@ -339,11 +342,30 @@ const STATUS_CACHE_MAX_ENTRIES = 512
 
 const cache = new Map<string, { at: number; entity?: Entity }>()
 const statusCheckCache = new Map<string, { at: number; promise: Promise<NonNullable<PullEntity["statusChecks"]>> }>()
+const repositoryEpochs = new Map<string, number>()
+const repositoryCacheKey = (repo: RepoRef): string => `${repo.owner.toLowerCase()}/${repo.repo.toLowerCase()}`
+const repositoryEpoch = (repo: RepoRef): number => repositoryEpochs.get(repositoryCacheKey(repo)) ?? 0
+const invalidatePullCaches = (repo: RepoRef, number: number): void => {
+  const key = repositoryCacheKey(repo)
+  repositoryEpochs.set(key, repositoryEpoch(repo) + 1)
+  cache.delete(`${key}#pr${number}`)
+  cache.delete(`${key}#any${number}`)
+  for (const branchKey of branchPullsCache.keys())
+    if (branchKey.toLowerCase().startsWith(`${key}:`)) branchPullsCache.delete(branchKey)
+}
 
-const cached = async (key: string, load: () => Promise<Entity | undefined>): Promise<Entity | undefined> => {
+const cached = async (
+  key: string,
+  repo: RepoRef,
+  load: () => Promise<Entity | undefined>,
+  retries = 2,
+): Promise<Entity | undefined> => {
   const hit = cache.get(key)
   if (hit && Date.now() - hit.at < ENTITY_TTL_MS) return hit.entity
+  const epoch = repositoryEpoch(repo)
   const entity = await load()
+  if (epoch !== repositoryEpoch(repo))
+    return retries > 0 ? cached(key, repo, load, retries - 1) : undefined
   cache.set(key, { at: Date.now(), entity })
   return entity
 }
@@ -441,8 +463,9 @@ const hydratePull = async (repo: RepoRef, number: number, auth: Auth): Promise<P
  * Open PRs whose head matches `branch` — the association for push-triggered runs,
  * whose pull_requests array comes back empty.
  */
-const pullsForBranch = async (repo: RepoRef, branch: string, auth: Auth): Promise<PullEntity[]> => {
-  const key = `${repo.owner}/${repo.repo}:${branch}`
+const pullsForBranch = async (repo: RepoRef, branch: string, auth: Auth, retries = 2): Promise<PullEntity[]> => {
+  const key = `${repositoryCacheKey(repo)}:${branch}`
+  const epoch = repositoryEpoch(repo)
   const hit = branchPullsCache.get(key)
   if (hit && Date.now() - hit.at < BRANCH_PR_TTL_MS) return hit.prs
 
@@ -451,6 +474,8 @@ const pullsForBranch = async (repo: RepoRef, branch: string, auth: Auth): Promis
     `/repos/${repo.owner}/${repo.repo}/pulls?head=${encodeURIComponent(`${repo.owner}:${branch}`)}&state=all&per_page=5`,
     auth,
   )
+  if (epoch !== repositoryEpoch(repo))
+    return retries > 0 ? pullsForBranch(repo, branch, auth, retries - 1) : []
   const prs = (pulls ?? []).map((pull) => toPullEntity(repo, pull))
   branchPullsCache.set(key, { at: Date.now(), prs })
   return prs
@@ -569,11 +594,13 @@ export const github: SourceProvider = {
   hydrate: async (refs, _sessionRepo, auth) => {
     const unique = new Map<string, Ref & { repo: RepoRef }>()
     for (const ref of refs) unique.set(`${ref.repo.owner}/${ref.repo.repo}#${ref.number}`, ref)
+    const epochs = new Map<string, number>()
+    for (const ref of unique.values()) epochs.set(repositoryCacheKey(ref.repo), repositoryEpoch(ref.repo))
 
     const results = await Promise.all(
       [...unique.values()].map(async (ref) => ({
         ref,
-        entity: await cached(`${ref.repo.owner}/${ref.repo.repo}#${ref.kind ?? "any"}${ref.number}`, () =>
+        entity: await cached(`${repositoryCacheKey(ref.repo)}#${ref.kind ?? "any"}${ref.number}`, ref.repo, () =>
           hydrateOne(ref, auth),
         ),
       })),
@@ -608,29 +635,42 @@ export const github: SourceProvider = {
     }
     const relatedEntities = await Promise.all(
       [...related.values()].map(async (ref) => ({
-        entity: await cached(`${ref.repo.owner}/${ref.repo.repo}#pr${ref.number}`, () => hydratePull(ref.repo, ref.number, auth)),
+        entity: await cached(`${repositoryCacheKey(ref.repo)}#pr${ref.number}`, ref.repo, () => hydratePull(ref.repo, ref.number, auth)),
       })),
     )
     entities.push(...relatedEntities.filter((result) => result.entity !== undefined).map((result) => result.entity!))
 
+    const staleRepos = new Set(
+      [...epochs].filter(([key, epoch]) => (repositoryEpochs.get(key) ?? 0) !== epoch).map(([key]) => key),
+    )
+    if (staleRepos.size === 0) return { entities, unresolved }
     return {
-      entities,
-      unresolved,
+      entities: entities.filter((entity) => !staleRepos.has(repositoryCacheKey(entity.repo))),
+      unresolved: [
+        ...unresolved,
+        ...[...unique.values()].filter((ref) => staleRepos.has(repositoryCacheKey(ref.repo))),
+      ],
     }
   },
   branchRuns: async (repo, branch, auth) => {
-    const runs = await request<{ workflow_runs: readonly RunJson[] }>(
-      `/repos/${repo.owner}/${repo.repo}/actions/runs?branch=${encodeURIComponent(branch)}&per_page=8`,
-      auth,
-    )
-    const runEntities = await Promise.all((runs?.workflow_runs ?? []).map((run) => runEntity(repo, run, auth, true)))
-    // Branch runs are push-triggered: their pull_requests array comes back empty,
-    // so query the branch's open PRs and let the GUI associate by head SHA.
-    const pulls = await pullsForBranch(repo, branch, auth).catch(() => [] as PullEntity[])
-    const prs = await Promise.all(pulls.map(async (pull) =>
-      shouldLoadStatusChecks(pull) ? { ...pull, statusChecks: await loadStatusChecks(repo, pull.headSha, auth) } : pull,
-    ))
-    return { runs: runEntities, prs }
+    const load = async (retries: number): Promise<{ runs: RunEntity[]; prs: PullEntity[] }> => {
+      const epoch = repositoryEpoch(repo)
+      const runs = await request<{ workflow_runs: readonly RunJson[] }>(
+        `/repos/${repo.owner}/${repo.repo}/actions/runs?branch=${encodeURIComponent(branch)}&per_page=8`,
+        auth,
+      )
+      const runEntities = await Promise.all((runs?.workflow_runs ?? []).map((run) => runEntity(repo, run, auth, true)))
+      // Branch runs are push-triggered: their pull_requests array comes back empty,
+      // so query the branch's open PRs and let the GUI associate by head SHA.
+      const pulls = await pullsForBranch(repo, branch, auth).catch(() => [] as PullEntity[])
+      const prs = await Promise.all(pulls.map(async (pull) =>
+        shouldLoadStatusChecks(pull) ? { ...pull, statusChecks: await loadStatusChecks(repo, pull.headSha, auth) } : pull,
+      ))
+      if (epoch !== repositoryEpoch(repo))
+        return retries > 0 ? load(retries - 1) : { runs: [], prs: [] }
+      return { runs: runEntities, prs }
+    }
+    return load(2)
   },
 
   merge: async (repo, number, method, expectedHeadSha, auth) => {
@@ -647,7 +687,16 @@ export const github: SourceProvider = {
     })
     if (!merge.ok) {
       const detail = await merge.json().catch(() => ({ message: merge.statusText }))
-      return { merged: false, message: `GitHub ${merge.status}: ${(detail as { message?: string }).message ?? merge.statusText}` }
+      const latest = merge.status === 409
+        ? await request<PullJson>(`/repos/${repo.owner}/${repo.repo}/pulls/${number}`, auth).catch(() => undefined)
+        : undefined
+      const headChanged = staleHeadConflict(merge.status, expectedHeadSha, latest?.head.sha)
+      if (headChanged && latest) invalidatePullCaches(repo, number)
+      return {
+        merged: false,
+        message: `GitHub ${merge.status}: ${(detail as { message?: string }).message ?? merge.statusText}`,
+        ...(headChanged ? { headChanged: true } : {}),
+      }
     }
     const outcome = mergeResponse(await merge.json().catch(() => undefined))
     if (!outcome.merged) return outcome
