@@ -14,6 +14,7 @@ import { History, MergeButton } from "./history"
 import { CancelledGlyph, CheckGlyph, CopyGlyph, CrossGlyph, IssueGlyph, MergeGlyph, MergedGlyph, PullConflictGlyph, PullGlyph, QueuedGlyph, UnknownGlyph } from "./icons"
 import { pillIcon } from "./marks"
 import { pillStatusIcon, pillStatusTone } from "./pill-status"
+import { pillPullDiagnostics } from "./pill-diagnostics"
 
 const POLL_MS = 30_000
 /** Debounce for scan → hydrate while a message streams in. */
@@ -639,7 +640,8 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
           picked.chain.prs[0] ? (picked.chain.prs[0].headBranch === meta.branch ? "branch match" : "newest") : "—"
         }`
     const error = meta.error ? ` · err ${meta.error.slice(0, 200)}` : ""
-    return `mn gui ${__MN_BUILD__}${meta.debug ? ` · ${meta.debug}` : " · srv ?"} · gate ${gate} ${current?.id ?? "?"} · chains ${chains().length} · eligible ${eligible.length} · pill: ${pill} · ${pick} · refs ${refList.length} (user ${tiers.user} cmd ${tiers.command} prose ${tiers.prose} out ${tiers.output}) → hits ${hits}/${Object.keys(entities).length} ents${error}${meta.stats ? ` · ${meta.stats}` : ""}`
+    const pullEvidence = pillPullDiagnostics(lead)
+    return `mn gui ${__MN_BUILD__}${meta.debug ? ` · ${meta.debug}` : " · srv ?"} · gate ${gate} ${current?.id ?? "?"} · chains ${chains().length} · eligible ${eligible.length} · pill: ${pill} · ${pick}${pullEvidence ? ` · ${pullEvidence}` : ""} · refs ${refList.length} (user ${tiers.user} cmd ${tiers.command} prose ${tiers.prose} out ${tiers.output}) → hits ${hits}/${Object.keys(entities).length} ents${error}${meta.stats ? ` · ${meta.stats}` : ""}`
   }
 
   /** The braille spinner frames for the pill's pending-merge indicator. The host
