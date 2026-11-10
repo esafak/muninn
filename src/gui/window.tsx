@@ -175,7 +175,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
         const byKind = new Map<string, number>()
         for (const entity of result.entities) byKind.set(entity.kind, (byKind.get(entity.kind) ?? 0) + 1)
         const breakdown = [...byKind].map(([kind, count]) => `${count} ${kind}`).join(", ") || "none"
-        const sent = wire.capped ? `${wire.refs.length}/${found.length}` : `${found.length}`
+        const sent = wire.capped || wire.dropped > 0 ? `${wire.refs.length}/${found.length}` : `${wire.refs.length}`
         const dropped = wire.dropped > 0 ? ` · ${wire.dropped} invalid dropped` : ""
         const unresolved = result.unresolved.length > 0 ? ` · ${result.unresolved.length} unresolved (${unresolvedLabel(result.unresolved, info.repo)})` : ` · ${result.unresolved.length} unresolved`
         setMeta("stats", `${sent} refs → ${result.entities.length} hydrated (${breakdown})${unresolved}${dropped}`)
