@@ -103,7 +103,7 @@ a hydration failure. It can be:
 Built by `debugLine` in src/gui/window.tsx:
 
 ```
-mn gui <sha+time> · srv <sha> · gate ✓ <sessionID> · chains N · live N
+mn gui <sha+time> · srv <sha> · gate ✓ <sessionID> · chains N · eligible N
 · pill: <#n title> · pick: <danger|newest|runs-only|none>[ of M] · lead <branch match|newest|—>
 · refs N (user a cmd b prose c out d) → hits H/E ents[ · err <step>]
 · SENT[/TOTAL] refs → H hydrated (kinds) · U unresolved (#nums)[ · K invalid dropped]
