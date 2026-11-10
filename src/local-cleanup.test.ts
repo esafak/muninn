@@ -54,8 +54,10 @@ describe("worktreeOccupancyDecision", () => {
 })
 
 describe("shouldRecordCleanupFailure", () => {
-  test("does not log a skipped cleanup as a failure", () => {
+  test("records only a failed branch-deletion stage", () => {
+    // Cleanup skipped or worktree removal rejected before the branch stage.
     expect(shouldRecordCleanupFailure(false, false)).toBe(false)
+    // The branch deletion stage was invoked and returned failure.
     expect(shouldRecordCleanupFailure(true, false)).toBe(true)
     expect(shouldRecordCleanupFailure(true, true)).toBe(false)
   })

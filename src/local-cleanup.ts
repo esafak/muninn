@@ -34,7 +34,7 @@ export const worktreeOccupancyDecision = (
   return { safe: false, message: "origin session is not confirmed as the sole worktree user; left it intact" }
 }
 
-export const shouldRecordCleanupFailure = (attempted: boolean, deleted: boolean): boolean => attempted && !deleted
+export const shouldRecordCleanupFailure = (branchDeleteAttempted: boolean, deleted: boolean): boolean => branchDeleteAttempted && !deleted
 
 export const baseCheckoutDecision = (checks: { differentTree: boolean; onBaseBranch: boolean; clean: boolean }): { move: boolean; message?: string } => {
   if (!checks.differentTree) return { move: false, message: "worktree is the canonical checkout; left it intact" }

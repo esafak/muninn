@@ -502,20 +502,20 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     const client = ctx.client
     let treeRemoved = false
     let sessionMoved = false
-    let attempted = false
+    let branchDeleteAttempted = false
     try {
       if (!cleanupSessionMatches(origin.sessionID, session()?.id))
-        return { deleted: false, attempted, message: "active session changed during merge; local tree left intact" }
+        return { deleted: false, attempted: branchDeleteAttempted, message: "active session changed during merge; local tree left intact" }
       const directory = origin.directory
       const sameRepo = !!origin.repo && repoKey(origin.repo) === repoKey(pull.repo)
       if (!sameRepo)
-        return { deleted: false, attempted, message: cleanupDecision({ enabled: true, merged: true, sameRepo, managedWorktree: false, branchMatches: false, headMatches: false, clean: false }).message }
+        return { deleted: false, attempted: branchDeleteAttempted, message: cleanupDecision({ enabled: true, merged: true, sameRepo, managedWorktree: false, branchMatches: false, headMatches: false, clean: false }).message }
       for (const project of await client.project.list()) {
         const trees = await client.worktree.list({ projectID: project.id }).catch(() => [])
         if (!trees.some((tree) => tree.directory === directory)) continue
         const beforeSessions = await sessionsAtWorktree(directory)
         const beforeOccupancy = worktreeOccupancyDecision(beforeSessions, origin.sessionID, directory, false)
-        if (!beforeOccupancy.safe) return { deleted: false, attempted, message: beforeOccupancy.message }
+        if (!beforeOccupancy.safe) return { deleted: false, attempted: branchDeleteAttempted, message: beforeOccupancy.message }
         const check = await client.rpc(Muninn).checkLocalWorktree({ directory, branch: pull.headBranch, expectedHeadSha: pull.headSha })
         const decision = cleanupDecision({
           enabled: true,
@@ -526,7 +526,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
           headMatches: check.eligible,
           clean: check.eligible,
         })
-        if (!decision.remove) return { deleted: false, attempted, message: check.message ?? decision.message }
+        if (!decision.remove) return { deleted: false, attempted: branchDeleteAttempted, message: check.message ?? decision.message }
         const base = await client.vcs.get({ location: { directory: project.canonical } }).catch(() => undefined)
         const baseStatus = await client.vcs.status({ location: { directory: project.canonical } }).catch(() => undefined)
         const baseDecision = baseCheckoutDecision({
@@ -534,9 +534,9 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
           onBaseBranch: base?.data.branch?.current === pull.baseBranch,
           clean: !!baseStatus && baseStatus.data.length === 0,
         })
-        if (!baseDecision.move) return { deleted: false, attempted, message: baseDecision.message }
+        if (!baseDecision.move) return { deleted: false, attempted: branchDeleteAttempted, message: baseDecision.message }
         if (!cleanupSessionMatches(origin.sessionID, session()?.id))
-          return { deleted: false, attempted, message: "active session changed during cleanup; worktree left intact" }
+          return { deleted: false, attempted: branchDeleteAttempted, message: "active session changed during cleanup; worktree left intact" }
         await client.session.move({ sessionID: origin.sessionID, directory: project.canonical })
         const moved = await (async () => {
           for (const attempt of Array.from({ length: 20 }, (_, index) => index)) {
@@ -547,26 +547,26 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
           return false
         })()
         if (!moved)
-          return { deleted: false, attempted, message: "session move is pending or unconfirmed; old worktree left intact" }
+          return { deleted: false, attempted: branchDeleteAttempted, message: "session move is pending or unconfirmed; old worktree left intact" }
         sessionMoved = true
         const afterSessions = await sessionsAtWorktree(directory)
         const afterOccupancy = worktreeOccupancyDecision(afterSessions, origin.sessionID, directory, true)
         if (!afterOccupancy.safe)
-          return { deleted: false, attempted, message: cleanupResultMessage(false, false, afterOccupancy.message, sessionMoved) }
-        attempted = true
+          return { deleted: false, attempted: branchDeleteAttempted, message: cleanupResultMessage(false, false, afterOccupancy.message, sessionMoved) }
         await client.worktree.remove({ projectID: project.id, directory, force: false })
         treeRemoved = true
+        branchDeleteAttempted = true
         const result = await client.rpc(Muninn).deleteLocalBranch({ directory: project.canonical, branch: pull.headBranch, expectedHeadSha: pull.headSha })
         return result.deleted
-          ? { deleted: true, attempted, message: cleanupResultMessage(true, true, undefined, sessionMoved) }
-          : { deleted: false, attempted, message: cleanupResultMessage(true, false, result.message ?? "branch could not be safely deleted", sessionMoved) }
+          ? { deleted: true, attempted: branchDeleteAttempted, message: cleanupResultMessage(true, true, undefined, sessionMoved) }
+          : { deleted: false, attempted: branchDeleteAttempted, message: cleanupResultMessage(true, false, result.message ?? "branch could not be safely deleted", sessionMoved) }
       }
-      return { deleted: false, attempted, message: cleanupDecision({ enabled: true, merged: true, sameRepo, managedWorktree: false, branchMatches: false, headMatches: false, clean: false }).message }
+      return { deleted: false, attempted: branchDeleteAttempted, message: cleanupDecision({ enabled: true, merged: true, sameRepo, managedWorktree: false, branchMatches: false, headMatches: false, clean: false }).message }
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error)
       return {
         deleted: false,
-        attempted,
+        attempted: branchDeleteAttempted,
         message: treeRemoved
           ? cleanupResultMessage(true, false, `branch deletion failed or could not be confirmed: ${detail}`, sessionMoved)
           : cleanupResultMessage(false, false, sessionMoved ? `worktree removal failed: ${detail}` : `local cleanup failed; tree and branch left intact: ${detail}`, sessionMoved),
