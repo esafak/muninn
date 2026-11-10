@@ -1,0 +1,18 @@
+src/gui/definition.ts
+  h_ea91e2db23540f 128-129
+src/gui/history.tsx
+  h_ea91e2db23540f 160-163,185-193
+src/gui/window.tsx
+  h_ea91e2db23540f 443-444
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1d766e0dbe8284c1851e25bfb125addae3647399",
+  "prompts": {},
+  "humans": {
+    "h_ea91e2db23540f": {
+      "author": "Emre Şafak <3928300+esafak@users.noreply.github.com>"
+    }
+  }
+}
