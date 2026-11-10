@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { mergeResponse, toPullEntity } from "./github"
+import { mergeResponse, toPullEntity, runEntity, toIssueEntity } from "./github"
 import { PullEntity } from "../rpc"
 
 describe("mergeResponse", () => {
@@ -138,32 +138,37 @@ describe("strict JSON boundary", () => {
     for (const entity of shapes) expect(jsonIssues(entity)).toEqual([])
   })
 
-  test("run and issue shapes are strict-JSON safe", () => {
-    const run = {
-      kind: "run" as const,
-      provider: "github",
+  test("run and issue builders emit strict-JSON-safe entities", async () => {
+    // Real builders, not literals: a `cond ? value : undefined` regression in
+    // either one must fail here, not the wire.
+    const run = await runEntity(
       repo,
-      id: 1,
-      name: "test",
-      headBranch: "main",
-      headSha: "abc",
-      status: "succeeded" as const,
-      checks: [{ name: "unit", status: "succeeded" as const }],
-      pullRequests: [],
-      url: "https://github.com/octo/repo/actions/runs/1",
-      updatedAt: 0,
-    }
-    const issue = {
-      kind: "issue" as const,
-      provider: "github",
-      repo,
+      {
+        id: 1,
+        name: "",
+        display_title: "ci: unit",
+        status: "completed",
+        conclusion: "success",
+        head_branch: "main",
+        head_sha: "abc",
+        html_url: "https://github.com/octo/repo/actions/runs/1",
+        updated_at: "2026-11-10T00:00:00Z",
+        pull_requests: [],
+      },
+      async () => undefined,
+      false,
+    )
+    expect(run.name).toBe("ci: unit") // the display_title fallback behavior
+    expect(jsonIssues(run)).toEqual([])
+
+    const issue = toIssueEntity(repo, {
       number: 2,
       title: "T",
-      state: "open" as const,
-      url: "https://github.com/octo/repo/issues/2",
-      updatedAt: 0,
-    }
-    expect(jsonIssues(run)).toEqual([])
+      state: "open",
+      body: null,
+      html_url: "https://github.com/octo/repo/issues/2",
+      updated_at: "2026-11-10T00:00:00Z",
+    })
     expect(jsonIssues(issue)).toEqual([])
   })
 })

@@ -199,19 +199,20 @@ const hydrateOne = async (ref: Ref & { repo: RepoRef }, auth: Auth): Promise<Ent
   const issue = await request<IssueJson>(`${base}/issues/${ref.number}`, auth)
   if (!issue) return undefined
   if (ref.kind !== "issue" && issue.pull_request) return hydratePull(ref.repo, ref.number, auth)
-
-  const entity: IssueEntity = {
-    kind: "issue",
-    provider: "github",
-    repo: ref.repo,
-    number: issue.number,
-    title: issue.title,
-    state: issue.state,
-    url: issue.html_url,
-    updatedAt: epoch(issue.updated_at),
-  }
-  return entity
+  return toIssueEntity(ref.repo, issue)
 }
+
+/** Exported for tests: the entity contract this provider returns for an issue. */
+export const toIssueEntity = (repo: RepoRef, issue: IssueJson): IssueEntity => ({
+  kind: "issue",
+  provider: "github",
+  repo,
+  number: issue.number,
+  title: issue.title,
+  state: issue.state,
+  url: issue.html_url,
+  updatedAt: epoch(issue.updated_at),
+})
 
 /** GitHub's `mergeable_state`, in Muninn's terms. `clean` (or `has_hooks`,
  * which still merges) is ready; `unstable`/`unknown` are checks still settling. */
@@ -288,7 +289,8 @@ const pullsForBranch = async (repo: RepoRef, branch: string, auth: Auth): Promis
   return prs
 }
 
-const runEntity = async (repo: RepoRef, run: RunJson, auth: Auth, withChecks: boolean): Promise<RunEntity> => {
+/** Exported for tests: pure when `withChecks` is false — the jobs request is skipped. */
+export const runEntity = async (repo: RepoRef, run: RunJson, auth: Auth, withChecks: boolean): Promise<RunEntity> => {
   let checks: RunEntity["checks"] = []
   if (withChecks) {
     const jobs = await request<JobsJson>(`/repos/${repo.owner}/${repo.repo}/actions/runs/${run.id}/jobs?per_page=20`, auth)
