@@ -8,6 +8,7 @@
 import { Credential, Plugin } from "@opencode/plugin"
 import { github } from "./providers/github"
 import type { Ref, RepoRef } from "./model"
+import { jsonReady } from "./model"
 import type { SourceProvider } from "./providers/types"
 import { readRemote } from "./remote"
 import { Muninn } from "./rpc"
@@ -77,8 +78,8 @@ export default Plugin.define({
           ),
         )
         return {
-          entities: results.flatMap((result) => result.entities),
-          unresolved: results.flatMap((result) => result.unresolved),
+          entities: results.flatMap((result) => result.entities).map(jsonReady),
+          unresolved: results.flatMap((result) => result.unresolved).map(jsonReady),
         }
       },
 
@@ -87,7 +88,8 @@ export default Plugin.define({
         const source = sourceFor(repo?.host)
         if (!repo || !source) return { runs: [], prs: [] }
         const result = await source.branchRuns(repo, input.branch, () => source.auth(ctx)).catch(() => ({ runs: [], prs: [] }))
-        return { runs: result.runs, prs: result.prs }
+        // Entity-carrying like hydrate: the strict-JSON boundary applies here too.
+        return { runs: result.runs.map((run) => jsonReady(run)), prs: result.prs.map((pull) => jsonReady(pull)) }
       },
       debug: async () => ({ server: await serverBuild(), directory: pluginRoot }),
       merge: async (input) => {

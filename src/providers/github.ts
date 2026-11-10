@@ -199,19 +199,20 @@ const hydrateOne = async (ref: Ref & { repo: RepoRef }, auth: Auth): Promise<Ent
   const issue = await request<IssueJson>(`${base}/issues/${ref.number}`, auth)
   if (!issue) return undefined
   if (ref.kind !== "issue" && issue.pull_request) return hydratePull(ref.repo, ref.number, auth)
-
-  const entity: IssueEntity = {
-    kind: "issue",
-    provider: "github",
-    repo: ref.repo,
-    number: issue.number,
-    title: issue.title,
-    state: issue.state,
-    url: issue.html_url,
-    updatedAt: epoch(issue.updated_at),
-  }
-  return entity
+  return toIssueEntity(ref.repo, issue)
 }
+
+/** Exported for tests: the entity contract this provider returns for an issue. */
+export const toIssueEntity = (repo: RepoRef, issue: IssueJson): IssueEntity => ({
+  kind: "issue",
+  provider: "github",
+  repo,
+  number: issue.number,
+  title: issue.title,
+  state: issue.state,
+  url: issue.html_url,
+  updatedAt: epoch(issue.updated_at),
+})
 
 /** GitHub's `mergeable_state`, in Muninn's terms. `clean` (or `has_hooks`,
  * which still merges) is ready; `unstable`/`unknown` are checks still settling. */
@@ -238,14 +239,17 @@ const reviewState = (reviews: ReviewJson[] | undefined): ReviewState | null => {
   return "pending"
 }
 
-const toPullEntity = (repo: RepoRef, pull: PullJson): PullEntity => ({
+/** Exported for tests: the entity contract this provider returns for a pull. */
+export const toPullEntity = (repo: RepoRef, pull: PullJson): PullEntity => ({
   kind: "pr",
   provider: "github",
   repo,
   number: pull.number,
   title: pull.title,
   state: pull.merged_at ? "merged" : pull.draft ? "draft" : pull.state,
-  mergedAt: pull.merged_at ? epoch(pull.merged_at) : undefined,
+  // Absent, not undefined: the response transport encodes strict JSON, and a
+  // key whose value is undefined fails the whole hydrate response.
+  ...(pull.merged_at ? { mergedAt: epoch(pull.merged_at) } : {}),
   headBranch: pull.head.ref,
   baseBranch: pull.base.ref,
   closes: closingIssues(pull.body),
@@ -285,7 +289,8 @@ const pullsForBranch = async (repo: RepoRef, branch: string, auth: Auth): Promis
   return prs
 }
 
-const runEntity = async (repo: RepoRef, run: RunJson, auth: Auth, withChecks: boolean): Promise<RunEntity> => {
+/** Exported for tests: pure when `withChecks` is false — the jobs request is skipped. */
+export const runEntity = async (repo: RepoRef, run: RunJson, auth: Auth, withChecks: boolean): Promise<RunEntity> => {
   let checks: RunEntity["checks"] = []
   if (withChecks) {
     const jobs = await request<JobsJson>(`/repos/${repo.owner}/${repo.repo}/actions/runs/${run.id}/jobs?per_page=20`, auth)
