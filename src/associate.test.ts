@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { associate } from "./associate"
-import { chainTone, latestRuns, pillEligible, pillPick, type IssueEntity, type PullEntity, type RunEntity } from "./model"
+import { chainTone, latestRun, latestRuns, pillEligible, pillPick, type IssueEntity, type PullEntity, type RunEntity } from "./model"
 
 const repo = { host: "github.com", owner: "sst", repo: "opencode" } as const
 const at = (ms: number) => ms
@@ -95,6 +95,7 @@ describe("associate", () => {
     expect(pillEligible(grouped[0]!)).toBe(false)
     expect(chainTone(grouped[0]!)).toBe("success")
     expect(latestRuns(grouped[0]!.runs).map((candidate) => candidate.id)).toEqual([18431])
+    expect(latestRun(grouped[0]!.runs)?.id).toBe(18431)
     const eligible = grouped.filter((chain) => pillEligible(chain))
     expect(eligible).toEqual([])
     expect(pillPick(eligible)).toBeUndefined()

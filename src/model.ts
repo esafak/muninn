@@ -178,6 +178,9 @@ export const latestRuns = (runs: readonly RunEntity[]): RunEntity[] => {
   ]
 }
 
+/** The displayed/diagnostic representative run follows workflow sequence, not completion time. */
+export const latestRun = (runs: readonly RunEntity[]): RunEntity | undefined => latestRuns(runs)[0]
+
 const currentRunsForPull = (chain: Chain, pull: PullEntity): RunEntity[] => latestRuns(
   chain.runs.filter((run) => run.headSha === pull.headSha && repoKey(run.repo) === repoKey(pull.repo)),
 )

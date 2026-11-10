@@ -5,7 +5,7 @@ import { ComposerPill, MenuItem, Panel, SettingsPage, createKeyed, usePlugin, ty
 import { associate } from "../associate"
 import { deliberateRefs, messageBuckets, wireRefs } from "../extract"
 import type { Chain, Entity, PullEntity, RepoRef, RunEntity, RunStatus } from "../model"
-import { chainTone, armedTargets, pillPick, pillEligible, mergeReady, mergeWhy, latestRuns, pullForRun, prConflicted, refKey, repoKey, entityKey } from "../model"
+import { chainTone, armedTargets, pillPick, pillEligible, mergeReady, mergeWhy, latestRun, pullForRun, prConflicted, refKey, repoKey, entityKey } from "../model"
 import { githubLexicon } from "../providers/github/lexicon"
 import { baseCheckoutDecision, cleanupDecision, cleanupResultMessage, cleanupSessionMatches, safeFastForward, sessionMoveConfirmed, shouldFastForwardBase, shouldRecordCleanupFailure, worktreeOccupancyDecision } from "../local-cleanup"
 import { Muninn } from "../rpc"
@@ -422,14 +422,15 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     // the capsule uses — eligibility and pick are never recomputed per consumer.
     const lead = picked?.chain.prs.find((pull) => pull.state === "open" || pull.state === "draft") ??
       (picked?.reason === "merged" ? picked.chain.prs.find((pull) => pull.state === "merged") : undefined)
+    const run = picked ? latestRun(picked.chain.runs) : undefined
     const pill = !picked
       ? eligible.length > 0
         ? "off: no eligible chains"
         : "off: nothing eligible"
       : lead
         ? `#${lead.number} ${lead.title.slice(0, 36)}${lead.state === "merged" ? " · merged" : ""}`
-        : picked.chain.runs[0]
-          ? `run #${picked.chain.runs[0].id}`
+        : run
+          ? `run #${run.id}`
           : "off"
     // Pipeline census: refs by provenance tier, how many hit the entity store,
     // how big the store is. A PR that reaches hydration but not the pill — or a
@@ -610,7 +611,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       const worst = picked.chain
       const lead = worst.prs.find((pull) => pull.state === "open" || pull.state === "draft") ??
         (picked.reason === "merged" ? worst.prs.find((pull) => pull.state === "merged") : undefined)
-      const run = latestRuns(worst.runs)[0]
+      const run = latestRun(worst.runs)
       if (!lead && !run) return undefined
       const chainStatus = chainTone(worst, waitForAllStatusChecks())
       const tone = lead?.state === "merged" && chainStatus === "success" ? undefined : chainStatus
