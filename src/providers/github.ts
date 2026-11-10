@@ -108,6 +108,9 @@ export const mergeResponse = (body: unknown): { merged: boolean; message?: strin
   }
 }
 
+export const staleHeadConflict = (status: number, expectedHeadSha: string, currentHeadSha: string | undefined): boolean =>
+  status === 409 && currentHeadSha !== undefined && currentHeadSha !== expectedHeadSha
+
 const request = async <T>(path: string, auth: Auth): Promise<T | undefined> => {
   const token = await auth()
   const response = await fetch(`${API}${path}`, {
@@ -647,7 +650,15 @@ export const github: SourceProvider = {
     })
     if (!merge.ok) {
       const detail = await merge.json().catch(() => ({ message: merge.statusText }))
-      return { merged: false, message: `GitHub ${merge.status}: ${(detail as { message?: string }).message ?? merge.statusText}` }
+      const latest = merge.status === 409
+        ? await request<PullJson>(`/repos/${repo.owner}/${repo.repo}/pulls/${number}`, auth).catch(() => undefined)
+        : undefined
+      const headChanged = staleHeadConflict(merge.status, expectedHeadSha, latest?.head.sha)
+      return {
+        merged: false,
+        message: `GitHub ${merge.status}: ${(detail as { message?: string }).message ?? merge.statusText}`,
+        ...(headChanged ? { headChanged: true } : {}),
+      }
     }
     const outcome = mergeResponse(await merge.json().catch(() => undefined))
     if (!outcome.merged) return outcome

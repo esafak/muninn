@@ -132,7 +132,7 @@ export const Muninn = Rpc.define({
         method: z.enum(["merge", "squash", "rebase"]),
         expectedHeadSha: z.string(),
       }),
-      output: z.object({ merged: z.boolean(), message: z.string().optional() }),
+      output: z.object({ merged: z.boolean(), message: z.string().optional(), headChanged: z.boolean().optional() }),
     },
     /** Check the exact local tree and head before a worktree can be removed. */
     checkLocalWorktree: {

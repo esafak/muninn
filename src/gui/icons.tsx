@@ -6,8 +6,8 @@
 
 import type { JSX } from "solid-js"
 
-const svg = (body: JSX.Element, box = 16): JSX.Element => (
-  <svg width="13" height="13" viewBox={`0 0 ${box} ${box}`} fill="currentColor" aria-hidden="true">
+const svg = (body: JSX.Element, box = 16, size = 13): JSX.Element => (
+  <svg width={size} height={size} viewBox={`0 0 ${box} ${box}`} fill="currentColor" aria-hidden="true">
     {body}
   </svg>
 )
@@ -61,16 +61,19 @@ export const UnknownGlyph = (): JSX.Element =>
     </g>,
   )
 
-/** ⊙→ merged pull request. */
+/** Host `branch` glyph from packages/ui/src/icons/catalog.ts, shared for merged PRs. */
 export const MergedGlyph = (): JSX.Element =>
   svg(
-    <g fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-      <circle cx="4" cy="3.5" r="1.75" />
-      <circle cx="4" cy="12.5" r="1.75" />
-      <circle cx="12" cy="12.5" r="1.75" />
-      <path d="M4 5.5v5" />
-      <path d="M4.8 5.1c1.8.5 3.2 1.6 3.6 3.6" />
-    </g>,
+    <path
+      d="M5.118 5.686V10.314M5.118 5.686C5.97 5.686 6.661 4.995 6.661 4.143C6.661 3.291 5.97 2.6 5.118 2.6C4.266 2.6 3.575 3.291 3.575 4.143C3.575 4.995 4.266 5.686 5.118 5.686ZM5.118 10.314C4.266 10.314 3.575 11.005 3.575 11.857C3.575 12.709 4.266 13.4 5.118 13.4C5.97 13.4 6.661 12.709 6.661 11.857M5.118 10.314C5.97 10.314 6.661 11.005 6.661 11.857M10.882 5.686C11.734 5.686 12.425 4.995 12.425 4.143C12.425 3.291 11.734 2.6 10.882 2.6C10.03 2.6 9.339 3.291 9.339 4.143C9.339 4.995 10.03 5.686 10.882 5.686ZM10.882 5.686V9.457C10.882 10.783 9.807 11.857 8.482 11.857H6.661"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="1"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+    />,
+    16,
+    14,
   )
 
 /** ○ queued run: a clock face. */

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { pillStatusIcon } from "./pill-status"
+import { pillStatusIcon, pillStatusTone } from "./pill-status"
 
 describe("pillStatusIcon", () => {
   const fallback = "github"
@@ -29,5 +29,19 @@ describe("pillStatusIcon", () => {
     expect(pillStatusIcon("closed", undefined, undefined, fallback)).toBe(fallback)
     expect(pillStatusIcon(undefined, undefined, "success", fallback)).toBe("circle-check")
     expect(pillStatusIcon(undefined, undefined, undefined, fallback)).toBe(fallback)
+  })
+})
+
+describe("pillStatusTone", () => {
+  test("tints merged status success instead of leaving its branch glyph muted", () => {
+    expect(pillStatusTone("merged", undefined)).toBe("success")
+    expect(pillStatusTone("merged", "success")).toBe("success")
+  })
+
+  test("preserves warning and danger tones and leaves other states unchanged", () => {
+    expect(pillStatusTone("merged", "warning")).toBe("warning")
+    expect(pillStatusTone("merged", "danger")).toBe("danger")
+    expect(pillStatusTone("open", "success")).toBe("success")
+    expect(pillStatusTone(undefined, undefined)).toBeUndefined()
   })
 })

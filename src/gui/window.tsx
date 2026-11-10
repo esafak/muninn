@@ -4,8 +4,8 @@ import { createStore } from "solid-js/store"
 import { ComposerPill, MenuItem, Panel, SettingsPage, createKeyed, usePlugin, type IconName, type Plugin } from "@opencode/plugin/gui"
 import { associate } from "../associate"
 import { deliberateRefs, messageBuckets, wireRefs } from "../extract"
-import type { Chain, Entity, PullEntity, RepoRef, RunEntity, RunStatus } from "../model"
-import { chainTone, armedTargets, pillPick, pillEligible, mergeReady, mergeWhy, latestRun, pullForRun, prConflicted, refKey, repoKey, entityKey } from "../model"
+import type { ArmedEntry, Chain, Entity, PullEntity, RepoRef, RunEntity, RunStatus } from "../model"
+import { chainTone, armedTargets, staleHeadRetryEligible, staleHeadEvidenceUsable, sessionAttemptCurrent, targetRefreshConfirmed, pillPick, pillEligible, mergeReady, mergeWhy, latestRun, pullForRun, prConflicted, refKey, repoKey, entityKey } from "../model"
 import { githubLexicon } from "../providers/github/lexicon"
 import { baseCheckoutDecision, cleanupDecision, cleanupResultMessage, cleanupSessionMatches, safeFastForward, sessionMoveConfirmed, shouldFastForwardBase, shouldRecordCleanupFailure, worktreeOccupancyDecision } from "../local-cleanup"
 import { Muninn } from "../rpc"
@@ -13,7 +13,7 @@ import type { definition } from "./definition"
 import { History, MergeButton } from "./history"
 import { CancelledGlyph, CheckGlyph, CopyGlyph, CrossGlyph, IssueGlyph, MergeGlyph, MergedGlyph, PullConflictGlyph, PullGlyph, QueuedGlyph, UnknownGlyph } from "./icons"
 import { pillIcon } from "./marks"
-import { pillStatusIcon } from "./pill-status"
+import { pillStatusIcon, pillStatusTone } from "./pill-status"
 
 const POLL_MS = 30_000
 /** Debounce for scan → hydrate while a message streams in. */
@@ -69,6 +69,24 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
   const [runs, setRuns] = createStore<Record<string, readonly RunEntity[]>>({})
   const [chains, setChains] = createSignal<readonly Chain[]>([])
   const [sessionReady, setSessionReady] = createSignal(false)
+  const mergeInFlight = new Set<string>()
+  const rejectedHeadByPR = new Map<string, string>()
+  const mergedAwaitingRefresh = new Set<string>()
+  const refreshedPullByPR = new Map<string, PullEntity>()
+  let refreshGeneration = 0
+  const mergeKey = (repo: RepoRef, number: number): string => `${repoKey(repo)}#${number}`
+  const sameArm = (candidate: ArmedEntry, original: ArmedEntry): boolean =>
+    mergeKey(candidate.repo, candidate.number) === mergeKey(original.repo, original.number) &&
+    candidate.method === original.method &&
+    candidate.armID === original.armID
+  const removeArm = (original: ArmedEntry): void =>
+    ctx.stores.armed.update((draft) => {
+      draft.entries = draft.entries.filter((entry) => !sameArm(entry, original))
+    })
+  const removeArmsForPR = (repo: RepoRef, number: number): void =>
+    ctx.stores.armed.update((draft) => {
+      draft.entries = draft.entries.filter((entry) => mergeKey(entry.repo, entry.number) !== mergeKey(repo, number))
+    })
 
   const session = () => ctx.sessions.current()
 
@@ -142,60 +160,128 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
   }
 
   /** Re-reads repository coordinates, then hydrates and re-chains. Cheap when cached. */
-  const refresh = async () => {
+  const refresh = async (target?: { repo: RepoRef; number: number }): Promise<boolean> => {
     const current = session()
-    if (!current) return
+    if (!current) return false
+    const generation = ++refreshGeneration
+    const currentRefresh = () =>
+      generation === refreshGeneration && sessionAttemptCurrent(current, session())
+    const targetKey = target ? mergeKey(target.repo, target.number) : undefined
+    if (targetKey) refreshedPullByPR.delete(targetKey)
     setSessionReady(true)
     // Gate pills on this session before any network: identity is known up front.
     setMeta((previous) => ({ ...previous, sessionID: current.id, repo: null, provider: null, branch: "" }))
     const client = ctx.client
 
-    try {
-      const info = await stage("repo", () => client.rpc(Muninn).repo({ directory: current.directory }))
-      setMeta({
-        sessionID: current.id,
-        repo: info.repo,
-        provider: info.provider,
-        authenticated: info.authenticated,
-        branch: "",
-      })
-      if (!info.repo) {
+    const refreshed = await (async (): Promise<boolean> => {
+      try {
+        const info = await stage("repo", () => client.rpc(Muninn).repo({ directory: current.directory }))
+        if (!currentRefresh()) return false
+        const repo = info.repo
+        setMeta({
+          sessionID: current.id,
+          repo: info.repo,
+          provider: info.provider,
+          authenticated: info.authenticated,
+          branch: "",
+        })
+        if (!repo) {
+          setMeta("error", null)
+          return false
+        }
+
+        const vcs = await client.vcs.get({ location: { directory: current.directory } }).catch(() => undefined)
+        const branch = vcs?.data?.branch?.current
+        setMeta("branch", branch ?? "")
+
+        const found = refs()
+        const recoveryTargets = target
+          ? [target]
+          : ctx.stores.armed.value.entries.filter((entry) => rejectedHeadByPR.has(mergeKey(entry.repo, entry.number)))
+        const recoveryKeys = new Set(recoveryTargets.map((entry) => mergeKey(entry.repo, entry.number)))
+        for (const key of recoveryKeys) refreshedPullByPR.delete(key)
+        const recoveredPulls = new Map<string, PullEntity>()
+        const requested = [
+          ...found,
+          ...recoveryTargets.map((entry) => ({
+            repo: entry.repo,
+            number: entry.number,
+            kind: "pr" as const,
+            tier: "user" as const,
+          })),
+        ]
+        let targetPull: PullEntity | undefined
+        let targetUnresolved = false
+        if (requested.length > 0) {
+          const wire = wireRefs(requested)
+          const result = await stage("hydrate", () => client.rpc(Muninn).hydrate({ directory: current.directory, refs: wire.refs }))
+          if (!currentRefresh()) return false
+          merge(result.entities)
+          for (const pull of result.entities.filter((entity): entity is PullEntity => entity.kind === "pr")) {
+            const key = mergeKey(pull.repo, pull.number)
+            if (recoveryKeys.has(key)) recoveredPulls.set(key, pull)
+          }
+          targetPull = result.entities.find(
+            (entity): entity is PullEntity => entity.kind === "pr" && targetKey === mergeKey(entity.repo, entity.number),
+          )
+          targetUnresolved = !!target && result.unresolved.some(
+            (ref) => ref.number === target.number && ref.repo !== undefined && repoKey(ref.repo) === repoKey(target.repo),
+          )
+          setMeta("unresolved", result.unresolved.length)
+          const byKind = new Map<string, number>()
+          for (const entity of result.entities) byKind.set(entity.kind, (byKind.get(entity.kind) ?? 0) + 1)
+          const breakdown = [...byKind].map(([kind, count]) => `${count} ${kind}`).join(", ") || "none"
+          const sent = wire.capped || wire.dropped > 0 ? `${wire.refs.length}/${requested.length}` : `${wire.refs.length}`
+          const dropped = wire.dropped > 0 ? ` · ${wire.dropped} invalid dropped` : ""
+          const unresolved = result.unresolved.length > 0 ? ` · ${result.unresolved.length} unresolved (${unresolvedLabel(result.unresolved, repo)})` : ` · ${result.unresolved.length} unresolved`
+          setMeta("stats", `${sent} refs → ${result.entities.length} hydrated (${breakdown})${unresolved}${dropped}`)
+        }
+        if (branch) {
+          const { runs: branchRuns, prs } = await stage("branch-runs", () => client.rpc(Muninn).branchRuns({ directory: current.directory, branch }))
+          if (!currentRefresh()) return false
+          setRuns(repoKey(repo), branchRuns)
+          merge(prs)
+          for (const pull of prs) {
+            const key = mergeKey(pull.repo, pull.number)
+            if (recoveryKeys.has(key)) recoveredPulls.set(key, pull)
+          }
+          const branchTarget = prs.find((pull) => targetKey === mergeKey(pull.repo, pull.number))
+          if (branchTarget) {
+            targetPull = branchTarget
+            targetUnresolved = false
+          }
+        }
+        if (!currentRefresh()) return false
+        for (const [key, pull] of recoveredPulls) refreshedPullByPR.set(key, pull)
         setMeta("error", null)
-        return
+        rechain()
+        const knownPulls = Object.values(entities).filter((entity): entity is PullEntity =>
+          entity.kind === "pr" && repoKey(entity.repo) === repoKey(repo),
+        )
+        for (const pull of knownPulls) {
+          if (pull.state === "open") continue
+          const key = mergeKey(pull.repo, pull.number)
+          removeArmsForPR(pull.repo, pull.number)
+          rejectedHeadByPR.delete(key)
+          mergedAwaitingRefresh.delete(key)
+        }
+        if (targetKey && targetPull) refreshedPullByPR.set(targetKey, targetPull)
+        driveArmedMerges()
+        return !targetKey || targetRefreshConfirmed({
+          refreshSucceeded: true,
+          targetReturned: targetPull !== undefined,
+          targetUnresolved,
+        })
+      } catch (error) {
+        setMeta("error", error instanceof Error ? error.message : String(error))
+        return false
       }
-
-      const vcs = await client.vcs.get({ location: { directory: current.directory } }).catch(() => undefined)
-      const branch = vcs?.data?.branch?.current
-      setMeta("branch", branch ?? "")
-
-      const found = refs()
-      if (found.length > 0) {
-        const wire = wireRefs(found)
-        const result = await stage("hydrate", () => client.rpc(Muninn).hydrate({ directory: current.directory, refs: wire.refs }))
-        merge(result.entities)
-        setMeta("unresolved", result.unresolved.length)
-        const byKind = new Map<string, number>()
-        for (const entity of result.entities) byKind.set(entity.kind, (byKind.get(entity.kind) ?? 0) + 1)
-        const breakdown = [...byKind].map(([kind, count]) => `${count} ${kind}`).join(", ") || "none"
-        const sent = wire.capped || wire.dropped > 0 ? `${wire.refs.length}/${found.length}` : `${wire.refs.length}`
-        const dropped = wire.dropped > 0 ? ` · ${wire.dropped} invalid dropped` : ""
-        const unresolved = result.unresolved.length > 0 ? ` · ${result.unresolved.length} unresolved (${unresolvedLabel(result.unresolved, info.repo)})` : ` · ${result.unresolved.length} unresolved`
-        setMeta("stats", `${sent} refs → ${result.entities.length} hydrated (${breakdown})${unresolved}${dropped}`)
-      }
-      if (branch) {
-        const { runs: branchRuns, prs } = await stage("branch-runs", () => client.rpc(Muninn).branchRuns({ directory: current.directory, branch }))
-        setRuns(repoKey(info.repo), branchRuns)
-        merge(prs)
-      }
-      setMeta("error", null)
-      rechain()
-      driveArmedMerges()
-    } catch (error) {
-      setMeta("error", error instanceof Error ? error.message : String(error))
-    }
+    })()
 
     const dbg = await client.rpc(Muninn).debug({}).catch(() => null)
+    if (!currentRefresh()) return false
     setMeta("debug", dbg ? `srv ${dbg.server}` : "srv ?")
+    return refreshed
   }
 
   // Session (or its directory) changed: re-read everything.
@@ -304,10 +390,10 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     pull: PullEntity,
     method: "merge" | "squash" | "rebase",
     via: "manual" | "when-ready",
-  ): Promise<boolean> => {
+  ): Promise<"merged" | "failed" | "head-changed"> => {
     const current = session()
     const client = ctx.client
-    if (!current || !client) return false
+    if (!current || !client) return "failed"
     const origin = { sessionID: current.id, directory: current.directory, repo: meta.repo }
     const deleteBranch = ctx.stores.settings.value.deleteBranch
     const result = await client
@@ -318,12 +404,23 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
         method,
         expectedHeadSha: pull.headSha,
       })
-      .catch((error: unknown) => ({ merged: false as const, message: error instanceof Error ? error.message : String(error) }))
+      .catch((error: unknown) => ({ merged: false as const, message: error instanceof Error ? error.message : String(error), headChanged: false }))
     if (!result.merged) {
+      if (result.headChanged) {
+        ctx.toast.show({
+          title: `PR #${pull.number} head changed`,
+          description: via === "when-ready"
+            ? "Refreshing the latest head; Muninn will retry only after its checks and reviews are ready."
+            : "Refreshing the latest PR state. Review readiness and retry the merge against the new head.",
+          variant: "default",
+        })
+        return "head-changed"
+      }
       record(pull, "merge-failed", via, method, result.message)
       ctx.toast.show({ title: `PR #${pull.number} merge failed`, description: result.message, variant: "error" })
-      return false
+      return "failed"
     }
+    mergedAwaitingRefresh.add(mergeKey(pull.repo, pull.number))
     record(pull, "merged", via, method)
     let description = `${method} into ${pull.baseBranch}`
     if (shouldFastForwardBase(ctx.stores.settings.value.fastForwardBase ?? false, result.merged)) {
@@ -342,7 +439,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       }
     }
     ctx.toast.show({ title: `PR #${pull.number} merged`, description, variant: "success" })
-    return true
+    return "merged"
   }
 
   /** Merges a pull request now: confirms in the app's dialog (naming exactly what
@@ -378,17 +475,14 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       if (!ok) return
       ctx.stores.armed.update((draft) => {
         if (!draft.entries.some((entry) => repoKey(entry.repo) === repoKey(pull.repo) && entry.number === pull.number))
-          draft.entries.push({ repo: pull.repo, number: pull.number, method })
+          draft.entries.push({ repo: pull.repo, number: pull.number, method, armID: crypto.randomUUID() })
       })
       void refresh()
       return
     }
     // Disarm: drop our entry; also cancel an arm the user made on the forge.
-    ctx.stores.armed.update((draft) => {
-      draft.entries = draft.entries.filter(
-        (entry) => !(repoKey(entry.repo) === repoKey(pull.repo) && entry.number === pull.number),
-      )
-    })
+    removeArmsForPR(pull.repo, pull.number)
+    rejectedHeadByPR.delete(mergeKey(pull.repo, pull.number))
     const current = session()
     const client = ctx.client
     if (pull.autoMerge && current && client)
@@ -399,17 +493,79 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     void refresh()
   }
 
-  /** The merge-when-ready driver: fires merges for armed entries whose chain is
-   * green. Runs after every refresh cycle; consumes the entry before firing so a
-   * concurrent refresh can't double-fire. */
+  /** Fires ready armed entries once per PR. A stale head stays armed but is
+   * blocked until a successful refresh observes a different head SHA. */
   const driveArmedMerges = () => {
     for (const { pull, method } of armedTargets(ctx.stores.armed.value.entries, chains(), waitForAllStatusChecks())) {
-      ctx.stores.armed.update((draft) => {
-        draft.entries = draft.entries.filter(
-          (entry) => !(repoKey(entry.repo) === repoKey(pull.repo) && entry.number === pull.number),
-        )
-      })
-      void fireMerge(pull, method, "when-ready").then(() => void refresh())
+      const key = mergeKey(pull.repo, pull.number)
+      if (mergeInFlight.has(key) || mergedAwaitingRefresh.has(key)) continue
+      const entry = ctx.stores.armed.value.entries.find(
+        (candidate) => mergeKey(candidate.repo, candidate.number) === key && candidate.method === method,
+      )
+      if (!entry) continue
+      const rejectedHead = rejectedHeadByPR.get(key)
+      if (rejectedHead !== undefined) {
+        const evidence = refreshedPullByPR.get(key)
+        if (
+          !evidence ||
+          !staleHeadEvidenceUsable({
+            rejectedHeadSha: rejectedHead,
+            candidateHeadSha: pull.headSha,
+            confirmedHeadSha: evidence.headSha,
+          })
+        ) continue
+        refreshedPullByPR.delete(key)
+        rejectedHeadByPR.delete(key)
+      }
+      mergeInFlight.add(key)
+      const attempt = { ...entry }
+      const attemptSession = session()
+      void (async () => {
+        const outcome = await fireMerge(pull, method, "when-ready").catch((error: unknown) => {
+          console.error("[muninn] merge-when-ready failed", error)
+          return "failed" as const
+        })
+        if (outcome === "head-changed") rejectedHeadByPR.set(key, pull.headSha)
+        if (outcome === "merged") {
+          removeArm(attempt)
+          rejectedHeadByPR.delete(key)
+        }
+        if (outcome === "failed") removeArm(attempt)
+
+        if (
+          !sessionAttemptCurrent(attemptSession, session())
+        ) {
+          mergeInFlight.delete(key)
+          return
+        }
+
+        const refreshed = await refresh(pull)
+        mergeInFlight.delete(key)
+        if (!sessionAttemptCurrent(attemptSession, session())) return
+
+        if (outcome === "head-changed") {
+          const stillArmed = ctx.stores.armed.value.entries.some(
+            (candidate) => mergeKey(candidate.repo, candidate.number) === key,
+          )
+          if (!stillArmed) rejectedHeadByPR.delete(key)
+          const currentPull = refreshedPullByPR.get(key)
+          const ready = armedTargets(ctx.stores.armed.value.entries, chains(), waitForAllStatusChecks()).some(
+            (target) => mergeKey(target.pull.repo, target.pull.number) === key,
+          )
+          if (staleHeadRetryEligible({
+            via: "when-ready",
+            headChanged: true,
+            armed: stillArmed,
+            refreshSucceeded: refreshed,
+            inFlight: mergeInFlight.has(key),
+            rejectedHeadSha: pull.headSha,
+            currentHeadSha: currentPull?.headSha,
+            ready,
+          })) driveArmedMerges()
+          return
+        }
+        if (outcome === "failed") driveArmedMerges()
+      })()
     }
   }
 
@@ -621,7 +777,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       const run = latestRun(worst.runs)
       if (!lead && !run) return undefined
       const chainStatus = chainTone(worst, waitForAllStatusChecks())
-      const tone = lead?.state === "merged" && chainStatus === "success" ? undefined : chainStatus
+      const tone = pillStatusTone(lead?.state, chainStatus)
 
       // The icon shape encodes the provider merge state; pill tone still encodes
       // overall chain health. The label stays `#number title ⌄`. An armed lead PR
@@ -656,7 +812,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       <div class="mn-pop">
         <For each={pillState().eligible.slice(0, 3)}>
           {(chain) => (
-            <div class="mn-pop-chain">
+            <div class="mn-pop-chain" data-tone={chainTone(chain, waitForAllStatusChecks())}>
               <For each={chain.prs}>
                 {(pull) => (
                   <div class="mn-pop-row" onClick={() => { input.close(); open(pull.url) }}>
@@ -967,7 +1123,10 @@ const STYLES = `
 .mn-kind { flex: none; display: inline-flex; }
 .mn-kind[data-state="issue-open"], .mn-kind[data-state="pr-open"] { color: var(--v2-state-fg-success); }
 .mn-kind[data-state="pr-draft"] { color: var(--v2-icon-icon-faint); }
-.mn-kind[data-state="pr-merged"], .mn-kind[data-state="issue-closed"] { color: var(--v2-text-text-accent); }
+.mn-kind[data-state="pr-merged"] { color: var(--v2-state-fg-success); }
+.mn-kind[data-state="issue-closed"] { color: var(--v2-text-text-accent); }
+.mn-chain[data-tone="warning"] .mn-kind[data-state="pr-merged"], .mn-pop-chain[data-tone="warning"] .mn-kind[data-state="pr-merged"] { color: var(--v2-state-fg-warning); }
+.mn-chain[data-tone="danger"] .mn-kind[data-state="pr-merged"], .mn-pop-chain[data-tone="danger"] .mn-kind[data-state="pr-merged"] { color: var(--v2-state-fg-danger); }
 .mn-kind[data-state="pr-closed"] { color: var(--v2-state-fg-danger); }
 .mn-kind[data-state="pr-conflict"] { color: var(--v2-icon-icon-muted); }
 .mn-id { font-family: var(--v2-font-family-code); font-size: 11.5px; font-weight: 600; flex: none; cursor: copy; }

@@ -331,7 +331,48 @@ export interface ArmedEntry {
   repo: RepoRef
   number: number
   method: "merge" | "squash" | "rebase"
+  /** Distinguishes a newly re-armed user consent from an in-flight old request. */
+  armID?: string
 }
+
+export const staleHeadRetryEligible = (input: {
+  via: "manual" | "when-ready"
+  headChanged: boolean
+  armed: boolean
+  refreshSucceeded: boolean
+  inFlight: boolean
+  rejectedHeadSha: string
+  currentHeadSha?: string
+  ready: boolean
+}): boolean =>
+  input.via === "when-ready" &&
+  input.headChanged &&
+  input.armed &&
+  input.refreshSucceeded &&
+  !input.inFlight &&
+  input.currentHeadSha !== undefined &&
+  input.currentHeadSha !== input.rejectedHeadSha &&
+  input.ready
+
+export const sessionAttemptCurrent = (
+  attempt: { id: string; directory: string } | undefined,
+  current: { id: string; directory: string } | undefined,
+): boolean => !!attempt && !!current && attempt.id === current.id && attempt.directory === current.directory
+
+export const targetRefreshConfirmed = (input: {
+  refreshSucceeded: boolean
+  targetReturned: boolean
+  targetUnresolved: boolean
+}): boolean => input.refreshSucceeded && input.targetReturned && !input.targetUnresolved
+
+export const staleHeadEvidenceUsable = (input: {
+  rejectedHeadSha: string
+  candidateHeadSha: string
+  confirmedHeadSha?: string
+}): boolean =>
+  input.confirmedHeadSha !== undefined &&
+  input.confirmedHeadSha !== input.rejectedHeadSha &&
+  input.candidateHeadSha === input.confirmedHeadSha
 
 /** Armed entries whose chain is mergeable right now. Providers without merge or
  * review state fall back to checks — which must be on record (no evidence, no
