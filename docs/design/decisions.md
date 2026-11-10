@@ -8,8 +8,9 @@
    own pill beside the chain pill. Worst chain first, capped at three. Chains leave
    the row when nothing needs attention (no open PR, no in-flight/failing runs, no
    armed merge) and live on in history — except the session's own PR (repository-
-   and branch-matched), which stays as a terminal "· merged" capsule until the
-   session produces newer work.
+   and branch-matched), which stays as a terminal capsule until the session
+   produces newer work. Its merged state is shown by the pill icon and tooltip,
+   not by a "· merged" label suffix.
 4. **History shape** — triplet cards (issue → PR → runs), chronologically by last
    activity, grouped by day, runs newest-first, run rows expand to their checks.
    A flat event log was rejected.
