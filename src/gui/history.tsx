@@ -160,7 +160,7 @@ export const History = (props: HistoryProps) => {
     void ctx.system.copy(text).then(() => {
       setCopied(key)
       setTimeout(() => setCopied(null), 900)
-    }).catch(() => setCopied(null))
+    }).catch(() => undefined)
   }
 
   return (
@@ -185,7 +185,10 @@ export const History = (props: HistoryProps) => {
         <div class="mn-note" data-warn>
           {ctx.t("panel.error", { message: props.error() ?? "" })}{" "}
           <button
+            class="mn-copy-link"
             type="button"
+            title={ctx.t("panel.error.copy")}
+            aria-label={ctx.t("panel.error.copy")}
             onClick={(event) => copyId(event, props.error() ?? "", "error")}
           >
             {copied() === "error" ? ctx.t("panel.error.copied") : ctx.t("panel.error.copy")}
