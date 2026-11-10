@@ -91,3 +91,79 @@ describe("toPullEntity", () => {
     expect(entity.state).toBe("merged")
   })
 })
+
+describe("strict JSON boundary", () => {
+  // The transport encodes responses with a strict JSON schema: a property
+  // whose value is undefined (or a non-finite number) fails the ENTIRE
+  // response — zod's optional() is lenient where the wire is not, so schema
+  // tests alone cannot catch this class. Scan every entity kind a provider
+  // can emit.
+  const jsonIssues = (value: unknown, path = "output"): string[] => {
+    if (value === undefined) return [`${path} = undefined`]
+    if (typeof value === "number" && !Number.isFinite(value)) return [`${path} = ${value}`]
+    if (Array.isArray(value)) return value.flatMap((item, index) => jsonIssues(item, `${path}[${index}]`))
+    if (value !== null && typeof value === "object")
+      return Object.entries(value).flatMap(([key, item]) => jsonIssues(item, `${path}.${key}`))
+    return []
+  }
+
+  const repo = { host: "github.com", owner: "octo", repo: "repo" }
+  const pullFixture = (overrides: Record<string, unknown>) =>
+    toPullEntity(repo, {
+      node_id: "n1",
+      number: 7,
+      title: "T",
+      state: "open",
+      draft: false,
+      merged_at: null,
+      body: null,
+      html_url: "https://github.com/octo/repo/pull/7",
+      head: { sha: "abc", ref: "feature" },
+      base: { ref: "main" },
+      mergeable: null,
+      mergeable_state: "unknown",
+      auto_merge: null,
+      updated_at: "2026-11-10T00:00:00Z",
+      ...overrides,
+    })
+
+  test("every pull shape is strict-JSON safe", () => {
+    const shapes = [
+      pullFixture({}), // open
+      pullFixture({ state: "closed" }), // closed, unmerged
+      pullFixture({ state: "closed", merged_at: "2026-11-10T00:33:47Z" }), // merged
+      pullFixture({ draft: true }), // draft
+      pullFixture({ auto_merge: { merge_method: "squash" } }), // armed on the forge
+    ]
+    for (const entity of shapes) expect(jsonIssues(entity)).toEqual([])
+  })
+
+  test("run and issue shapes are strict-JSON safe", () => {
+    const run = {
+      kind: "run" as const,
+      provider: "github",
+      repo,
+      id: 1,
+      name: "test",
+      headBranch: "main",
+      headSha: "abc",
+      status: "succeeded" as const,
+      checks: [{ name: "unit", status: "succeeded" as const }],
+      pullRequests: [],
+      url: "https://github.com/octo/repo/actions/runs/1",
+      updatedAt: 0,
+    }
+    const issue = {
+      kind: "issue" as const,
+      provider: "github",
+      repo,
+      number: 2,
+      title: "T",
+      state: "open" as const,
+      url: "https://github.com/octo/repo/issues/2",
+      updatedAt: 0,
+    }
+    expect(jsonIssues(run)).toEqual([])
+    expect(jsonIssues(issue)).toEqual([])
+  })
+})
