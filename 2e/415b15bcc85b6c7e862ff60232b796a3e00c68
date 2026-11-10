@@ -1,0 +1,35 @@
+docs/design/decisions.md
+  s_772a13820a0a55::t_0cac8cd2cb3937 35-39
+src/gui/definition.ts
+  s_772a13820a0a55::t_27196db388919c 78,80-81,83
+src/gui/history.tsx
+  s_772a13820a0a55::t_ccbabce7a62c01 235,238,240,248-249
+src/gui/icons.tsx
+  s_772a13820a0a55::t_758d826644694a 121-129
+src/index.ts
+  s_772a13820a0a55::t_889810c4ce0196 13,15,17,21-101,183,185-187
+src/local-cleanup.test.ts
+  s_772a13820a0a55::t_39e69ee025feb1 1-105
+src/local-cleanup.ts
+  s_772a13820a0a55::t_b8240ce1842721 1-65
+src/providers/github.ts
+  s_772a13820a0a55::t_e1730dccd1f9db 465,483
+src/rpc.ts
+  s_772a13820a0a55::t_287af4d1a8b841 129-143
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2e415b15bcc85b6c7e862ff60232b796a3e00c68",
+  "prompts": {},
+  "sessions": {
+    "s_772a13820a0a55": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_e3c4b6ca8ffePRtMmPSqMSy379",
+        "model": "unknown"
+      },
+      "human_author": "Emre Şafak <3928300+esafak@users.noreply.github.com>"
+    }
+  }
+}
