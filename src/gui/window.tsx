@@ -13,6 +13,7 @@ import type { definition } from "./definition"
 import { History, MergeButton } from "./history"
 import { CancelledGlyph, CheckGlyph, CopyGlyph, CrossGlyph, IssueGlyph, MergeGlyph, MergedGlyph, PullConflictGlyph, PullGlyph, QueuedGlyph, UnknownGlyph } from "./icons"
 import { pillIcon } from "./marks"
+import { pillStatusIcon } from "./pill-status"
 
 const POLL_MS = 30_000
 /** Debounce for scan → hydrate while a message streams in. */
@@ -491,7 +492,13 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
         sessions.push(...page.data)
         cursor = page.cursor.next ?? undefined
       }
-      return sessions.map((item) => ({ id: item.id, directory: item.location.directory }))
+      return sessions.map((item) => ({
+        id: item.id,
+        directory: item.location.directory,
+        parentID: item.parentID,
+        outcome: item.outcome,
+        time: { busy: item.time.busy, idle: item.time.idle, archived: item.time.archived },
+      }))
     }))
     return lists.flat()
   }
@@ -620,20 +627,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       // overall chain health. The label stays `#number title ⌄`. An armed lead PR
       // puts a ticking braille spinner in front: a merge is pending.
       const mergeStatus = lead?.state === "open" ? lead.mergeState : undefined
-      const circle =
-        lead?.state === "merged" || mergeStatus === "ready"
-          ? "circle-check"
-          : mergeStatus === "pending"
-            ? "circle-exclamation"
-            : mergeStatus === "blocked" || mergeStatus === "conflict"
-              ? "circle-xmark"
-              : tone === "success"
-                ? "circle-check"
-                : tone === "warning"
-                  ? "circle-exclamation"
-                  : tone === "danger"
-                    ? "circle-xmark"
-                    : pillIcon(meta.provider)
+      const circle = pillStatusIcon(lead?.state, mergeStatus, tone, pillIcon(meta.provider))
       const pending = lead?.state === "open" ? isArmed(lead) : false
       const short = (title: string): string => (title.length > 24 ? `${title.slice(0, 24)}…` : title)
 
