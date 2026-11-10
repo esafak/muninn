@@ -32,24 +32,91 @@ describe("worktreeOccupancyDecision", () => {
     expect(worktreeOccupancyDecision([{ id: "origin", directory: "/tree/sub" }], "origin", "/tree", false)).toEqual({ safe: true })
   })
 
-  test("protects other sessions and requires an empty old tree after moving the origin", () => {
+  test("keeps an idle child origin visible to the sole-occupant check", () => {
+    const origin = {
+      id: "origin",
+      parentID: "parent",
+      outcome: "succeeded" as const,
+      time: { busy: 10, idle: 10 },
+      directory: "/tree",
+    }
+    expect(worktreeOccupancyDecision([origin], "origin", "/tree", false)).toEqual({ safe: true })
+    expect(worktreeOccupancyDecision([
+      origin,
+      { id: "other", directory: "/tree/child" },
+    ], "origin", "/tree", false)).toEqual({
+      safe: false,
+      message: "another session uses the worktree; left it intact",
+    })
+  })
+
+  test("ignores a child only when its last execution is terminal and idle", () => {
+    const terminal = ["succeeded", "failed", "interrupted"] as const
+    for (const outcome of terminal)
+      expect(worktreeOccupancyDecision([
+        { id: "origin", directory: "/tree" },
+        {
+          id: "finished-child",
+          parentID: "origin",
+          outcome,
+          time: { busy: 10, idle: 10 },
+          directory: "/tree/child",
+        },
+      ], "origin", "/tree", false)).toEqual({ safe: true })
+  })
+
+  test("keeps missing lifecycle data and active or independent sessions protective", () => {
+    const child = { id: "child", parentID: "origin", directory: "/tree/child" }
+    const cases = [
+      { ...child, outcome: "succeeded" as const },
+      { ...child, outcome: "succeeded" as const, time: { busy: 10 } },
+      { ...child, outcome: "succeeded" as const, time: { idle: 10 } },
+      { ...child, outcome: "succeeded" as const, time: { busy: 11, idle: 10 } },
+      { ...child, time: { busy: 10, idle: 10, archived: 12 } },
+      { id: "independent", directory: "/tree/child", outcome: "succeeded" as const, time: { busy: 10, idle: 10 } },
+    ]
+    for (const session of cases)
+      expect(worktreeOccupancyDecision([session], "origin", "/tree", false)).toEqual({
+        safe: false,
+        message: "another session uses the worktree; left it intact",
+      })
+  })
+
+  test("ignoring a finished child does not hide a different active child", () => {
+    expect(worktreeOccupancyDecision([
+      { id: "origin", directory: "/tree" },
+      { id: "finished", parentID: "origin", outcome: "succeeded", time: { busy: 10, idle: 10 }, directory: "/tree/finished" },
+      { id: "running", parentID: "origin", outcome: "succeeded", time: { busy: 12, idle: 10 }, directory: "/tree/running" },
+    ], "origin", "/tree", false)).toEqual({
+      safe: false,
+      message: "another session uses the worktree; left it intact",
+    })
+  })
+
+  test("after a confirmed move, ignores a stale origin entry but not another live occupant", () => {
+    expect(worktreeOccupancyDecision([{ id: "origin", directory: "/tree" }], "origin", "/tree", true)).toEqual({ safe: true })
     expect(worktreeOccupancyDecision([
       { id: "origin", directory: "/tree" },
       { id: "other", directory: "/tree/child" },
-    ], "origin", "/tree", false)).toEqual({ safe: false, message: "another session uses the worktree; left it intact" })
-    expect(worktreeOccupancyDecision([{ id: "other", directory: "/tree" }], "origin", "/tree", true)).toEqual({
+    ], "origin", "/tree", true)).toEqual({
       safe: false,
       message: "another session still uses the old worktree; left it intact",
     })
     expect(worktreeOccupancyDecision([], "origin", "/tree", true)).toEqual({ safe: true })
   })
 
-  test("a session found on a later page or archived is still an occupant", () => {
+  test("a session found on a later page and a similarly prefixed sibling remain distinct", () => {
     const pages = [
       [{ id: "origin", directory: "/tree" }],
-      [{ id: "archived-session", directory: "/tree/nested" }],
+      [{ id: "sibling", directory: "/treehouse" }],
+      [{ id: "nested", directory: "/tree/nested" }],
     ]
     expect(worktreeOccupancyDecision(pages.flat(), "origin", "/tree", false).safe).toBe(false)
+    expect(worktreeOccupancyDecision([{ id: "origin", directory: "/tree" }, { id: "sibling", directory: "/treehouse" }], "origin", "/tree", false)).toEqual({ safe: true })
+    expect(worktreeOccupancyDecision([], "origin", "/tree", false)).toEqual({
+      safe: false,
+      message: "origin session is not confirmed as the sole worktree user; left it intact",
+    })
   })
 })
 

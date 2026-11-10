@@ -18,14 +18,32 @@ const containsPath = (parent: string, child: string): boolean => {
 }
 
 export const worktreeOccupancyDecision = (
-  sessions: readonly { id: string; directory: string }[],
+  sessions: readonly {
+    id: string
+    directory: string
+    parentID?: string
+    outcome?: "succeeded" | "failed" | "interrupted"
+    time?: { busy?: number; idle?: number; archived?: number }
+  }[],
   originSessionID: string,
   directory: string,
   originMoved: boolean,
 ): { safe: boolean; message?: string } => {
-  const occupants = sessions.filter((session) => containsPath(directory, session.directory))
+  const occupants = sessions.filter((session) => {
+    if (!containsPath(directory, session.directory)) return false
+    // Completed agent children remain in session.list after their work is done.
+    const finishedChild =
+      session.id !== originSessionID &&
+      session.parentID !== undefined &&
+      session.outcome !== undefined &&
+      session.time?.busy !== undefined &&
+      session.time.idle !== undefined &&
+      session.time.busy <= session.time.idle
+    return !finishedChild
+  })
   if (originMoved) {
-    if (occupants.length === 0) return { safe: true }
+    // The caller confirms the move through session.get; session.list can lag behind it.
+    if (occupants.every((session) => session.id === originSessionID)) return { safe: true }
     return { safe: false, message: "another session still uses the old worktree; left it intact" }
   }
   if (occupants.length === 1 && occupants[0]!.id === originSessionID) return { safe: true }
