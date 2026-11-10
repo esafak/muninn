@@ -1,0 +1,16 @@
+src/local-cleanup.test.ts
+  h_ea91e2db23540f 35-52
+src/local-cleanup.ts
+  h_ea91e2db23540f 36
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "108ffb2db624aa20227d12e6902d601e0bac81e4",
+  "prompts": {},
+  "humans": {
+    "h_ea91e2db23540f": {
+      "author": "Emre Şafak <3928300+esafak@users.noreply.github.com>"
+    }
+  }
+}
