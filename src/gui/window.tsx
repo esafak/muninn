@@ -3,7 +3,7 @@ import type { JSX } from "solid-js"
 import { createStore } from "solid-js/store"
 import { ComposerPill, MenuItem, Panel, SettingsPage, createKeyed, usePlugin, type IconName, type Plugin } from "@opencode/plugin/gui"
 import { associate } from "../associate"
-import { deliberateRefs, messageBuckets } from "../extract"
+import { deliberateRefs, messageBuckets, wireRefs } from "../extract"
 import type { Chain, Entity, PullEntity, RepoRef, RunEntity, RunStatus } from "../model"
 import { chainTone, armedTargets, pillPick, pillEligible, mergeReady, mergeWhy, pullForRun, refKey, repoKey, entityKey } from "../model"
 import { githubLexicon } from "../providers/github/lexicon"
@@ -119,6 +119,26 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
 
   const open = (url: string) => ctx.system.openExternal(url)
 
+  /** Names the step that failed, in the panel message and the console: "the
+   * forge is unreachable" is only ever one of several ways a refresh fails. */
+  const stage = async <T,>(name: string, run: () => Promise<T>): Promise<T> => {
+    try {
+      return await run()
+    } catch (error) {
+      console.warn(`[muninn] ${name} failed`, error)
+      throw new Error(`${name}: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
+  /** Compact "#123, #456" for the stats line; repos outside the session's get a prefix. */
+  const unresolvedLabel = (refs: readonly { number: number; repo?: RepoRef }[] | undefined, repo: RepoRef | undefined): string => {
+    const labels = (refs ?? []).slice(0, 6).map((ref) =>
+      ref.repo && repo && (ref.repo.owner !== repo.owner || ref.repo.repo !== repo.repo) ? `${ref.repo.owner}/${ref.repo.repo}#${ref.number}` : `#${ref.number}`,
+    )
+    const more = (refs?.length ?? 0) > 6 ? ` +${refs!.length - 6}` : ""
+    return `${labels.join(", ")}${more}`
+  }
+
   /** Re-reads repository coordinates, then hydrates and re-chains. Cheap when cached. */
   const refresh = async () => {
     const current = session()
@@ -129,7 +149,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     const client = ctx.client
 
     try {
-      const info = await client.rpc(Muninn).repo({ directory: current.directory })
+      const info = await stage("repo", () => client.rpc(Muninn).repo({ directory: current.directory }))
       setMeta({
         sessionID: current.id,
         repo: info.repo,
@@ -148,16 +168,20 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
 
       const found = refs()
       if (found.length > 0) {
-        const result = await client.rpc(Muninn).hydrate({ directory: current.directory, refs: found })
+        const wire = wireRefs(found)
+        const result = await stage("hydrate", () => client.rpc(Muninn).hydrate({ directory: current.directory, refs: wire.refs }))
         merge(result.entities)
         setMeta("unresolved", result.unresolved.length)
         const byKind = new Map<string, number>()
         for (const entity of result.entities) byKind.set(entity.kind, (byKind.get(entity.kind) ?? 0) + 1)
         const breakdown = [...byKind].map(([kind, count]) => `${count} ${kind}`).join(", ") || "none"
-        setMeta("stats", `${found.length} refs → ${result.entities.length} hydrated (${breakdown}) · ${result.unresolved.length} unresolved`)
+        const sent = wire.capped || wire.dropped > 0 ? `${wire.refs.length}/${found.length}` : `${wire.refs.length}`
+        const dropped = wire.dropped > 0 ? ` · ${wire.dropped} invalid dropped` : ""
+        const unresolved = result.unresolved.length > 0 ? ` · ${result.unresolved.length} unresolved (${unresolvedLabel(result.unresolved, info.repo)})` : ` · ${result.unresolved.length} unresolved`
+        setMeta("stats", `${sent} refs → ${result.entities.length} hydrated (${breakdown})${unresolved}${dropped}`)
       }
       if (branch) {
-        const { runs: branchRuns, prs } = await client.rpc(Muninn).branchRuns({ directory: current.directory, branch })
+        const { runs: branchRuns, prs } = await stage("branch-runs", () => client.rpc(Muninn).branchRuns({ directory: current.directory, branch }))
         setRuns(repoKey(info.repo), branchRuns)
         merge(prs)
       }
@@ -195,9 +219,10 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     timer = setTimeout(() => {
       const current = session()
       if (!current) return
+      const wire = wireRefs(found)
       void ctx.client
         .rpc(Muninn)
-        .hydrate({ directory: current.directory, refs: found })
+        .hydrate({ directory: current.directory, refs: wire.refs })
         .then(({ entities: hydrated, unresolved }) => {
           merge(hydrated)
           setMeta("unresolved", unresolved.length)
@@ -415,7 +440,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       : `pick: ${picked.reason}${picked.considered > 1 ? ` of ${picked.considered}` : ""} · lead ${
           picked.chain.prs[0] ? (picked.chain.prs[0].headBranch === meta.branch ? "branch match" : "newest") : "—"
         }`
-    return `mn gui ${__MN_BUILD__}${meta.debug ? ` · ${meta.debug}` : " · srv ?"} · gate ${gate} ${current?.id ?? "?"} · chains ${chains().length} · eligible ${eligible.length} · pill: ${pill} · ${pick} · refs ${refList.length} (user ${tiers.user} cmd ${tiers.command} prose ${tiers.prose} out ${tiers.output}) → hits ${hits}/${Object.keys(entities).length} ents${meta.stats ? ` · ${meta.stats}` : ""}`
+    return `mn gui ${__MN_BUILD__}${meta.debug ? ` · ${meta.debug}` : " · srv ?"} · gate ${gate} ${current?.id ?? "?"} · chains ${chains().length} · eligible ${eligible.length} · pill: ${pill} · ${pick} · refs ${refList.length} (user ${tiers.user} cmd ${tiers.command} prose ${tiers.prose} out ${tiers.output}) → hits ${hits}/${Object.keys(entities).length} ents${meta.error ? ` · err ${meta.error.split(":")[0]}` : ""}${meta.stats ? ` · ${meta.stats}` : ""}`
   }
 
   /** The braille spinner frames for the pill's pending-merge indicator. The host

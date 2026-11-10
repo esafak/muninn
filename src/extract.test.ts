@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
-import { deliberateRefs, messageBuckets, messagesText, scan, scanDetailed, textToScan, LISTING_THRESHOLD, RUN_LISTING_LIMIT } from "./extract"
+import { deliberateRefs, messageBuckets, messagesText, scan, textToScan, LISTING_THRESHOLD, RUN_LISTING_LIMIT, WIRE_REF_CAP, scanDetailed, wireRefs } from "./extract"
+import type { TieredRef } from "./extract"
 import { githubLexicon } from "./providers/github/lexicon"
 import type { RepoRef } from "./model"
 
@@ -415,5 +416,47 @@ describe("messagesText", () => {
       "pr",
       "issue",
     ])
+  })
+})
+
+describe("wireRefs", () => {
+  const tiered = (number: number, tier: TieredRef["tier"] = "prose", kind?: TieredRef["kind"]): TieredRef =>
+    ({ number, tier, ...(kind ? { kind } : {}), repo: opencode })
+
+  test("passes valid refs through under the cap", () => {
+    const refs = [tiered(1, "user"), tiered(2, "output", "pr")]
+    expect(wireRefs(refs)).toEqual({ refs, dropped: 0, capped: false })
+  })
+
+  test("drops refs the wire contract rejects — a prose '#0' must not reject the whole call", () => {
+    const refs = [tiered(12, "user", "pr"), tiered(0), tiered(-3), tiered(Number.MAX_SAFE_INTEGER + 1)]
+    const wire = wireRefs(refs)
+    expect(wire.refs.map((ref) => ref.number)).toEqual([12])
+    expect(wire.dropped).toBe(3)
+    expect(wire.capped).toBe(false)
+  })
+
+  test("caps at the RPC limit keeping the most deliberate tiers first", () => {
+    const refs = [
+      ...Array.from({ length: 40 }, (_, index) => tiered(index + 1, "output", "pr")),
+      ...Array.from({ length: 40 }, (_, index) => tiered(index + 100, "user")),
+    ]
+    const wire = wireRefs(refs)
+    expect(wire.capped).toBe(true)
+    expect(wire.refs).toHaveLength(WIRE_REF_CAP)
+    expect(wire.refs.slice(0, 40).every((ref) => ref.tier === "user")).toBe(true)
+    expect(wire.refs.slice(40).every((ref) => ref.tier === "output")).toBe(true)
+    expect(wire.dropped).toBe(0)
+  })
+
+  test("stable within a tier: first-seen order survives truncation", () => {
+    const refs = Array.from({ length: WIRE_REF_CAP + 1 }, (_, index) => tiered(index + 1, "command", "run"))
+    expect(wireRefs(refs).refs.map((ref) => ref.number)).toEqual(refs.slice(0, WIRE_REF_CAP).map((ref) => ref.number))
+  })
+
+  test("honors a smaller cap", () => {
+    const wire = wireRefs([tiered(1, "user"), tiered(2, "prose"), tiered(3, "output")], 2)
+    expect(wire.refs.map((ref) => ref.number)).toEqual([1, 2])
+    expect(wire.capped).toBe(true)
   })
 })
