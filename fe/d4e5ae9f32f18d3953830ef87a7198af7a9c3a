@@ -1,0 +1,28 @@
+docs/plans/retry-stale-head-and-merged-pill-icon.md
+  h_ea91e2db23540f 27-28
+src/gui/window.tsx
+  h_ea91e2db23540f 73,394,408-414,416-425,518-522,555-562
+src/index.ts
+  h_ea91e2db23540f 19,190-193
+src/merge-coordinator.test.ts
+  h_ea91e2db23540f 1-63
+src/merge-coordinator.ts
+  h_ea91e2db23540f 1-50
+src/providers/github.ts
+  h_ea91e2db23540f 345-362,365,367-368,466-468,477-478,597-598,603,638,643-646,648-652,656-673,694
+src/providers/types.ts
+  h_ea91e2db23540f 31-33
+src/rpc.ts
+  h_ea91e2db23540f 135-141
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "fed4e5ae9f32f18d3953830ef87a7198af7a9c3a",
+  "prompts": {},
+  "humans": {
+    "h_ea91e2db23540f": {
+      "author": "Emre Şafak <3928300+esafak@users.noreply.github.com>"
+    }
+  }
+}
