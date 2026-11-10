@@ -440,7 +440,8 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       : `pick: ${picked.reason}${picked.considered > 1 ? ` of ${picked.considered}` : ""} · lead ${
           picked.chain.prs[0] ? (picked.chain.prs[0].headBranch === meta.branch ? "branch match" : "newest") : "—"
         }`
-    return `mn gui ${__MN_BUILD__}${meta.debug ? ` · ${meta.debug}` : " · srv ?"} · gate ${gate} ${current?.id ?? "?"} · chains ${chains().length} · eligible ${eligible.length} · pill: ${pill} · ${pick} · refs ${refList.length} (user ${tiers.user} cmd ${tiers.command} prose ${tiers.prose} out ${tiers.output}) → hits ${hits}/${Object.keys(entities).length} ents${meta.error ? ` · err ${meta.error.split(":")[0]}` : ""}${meta.stats ? ` · ${meta.stats}` : ""}`
+    const error = meta.error ? ` · err ${meta.error.slice(0, 200)}` : ""
+    return `mn gui ${__MN_BUILD__}${meta.debug ? ` · ${meta.debug}` : " · srv ?"} · gate ${gate} ${current?.id ?? "?"} · chains ${chains().length} · eligible ${eligible.length} · pill: ${pill} · ${pick} · refs ${refList.length} (user ${tiers.user} cmd ${tiers.command} prose ${tiers.prose} out ${tiers.output}) → hits ${hits}/${Object.keys(entities).length} ents${error}${meta.stats ? ` · ${meta.stats}` : ""}`
   }
 
   /** The braille spinner frames for the pill's pending-merge indicator. The host

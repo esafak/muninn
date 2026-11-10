@@ -157,9 +157,10 @@ export const History = (props: HistoryProps) => {
 
   const copyId = (event: MouseEvent, text: string, key: string) => {
     event.stopPropagation()
-    void ctx.system.copy(text).catch(() => undefined)
-    setCopied(key)
-    setTimeout(() => setCopied(null), 900)
+    void ctx.system.copy(text).then(() => {
+      setCopied(key)
+      setTimeout(() => setCopied(null), 900)
+    }).catch(() => undefined)
   }
 
   return (
@@ -181,7 +182,18 @@ export const History = (props: HistoryProps) => {
         </Show>
       </Show>
       <Show when={props.error()}>
-        <div class="mn-note" data-warn>{ctx.t("panel.error", { message: props.error() ?? "" })}</div>
+        <div class="mn-note" data-warn>
+          {ctx.t("panel.error", { message: props.error() ?? "" })}{" "}
+          <button
+            class="mn-copy-link"
+            type="button"
+            title={ctx.t("panel.error.copy")}
+            aria-label={ctx.t("panel.error.copy")}
+            onClick={(event) => copyId(event, props.error() ?? "", "error")}
+          >
+            {copied() === "error" ? ctx.t("panel.error.copied") : ctx.t("panel.error.copy")}
+          </button>
+        </div>
       </Show>
 
       <Show
