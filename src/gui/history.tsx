@@ -232,12 +232,12 @@ export const History = (props: HistoryProps) => {
                       >
                         {pull.state === "merged" ? <MergedGlyph /> : prConflicted(pull) ? <PullConflictGlyph /> : <PullGlyph />}
                       </span>
-                      <Show when={pull.state === "open"}>
+                      <Show when={pull.state === "open" || pull.state === "merged"}>
                         <span
                           class="mn-merge-state"
-                          data-state={pull.mergeState ?? "unknown"}
+                          data-state={pull.state === "merged" ? "merged" : pull.mergeState ?? "unknown"}
                           data-armed={props.isArmed(pull) ? "" : undefined}
-                          title={`merge: ${pull.mergeState ?? "unknown"}${pull.reviewState ? ` · reviews: ${pull.reviewState}` : ""}${props.isArmed(pull) ? " · Muninn is watching" : ""}`}
+                          title={`merge: ${pull.state === "merged" ? "merged" : pull.mergeState ?? "unknown"}${pull.reviewState ? ` · reviews: ${pull.reviewState}` : ""}${props.isArmed(pull) ? " · Muninn is watching" : ""}`}
                         >
                           {pull.state === "open" && pull.mergeState == null ? <UnknownGlyph /> : <MergeGlyph />}
                         </span>
@@ -245,8 +245,8 @@ export const History = (props: HistoryProps) => {
                       <span
                         class="mn-id"
                         classList={{ copied: copied() === `p${chain.key}${pull.number}` }}
-                        title="Click to copy"
-                        onClick={(event) => copyId(event, `#${pull.number}`, `p${chain.key}${pull.number}`)}
+                        title="Click to copy PR URL"
+                        onClick={(event) => copyId(event, pull.url, `p${chain.key}${pull.number}`)}
                       >
                         {copied() === `p${chain.key}${pull.number}` ? "✓" : `#${pull.number}`}
                       </span>

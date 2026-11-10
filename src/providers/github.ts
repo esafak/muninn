@@ -462,7 +462,7 @@ export const github: SourceProvider = {
     return { runs: runEntities, prs }
   },
 
-  merge: async (repo, number, method, expectedHeadSha, deleteBranch, auth) => {
+  merge: async (repo, number, method, expectedHeadSha, auth) => {
     const headers = {
       accept: "application/vnd.github+json",
       "user-agent": "muninn",
@@ -480,17 +480,7 @@ export const github: SourceProvider = {
     }
     const outcome = mergeResponse(await merge.json().catch(() => undefined))
     if (!outcome.merged) return outcome
-    if (!deleteBranch) return { merged: true }
-
-    // Delete the PR's head branch after a successful merge.
-    const pull = await request<PullJson>(`/repos/${repo.owner}/${repo.repo}/pulls/${number}`, auth)
-    if (!pull) return { merged: true, message: "head branch not found for deletion" }
-    const deleted = await fetch(`https://api.github.com/repos/${repo.owner}/${repo.repo}/git/refs/heads/${encodeURIComponent(pull.head.ref)}`, {
-      method: "DELETE",
-      headers: { ...headers },
-      signal: AbortSignal.timeout(20_000),
-    })
-    return deleted.ok ? { merged: true } : { merged: true, message: `branch deletion failed: ${deleted.status}` }
+    return { merged: true }
   },
 
   /** Arms or disarms auto-merge — merge when CI is green and required reviews pass.

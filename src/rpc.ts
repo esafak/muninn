@@ -123,9 +123,23 @@ export const Muninn = Rpc.define({
         number: z.number(),
         method: z.enum(["merge", "squash", "rebase"]),
         expectedHeadSha: z.string(),
-        deleteBranch: z.boolean(),
       }),
       output: z.object({ merged: z.boolean(), message: z.string().optional() }),
+    },
+    /** Check the exact local tree and head before a worktree can be removed. */
+    checkLocalWorktree: {
+      input: z.object({ directory: z.string(), branch: z.string(), expectedHeadSha: z.string() }),
+      output: z.object({ eligible: z.boolean(), message: z.string().optional() }),
+    },
+    /** Delete a local PR branch after a clean OpenCode worktree has been removed. */
+    deleteLocalBranch: {
+      input: z.object({ directory: z.string(), branch: z.string(), expectedHeadSha: z.string() }),
+      output: z.object({ deleted: z.boolean(), message: z.string().optional() }),
+    },
+    /** Fast-forward a clean local base checkout to its forge's base branch. */
+    fastForwardBase: {
+      input: z.object({ directory: z.string(), repo: RepoRef, baseBranch: z.string() }),
+      output: z.object({ fastForwarded: z.boolean(), message: z.string().optional() }),
     },
     /** Arms (enable) or disarms auto-merge: merge when checks pass and required reviews approve. */
     autoMerge: {

@@ -118,3 +118,12 @@ export const MergeGlyph = (): JSX.Element =>
       <circle cx="8" cy="8" r="2.2" />
     </>,
   )
+
+/** Two overlapping sheets: copy. */
+export const CopyGlyph = (): JSX.Element =>
+  svg(
+    <g fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" />
+      <path d="M10.5 5.5V3.75A1.75 1.75 0 0 0 8.75 2h-5A1.75 1.75 0 0 0 2 3.75v5A1.75 1.75 0 0 0 3.75 10.5H5.5" />
+    </g>,
+  )

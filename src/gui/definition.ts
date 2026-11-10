@@ -75,9 +75,12 @@ export const definition = Plugin.define({
         retentionDays: Schema.Number,
         debugMode: Schema.Boolean,
         mergeMethod: Schema.Literals(["squash", "merge", "rebase"]),
+        /** Clean up the local OpenCode worktree and branch after a successful merge. */
         deleteBranch: Schema.Boolean,
+        /** Fast-forward the clean local base checkout after a successful merge. */
+        fastForwardBase: Schema.optional(Schema.Boolean),
       }),
-      { retentionDays: 30, debugMode: true, mergeMethod: "squash", deleteBranch: true },
+      { retentionDays: 30, debugMode: true, mergeMethod: "squash", deleteBranch: true, fastForwardBase: false },
     ),
     /** Pull requests Muninn is driving to merge ("merge when ready"): armed
      * locally, fired by Muninn's refresh cycle once checks and reviews are green. */
