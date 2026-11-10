@@ -24,6 +24,12 @@ export const Check = z.object({
   status: z.enum(["queued", "running", "succeeded", "failed", "cancelled"]),
 })
 
+export const StatusCheckSnapshot = z.object({
+  headSha: z.string(),
+  state: z.enum(["available", "unavailable", "unsupported"]),
+  contexts: z.array(z.object({ name: z.string(), status: z.enum(["queued", "running", "succeeded", "failed", "cancelled"]) })),
+})
+
 export const RunEntity = z.object({
   kind: z.literal("run"),
   provider: z.string(),
@@ -69,6 +75,7 @@ export const PullEntity = z.object({
   mergeState: z.enum(["ready", "pending", "blocked", "conflict"]).nullish(),
   reviewState: z.enum(["approved", "changes_requested", "pending"]).nullish(),
   autoMerge: z.enum(["merge", "squash", "rebase"]).nullish(),
+  statusChecks: StatusCheckSnapshot.optional(),
 })
 
 export const Entity = z.discriminatedUnion("kind", [IssueEntity, PullEntity, RunEntity])

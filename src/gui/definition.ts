@@ -6,6 +6,11 @@ import { Plugin, Store } from "@opencode/plugin/gui"
 // them aligned.
 const Repo = Schema.Struct({ host: Schema.String, owner: Schema.String, repo: Schema.String })
 const RunStatus = Schema.Literals(["queued", "running", "succeeded", "failed", "cancelled"])
+const StatusCheckSnapshot = Schema.Struct({
+  headSha: Schema.String,
+  state: Schema.Literals(["available", "unavailable", "unsupported"]),
+  contexts: Schema.Array(Schema.Struct({ name: Schema.String, status: RunStatus })),
+})
 
 const Entity = Schema.Union([
   Schema.Struct({
@@ -52,6 +57,7 @@ const Entity = Schema.Union([
     mergeState: Schema.optional(Schema.NullOr(Schema.Literals(["ready", "pending", "blocked", "conflict"]))),
     reviewState: Schema.optional(Schema.NullOr(Schema.Literals(["approved", "changes_requested", "pending"]))),
     autoMerge: Schema.optional(Schema.NullOr(Schema.Literals(["merge", "squash", "rebase"]))),
+    statusChecks: Schema.optional(StatusCheckSnapshot),
   }),
 ])
 
@@ -76,8 +82,9 @@ export const definition = Plugin.define({
         debugMode: Schema.Boolean,
         mergeMethod: Schema.Literals(["squash", "merge", "rebase"]),
         deleteBranch: Schema.Boolean,
+        waitForAllStatusChecks: Schema.optional(Schema.Boolean),
       }),
-      { retentionDays: 30, debugMode: true, mergeMethod: "squash", deleteBranch: true },
+      { retentionDays: 30, debugMode: true, mergeMethod: "squash", deleteBranch: true, waitForAllStatusChecks: true },
     ),
     /** Pull requests Muninn is driving to merge ("merge when ready"): armed
      * locally, fired by Muninn's refresh cycle once checks and reviews are green. */
@@ -135,6 +142,8 @@ export const definition = Plugin.define({
       "settings.retention.days": "days",
       "settings.debug": "Debug mode",
       "settings.debug.description": "Show the diagnostics footer (build SHAs, pill state, hydration stats) at the bottom of the panel.",
+      "settings.waitForAllStatusChecks": "Wait for all status checks",
+      "settings.waitForAllStatusChecks.description": "Wait for all check-runs and commit status contexts on the current pull request head. Neutral and skipped check-runs count as complete.",
       "state.open": "open",
       "state.pr-conflict": "Pull request has merge conflicts",
       "state.draft": "draft",
