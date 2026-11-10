@@ -32,9 +32,11 @@
    into GitHub's `mergeable_state`). Colors: green ready · amber pending · grey
    blocked (reasons on hover). No button for drafts or read-only credentials.
    Dropdown: merge method (**only when the repo allows more than one** — single-method
-   repos merge in one pick, no ask), delete branch (default from the repo's
-   `delete_branch_on_merge`), delete worktree (opt-in; only offered on worktree
-   sessions; skipped politely on uncommitted changes), and **merge when ready**
+   repos merge in one pick, no ask), delete tree + branch (local cleanup of a clean
+   OpenCode-managed worktree after merge; remote branch deletion is left to the forge),
+   and an independent opt-in fast-forward of the clean local base checkout (no merge
+   commit, rebase, or force),
+   and **merge when ready**
    (armed pill turns amber; re-picking cancels). The merge carries the head SHA we
    rendered — a stale render cannot merge over newer commits.
 10. **SDK honesty** — ComposerPill renders `label` as text: the `⇢ #1043 +1` ships

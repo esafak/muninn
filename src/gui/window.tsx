@@ -7,10 +7,11 @@ import { deliberateRefs, messageBuckets, wireRefs } from "../extract"
 import type { Chain, Entity, PullEntity, RepoRef, RunEntity, RunStatus } from "../model"
 import { chainTone, armedTargets, pillPick, pillEligible, mergeReady, mergeWhy, pullForRun, prConflicted, refKey, repoKey, entityKey } from "../model"
 import { githubLexicon } from "../providers/github/lexicon"
+import { baseCheckoutDecision, cleanupDecision, cleanupResultMessage, cleanupSessionMatches, safeFastForward, sessionMoveConfirmed, shouldFastForwardBase, shouldRecordCleanupFailure, worktreeOccupancyDecision } from "../local-cleanup"
 import { Muninn } from "../rpc"
 import type { definition } from "./definition"
 import { History, MergeButton } from "./history"
-import { CancelledGlyph, CheckGlyph, CrossGlyph, IssueGlyph, MergeGlyph, MergedGlyph, PullConflictGlyph, PullGlyph, QueuedGlyph, UnknownGlyph } from "./icons"
+import { CancelledGlyph, CheckGlyph, CopyGlyph, CrossGlyph, IssueGlyph, MergeGlyph, MergedGlyph, PullConflictGlyph, PullGlyph, QueuedGlyph, UnknownGlyph } from "./icons"
 import { pillIcon } from "./marks"
 
 const POLL_MS = 30_000
@@ -306,6 +307,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     const current = session()
     const client = ctx.client
     if (!current || !client) return false
+    const origin = { sessionID: current.id, directory: current.directory, repo: meta.repo }
     const deleteBranch = ctx.stores.settings.value.deleteBranch
     const result = await client
       .rpc(Muninn)
@@ -314,7 +316,6 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
         number: pull.number,
         method,
         expectedHeadSha: pull.headSha,
-        deleteBranch,
       })
       .catch((error: unknown) => ({ merged: false as const, message: error instanceof Error ? error.message : String(error) }))
     if (!result.merged) {
@@ -323,15 +324,21 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       return false
     }
     record(pull, "merged", via, method)
-    // The provider reports deletion failures as a merged-with-message result;
-    // silence means the branch deletion succeeded (or wasn't requested).
     let description = `${method} into ${pull.baseBranch}`
-    if (result.message) {
-      record(pull, "branch-delete-failed", via, method, result.message)
-      description += ` · ${result.message}`
-    } else if (deleteBranch) {
-      record(pull, "branch-deleted", via, method)
-      description += ` · branch ${pull.headBranch} deleted`
+    if (shouldFastForwardBase(ctx.stores.settings.value.fastForwardBase ?? false, result.merged)) {
+      const update = await fastForwardLocalBase(origin, pull)
+      description += ` · ${update.message ?? (update.fastForwarded ? "local base fast-forwarded" : "local base unchanged")}`
+    }
+    if (deleteBranch) {
+      const cleanup = await cleanupTreeAndBranch(origin, pull)
+      if (cleanup.deleted) {
+        record(pull, "branch-deleted", via, method)
+        description += ` · ${cleanup.message}`
+      } else {
+        if (shouldRecordCleanupFailure(cleanup.attempted, cleanup.deleted))
+          record(pull, "branch-delete-failed", via, method, cleanup.message)
+        description += ` · ${cleanup.message}`
+      }
     }
     ctx.toast.show({ title: `PR #${pull.number} merged`, description, variant: "success" })
     return true
@@ -342,9 +349,10 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
   const mergePull = async (pull: PullEntity): Promise<void> => {
     const method = ctx.stores.settings.value.mergeMethod
     const deleteBranch = ctx.stores.settings.value.deleteBranch
+    const fastForward = ctx.stores.settings.value.fastForwardBase
     const ok = await ctx.dialogs.confirm({
       title: `Merge PR #${pull.number}?`,
-      description: `${method[0]!.toUpperCase()}${method.slice(1)}-merges "${pull.title}" into ${pull.baseBranch}${deleteBranch ? ` and deletes the branch ${pull.headBranch}` : ""}.`,
+      description: `${method[0]!.toUpperCase()}${method.slice(1)}-merges "${pull.title}" into ${pull.baseBranch}${deleteBranch ? ` and deletes the clean local tree and branch ${pull.headBranch}` : ""}${fastForward ? ` and fast-forwards the local ${pull.baseBranch} when safe` : ""}.`,
       confirm: "Merge",
       danger: true,
     })
@@ -359,9 +367,11 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
   const armPull = async (pull: PullEntity, enable: boolean): Promise<void> => {
     if (enable) {
       const method = ctx.stores.settings.value.mergeMethod
+      const deleteBranch = ctx.stores.settings.value.deleteBranch
+      const fastForward = ctx.stores.settings.value.fastForwardBase
       const ok = await ctx.dialogs.confirm({
         title: `Merge PR #${pull.number} when ready?`,
-        description: `Muninn watches "${pull.title}" and merges into ${pull.baseBranch} with ${method} as soon as checks pass and reviews approve. You can cancel any time.`,
+        description: `Muninn watches "${pull.title}" and merges into ${pull.baseBranch} with ${method} as soon as checks pass and reviews approve.${fastForward ? ` It will also fast-forward the local ${pull.baseBranch} when safe.` : ""}${deleteBranch ? ` It will delete the clean local tree and branch ${pull.headBranch} when possible.` : ""} You can cancel any time.`,
         confirm: "Merge when ready",
       })
       if (!ok) return
@@ -466,6 +476,125 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     void ctx.system.copy(url).catch(() => undefined)
   }
 
+  const sessionsAtWorktree = async (directory: string) => {
+    const projects = await ctx.client.project.list()
+    const lists = await Promise.all(projects.map(async (project) => {
+      const first = await ctx.client.session.list({ project: project.id, limit: 100 })
+      const sessions = [...first.data]
+      const seen = new Set<string>()
+      let cursor = first.cursor.next ?? undefined
+      while (cursor) {
+        if (seen.has(cursor)) throw new Error("session list pagination repeated a cursor")
+        seen.add(cursor)
+        const page = await ctx.client.session.list({ project: project.id, limit: 100, cursor })
+        sessions.push(...page.data)
+        cursor = page.cursor.next ?? undefined
+      }
+      return sessions.map((item) => ({ id: item.id, directory: item.location.directory }))
+    }))
+    return lists.flat()
+  }
+
+  const cleanupTreeAndBranch = async (
+    origin: { sessionID: string; directory: string; repo: RepoRef | null | undefined },
+    pull: PullEntity,
+  ) => {
+    const client = ctx.client
+    let treeRemoved = false
+    let sessionMoved = false
+    let branchDeleteAttempted = false
+    try {
+      if (!cleanupSessionMatches(origin.sessionID, session()?.id))
+        return { deleted: false, attempted: branchDeleteAttempted, message: "active session changed during merge; local tree left intact" }
+      const directory = origin.directory
+      const sameRepo = !!origin.repo && repoKey(origin.repo) === repoKey(pull.repo)
+      if (!sameRepo)
+        return { deleted: false, attempted: branchDeleteAttempted, message: cleanupDecision({ enabled: true, merged: true, sameRepo, managedWorktree: false, branchMatches: false, headMatches: false, clean: false }).message }
+      for (const project of await client.project.list()) {
+        const trees = await client.worktree.list({ projectID: project.id }).catch(() => [])
+        if (!trees.some((tree) => tree.directory === directory)) continue
+        const beforeSessions = await sessionsAtWorktree(directory)
+        const beforeOccupancy = worktreeOccupancyDecision(beforeSessions, origin.sessionID, directory, false)
+        if (!beforeOccupancy.safe) return { deleted: false, attempted: branchDeleteAttempted, message: beforeOccupancy.message }
+        const check = await client.rpc(Muninn).checkLocalWorktree({ directory, branch: pull.headBranch, expectedHeadSha: pull.headSha })
+        const decision = cleanupDecision({
+          enabled: true,
+          merged: true,
+          sameRepo,
+          managedWorktree: true,
+          branchMatches: check.eligible,
+          headMatches: check.eligible,
+          clean: check.eligible,
+        })
+        if (!decision.remove) return { deleted: false, attempted: branchDeleteAttempted, message: check.message ?? decision.message }
+        const base = await client.vcs.get({ location: { directory: project.canonical } }).catch(() => undefined)
+        const baseStatus = await client.vcs.status({ location: { directory: project.canonical } }).catch(() => undefined)
+        const baseDecision = baseCheckoutDecision({
+          differentTree: project.canonical !== directory,
+          onBaseBranch: base?.data.branch?.current === pull.baseBranch,
+          clean: !!baseStatus && baseStatus.data.length === 0,
+        })
+        if (!baseDecision.move) return { deleted: false, attempted: branchDeleteAttempted, message: baseDecision.message }
+        if (!cleanupSessionMatches(origin.sessionID, session()?.id))
+          return { deleted: false, attempted: branchDeleteAttempted, message: "active session changed during cleanup; worktree left intact" }
+        await client.session.move({ sessionID: origin.sessionID, directory: project.canonical })
+        const moved = await (async () => {
+          for (const attempt of Array.from({ length: 20 }, (_, index) => index)) {
+            const updated = await client.session.get({ sessionID: origin.sessionID }).catch(() => undefined)
+            if (sessionMoveConfirmed(updated?.location.directory, project.canonical)) return true
+            if (attempt < 19) await new Promise((resolve) => setTimeout(resolve, 100))
+          }
+          return false
+        })()
+        if (!moved)
+          return { deleted: false, attempted: branchDeleteAttempted, message: "session move is pending or unconfirmed; old worktree left intact" }
+        sessionMoved = true
+        const afterSessions = await sessionsAtWorktree(directory)
+        const afterOccupancy = worktreeOccupancyDecision(afterSessions, origin.sessionID, directory, true)
+        if (!afterOccupancy.safe)
+          return { deleted: false, attempted: branchDeleteAttempted, message: cleanupResultMessage(false, false, afterOccupancy.message, sessionMoved) }
+        await client.worktree.remove({ projectID: project.id, directory, force: false })
+        treeRemoved = true
+        branchDeleteAttempted = true
+        const result = await client.rpc(Muninn).deleteLocalBranch({ directory: project.canonical, branch: pull.headBranch, expectedHeadSha: pull.headSha })
+        return result.deleted
+          ? { deleted: true, attempted: branchDeleteAttempted, message: cleanupResultMessage(true, true, undefined, sessionMoved) }
+          : { deleted: false, attempted: branchDeleteAttempted, message: cleanupResultMessage(true, false, result.message ?? "branch could not be safely deleted", sessionMoved) }
+      }
+      return { deleted: false, attempted: branchDeleteAttempted, message: cleanupDecision({ enabled: true, merged: true, sameRepo, managedWorktree: false, branchMatches: false, headMatches: false, clean: false }).message }
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      return {
+        deleted: false,
+        attempted: branchDeleteAttempted,
+        message: treeRemoved
+          ? cleanupResultMessage(true, false, `branch deletion failed or could not be confirmed: ${detail}`, sessionMoved)
+          : cleanupResultMessage(false, false, sessionMoved ? `worktree removal failed: ${detail}` : `local cleanup failed; tree and branch left intact: ${detail}`, sessionMoved),
+      }
+    }
+  }
+
+  const fastForwardLocalBase = async (
+    origin: { sessionID: string; directory: string; repo: RepoRef | null | undefined },
+    pull: PullEntity,
+  ) => {
+    const client = ctx.client
+    try {
+      if (!cleanupSessionMatches(origin.sessionID, session()?.id))
+        return { fastForwarded: false, message: "active session changed; local base left unchanged" }
+      if (!origin.repo || repoKey(origin.repo) !== repoKey(pull.repo))
+        return { fastForwarded: false, message: "PR belongs to another repository; local base left unchanged" }
+      for (const project of await client.project.list()) {
+        const trees = await client.worktree.list({ projectID: project.id }).catch(() => [])
+        if (project.canonical !== origin.directory && !trees.some((tree) => tree.directory === origin.directory)) continue
+        return safeFastForward(client.rpc(Muninn).fastForwardBase({ directory: project.canonical, repo: pull.repo, baseBranch: pull.baseBranch }))
+      }
+      return { fastForwarded: false, message: "could not identify the local base checkout" }
+    } catch (error) {
+      return { fastForwarded: false, message: `local fast-forward failed: ${error instanceof Error ? error.message : String(error)}` }
+    }
+  }
+
   ctx.add(ComposerPill, {
     id: "links",
     order: 10,
@@ -531,9 +660,9 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
                     </span>
                     <span
                       class="mn-merge-state"
-                      data-state={pull.mergeState ?? "unknown"}
+                      data-state={pull.state === "merged" ? "merged" : pull.mergeState ?? "unknown"}
                       data-armed={isArmed(pull) ? "" : undefined}
-                      title={`merge: ${pull.mergeState ?? "unknown"}${pull.reviewState ? ` · reviews: ${pull.reviewState}` : ""}${isArmed(pull) ? " · Muninn is watching" : ""}`}
+                      title={`merge: ${pull.state === "merged" ? "merged" : pull.mergeState ?? "unknown"}${pull.reviewState ? ` · reviews: ${pull.reviewState}` : ""}${isArmed(pull) ? " · Muninn is watching" : ""}`}
                     >
                       {pull.state === "open" && pull.mergeState == null ? <UnknownGlyph /> : <MergeGlyph />}
                     </span>
@@ -547,7 +676,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
                       onMerge={mergePull}
                       onArm={armPull}
                     />
-                    <button class="mn-copy-link" type="button" title="Copy PR link" aria-label="Copy PR link" onClick={(event) => copyLink(event, pull.url)}>copy</button>
+                    <button class="mn-copy-link" type="button" title="Copy PR link" aria-label="Copy PR link" onClick={(event) => copyLink(event, pull.url)}><CopyGlyph /></button>
                   </div>
                 )}
               </For>
@@ -559,7 +688,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
                     </span>
                     <span class="mn-pop-id">#{issue.number}</span>
                     <span class="mn-pop-title">{issue.title}</span>
-                    <button class="mn-copy-link" type="button" title="Copy issue link" aria-label="Copy issue link" onClick={(event) => copyLink(event, issue.url)}>copy</button>
+                    <button class="mn-copy-link" type="button" title="Copy issue link" aria-label="Copy issue link" onClick={(event) => copyLink(event, issue.url)}><CopyGlyph /></button>
                   </div>
                 )}
               </For>
@@ -575,7 +704,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
                       <span class="mn-pop-title" title={relatedPull ? `${run.name} · associated with PR #${relatedPull.number}` : run.name}>
                         {run.name}{relatedPull ? ` · PR #${relatedPull.number}` : ""}
                       </span>
-                      <button class="mn-copy-link" type="button" title="Copy run link" aria-label="Copy run link" onClick={(event) => copyLink(event, run.url)}>copy</button>
+                      <button class="mn-copy-link" type="button" title="Copy run link" aria-label="Copy run link" onClick={(event) => copyLink(event, run.url)}><CopyGlyph /></button>
                     </div>
                   )
                 }}
@@ -638,7 +767,15 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
               checked={ctx.stores.settings.value.deleteBranch}
               onChange={(event) => ctx.stores.settings.update((draft) => { draft.deleteBranch = event.currentTarget.checked })}
             />
-            delete branch
+            delete tree + branch
+          </label>
+          <label class="mn-pop-toggle" title="Fetch and fast-forward only when the local base checkout is clean and can advance without a merge commit.">
+            <input
+              type="checkbox"
+              checked={ctx.stores.settings.value.fastForwardBase}
+              onChange={(event) => ctx.stores.settings.update((draft) => { draft.fastForwardBase = event.currentTarget.checked })}
+            />
+            fast-forward base branch
           </label>
           <label class="mn-pop-toggle" title={ctx.t("settings.waitForAllStatusChecks.description")}>
             <input
@@ -924,6 +1061,7 @@ const STYLES = `
 .mn-merge-state[data-state="blocked"] { color: var(--v2-state-fg-danger, #cf222e); }
 .mn-merge-state[data-state="unknown"] { color: var(--v2-icon-icon-muted); }
 .mn-merge-state[data-state="conflict"] { color: var(--v2-icon-icon-muted); }
+.mn-merge-state[data-state="merged"] { color: var(--v2-state-fg-success, #1a7f37); }
 /* Armed: Muninn is watching — the dot pulses until the merge fires. */
 .mn-merge-state[data-armed] { color: var(--v2-state-fg-warning, #9a6700); animation: mn-pulse 1.6s ease-in-out infinite; }
 @keyframes mn-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }

@@ -10,12 +10,101 @@ import { github } from "./providers/github"
 import type { Ref, RepoRef } from "./model"
 import { jsonReady } from "./model"
 import type { SourceProvider } from "./providers/types"
-import { readRemote } from "./remote"
+import { parseRemoteUrl, readRemote } from "./remote"
 import { Muninn } from "./rpc"
+import { fastForwardDecision } from "./local-cleanup"
 import { execFile } from "node:child_process"
+import { randomUUID } from "node:crypto"
 import { promisify } from "node:util"
 
 const exec = promisify(execFile)
+const safeBranch = (branch: string): boolean => Boolean(branch) && !branch.startsWith("-") && !branch.includes("..")
+const checkLocalWorktree = async (directory: string, branch: string, expectedHeadSha: string) => {
+  if (!safeBranch(branch)) return { eligible: false, message: "local branch name is not safe to remove" }
+  try {
+    const current = (await exec("git", ["-C", directory, "branch", "--show-current"], { timeout: 5_000 })).stdout.trim()
+    if (current !== branch) return { eligible: false, message: "local worktree is not on the PR branch; left it intact" }
+    const head = (await exec("git", ["-C", directory, "rev-parse", `refs/heads/${branch}`], { timeout: 5_000 })).stdout.trim()
+    if (head !== expectedHeadSha) return { eligible: false, message: "local branch differs from the merged PR head; left it intact" }
+    const status = (await exec("git", ["-C", directory, "status", "--porcelain", "--untracked-files=all"], { timeout: 5_000 })).stdout
+    if (status.trim()) return { eligible: false, message: "local worktree has changes; left it intact" }
+    return { eligible: true }
+  } catch (error) {
+    return { eligible: false, message: error instanceof Error ? error.message : String(error) }
+  }
+}
+const deleteLocalBranch = async (directory: string, branch: string, expectedHeadSha: string) => {
+  if (!safeBranch(branch))
+    return { deleted: false, message: "local branch name is not safe to delete" }
+  try {
+    const head = (await exec("git", ["-C", directory, "rev-parse", `refs/heads/${branch}`], { timeout: 5_000 })).stdout.trim()
+    if (head !== expectedHeadSha)
+      return { deleted: false, message: "local branch has commits newer or different from the merged PR" }
+    const trees = (await exec("git", ["-C", directory, "worktree", "list", "--porcelain"], { timeout: 5_000 })).stdout
+    if (trees.split("\n").some((line) => line === `branch refs/heads/${branch}`))
+      return { deleted: false, message: "local branch is still checked out in another worktree" }
+    await exec("git", ["-C", directory, "branch", "-d", "--", branch], { timeout: 5_000 })
+    return { deleted: true }
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error)
+    return {
+      deleted: false,
+      message: detail.toLowerCase().includes("not fully merged")
+        ? "local branch is not merged into the local base; kept it to preserve history"
+        : detail,
+    }
+  }
+}
+const fastForwardBase = async (directory: string, expectedRepo: RepoRef, branch: string) => {
+  if (!safeBranch(branch)) return { fastForwarded: false, message: "base branch name is invalid" }
+  const fetchedRef = `refs/muninn/fast-forward/${process.pid}-${randomUUID()}`
+  try {
+    const remotes = (await exec("git", ["-C", directory, "remote"], { timeout: 5_000 })).stdout.trim().split(/\s+/).filter(Boolean)
+    const matchingRemote = await remotes.reduce<Promise<string | undefined>>(async (found, name) => {
+      if (await found) return found
+      const url = (await exec("git", ["-C", directory, "remote", "get-url", name], { timeout: 5_000 })).stdout.trim()
+      const remote = parseRemoteUrl(url)
+      return remote && remote.host.toLowerCase() === expectedRepo.host.toLowerCase() &&
+        remote.owner.toLowerCase() === expectedRepo.owner.toLowerCase() && remote.repo.toLowerCase() === expectedRepo.repo.toLowerCase()
+        ? name
+        : undefined
+    }, Promise.resolve(undefined))
+    if (!matchingRemote) return { fastForwarded: false, message: "no configured remote matches the PR base repository" }
+    await exec("git", ["-C", directory, "check-ref-format", "--branch", branch], { timeout: 5_000 })
+    const currentBranch = (await exec("git", ["-C", directory, "branch", "--show-current"], { timeout: 5_000 })).stdout.trim()
+    if (currentBranch !== branch) return { fastForwarded: false, message: `local checkout is not on ${branch}` }
+    const status = (await exec("git", ["-C", directory, "status", "--porcelain", "--untracked-files=all"], { timeout: 5_000 })).stdout
+    if (status.trim()) return { fastForwarded: false, message: "local base checkout has changes" }
+    await exec("git", ["-C", directory, "fetch", "--no-tags", matchingRemote, `refs/heads/${branch}:${fetchedRef}`], { timeout: 30_000 })
+    const target = (await exec("git", ["-C", directory, "rev-parse", `${fetchedRef}^{commit}`], { timeout: 5_000 })).stdout.trim()
+    const before = (await exec("git", ["-C", directory, "rev-parse", "HEAD"], { timeout: 5_000 })).stdout.trim()
+    const counts = (await exec("git", ["-C", directory, "rev-list", "--left-right", "--count", `${before}...${target}`], { timeout: 5_000 }))
+      .stdout.trim().split(/\s+/).map(Number)
+    if (counts.length !== 2 || counts.some((count) => !Number.isInteger(count)))
+      return { fastForwarded: false, message: "could not compare local and forge base history" }
+    const decision = fastForwardDecision({
+      enabled: true,
+      merged: true,
+      onBaseBranch: currentBranch === branch,
+      clean: !status.trim(),
+      localOnly: counts[0]!,
+      remoteOnly: counts[1]!,
+    })
+    if (!decision.advance) return { fastForwarded: false, message: decision.message }
+
+    const recheckBranch = (await exec("git", ["-C", directory, "branch", "--show-current"], { timeout: 5_000 })).stdout.trim()
+    const recheckStatus = (await exec("git", ["-C", directory, "status", "--porcelain", "--untracked-files=all"], { timeout: 5_000 })).stdout
+    const recheckHead = (await exec("git", ["-C", directory, "rev-parse", "HEAD"], { timeout: 5_000 })).stdout.trim()
+    if (recheckBranch !== branch || recheckStatus.trim() || recheckHead !== before)
+      return { fastForwarded: false, message: "local base changed during fetch; left it unchanged" }
+    await exec("git", ["-C", directory, "merge", "--ff-only", target], { timeout: 10_000 })
+    return { fastForwarded: true }
+  } catch (error) {
+    return { fastForwarded: false, message: error instanceof Error ? error.message : String(error) }
+  } finally {
+    await exec("git", ["-C", directory, "update-ref", "-d", fetchedRef], { timeout: 5_000 }).catch(() => undefined)
+  }
+}
 /** The plugin directory on disk (…/src), for stamping the server build. */
 const pluginRoot = new URL("..", import.meta.url).pathname
 
@@ -97,8 +186,11 @@ export default Plugin.define({
         if (!repo) return { merged: false, message: "no repository resolved for this directory" }
         const source = sourceFor(repo.host)
         if (!source) return { merged: false, message: `no provider for ${repo.host}` }
-        return source.merge(repo, input.number, input.method, input.expectedHeadSha, input.deleteBranch, () => source.auth(ctx))
+        return source.merge(repo, input.number, input.method, input.expectedHeadSha, () => source.auth(ctx))
       },
+      checkLocalWorktree: async (input) => checkLocalWorktree(input.directory, input.branch, input.expectedHeadSha),
+      deleteLocalBranch: async (input) => deleteLocalBranch(input.directory, input.branch, input.expectedHeadSha),
+      fastForwardBase: async (input) => fastForwardBase(input.directory, input.repo, input.baseBranch),
       autoMerge: async (input) => {
         const repo = await readRemote(input.directory)
         if (!repo) return { armed: false, message: "no repository resolved for this directory" }
