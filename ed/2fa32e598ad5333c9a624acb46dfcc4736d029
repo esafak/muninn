@@ -1,0 +1,16 @@
+docs/design/decisions.md
+  h_ea91e2db23540f 11-13
+src/gui/window.tsx
+  h_ea91e2db23540f 619-621,649-651
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ed2fa32e598ad5333c9a624acb46dfcc4736d029",
+  "prompts": {},
+  "humans": {
+    "h_ea91e2db23540f": {
+      "author": "Emre Şafak <3928300+esafak@users.noreply.github.com>"
+    }
+  }
+}
