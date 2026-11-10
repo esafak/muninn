@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { mergeResponse, toPullEntity, runEntity, toIssueEntity } from "./github"
+import { mergeResponse, toPullEntity, runEntity, toIssueEntity, statusCheckSnapshot, combineStatusCheckResults, decodeStatusPage, collectStatusPages } from "./github"
 import { PullEntity } from "../rpc"
 
 describe("mergeResponse", () => {
@@ -58,6 +58,8 @@ describe("PullEntity RPC schema", () => {
     const timestamp = 1_794_192_637_000
     expect(PullEntity.parse({ ...entity, mergedAt: timestamp }).mergedAt).toBe(timestamp)
     expect(PullEntity.parse(entity).mergedAt).toBeUndefined()
+    const checks = { headSha: "abc", state: "available" as const, contexts: [{ name: "gate", status: "running" as const }] }
+    expect(PullEntity.parse({ ...entity, statusChecks: checks }).statusChecks).toEqual(checks)
   })
 })
 
@@ -89,6 +91,57 @@ describe("toPullEntity", () => {
     const entity = toPullEntity(repo, { ...basePull, merged_at: "2026-11-10T00:33:47Z", state: "closed" })
     expect(entity.mergedAt).toBe(Date.parse("2026-11-10T00:33:47Z"))
     expect(entity.state).toBe("merged")
+  })
+})
+
+describe("statusCheckSnapshot", () => {
+  test("keeps the latest state for each context and maps GitHub states conservatively", () => {
+    const snapshot = statusCheckSnapshot("head-1", [
+      { id: 1, context: "fresnel/renovate-ci", state: "pending", updated_at: "2026-11-10T00:00:00Z" },
+      { id: 2, context: "fresnel/renovate-ci", state: "success", updated_at: "2026-11-10T00:01:00Z" },
+      { id: 3, context: "legacy-check", state: "error", updated_at: "2026-11-10T00:00:30Z" },
+    ])
+    expect(snapshot).toEqual({
+      headSha: "head-1",
+      state: "available",
+      contexts: [
+        { name: "status-context:fresnel/renovate-ci", status: "succeeded" },
+        { name: "status-context:legacy-check", status: "failed" },
+      ],
+    })
+  })
+
+  test("uses the latest attempt per app and check name; only success passes", () => {
+    const snapshot = statusCheckSnapshot("head-2", [], [
+      { id: 1, name: "Build", status: "completed", conclusion: "failure", app: { id: 10 } },
+      { id: 2, name: "Build", status: "completed", conclusion: "success", app: { id: 10 } },
+      { id: 3, name: "Build", status: "completed", conclusion: "success", app: { id: 11 } },
+      { id: 4, name: "Deploy", status: "completed", conclusion: "skipped", app: { id: 10 } },
+      { id: 5, name: "Test", status: "in_progress", conclusion: null, app: { id: 10 } },
+    ])
+    expect(snapshot.contexts).toEqual([
+      { name: "check-run:10:Build", status: "succeeded" },
+      { name: "check-run:11:Build", status: "succeeded" },
+      { name: "check-run:10:Deploy", status: "failed" },
+      { name: "check-run:10:Test", status: "running" },
+    ])
+  })
+
+  test("decodes both GitHub response shapes and accumulates every page", async () => {
+    const first = Array.from({ length: 100 }, (_, id) => ({ id }))
+    const last = [{ id: 100 }]
+    expect(decodeStatusPage<{ id: number }>(first)).toEqual(first)
+    expect(decodeStatusPage<{ id: number }>({ check_runs: first }, "check_runs")).toEqual(first)
+    expect(decodeStatusPage({ malformed: [] }, "check_runs")).toBeUndefined()
+    const all = await collectStatusPages(async (page) => (page === 1 ? first : last))
+    expect(all).toHaveLength(101)
+    expect(await collectStatusPages(async (page) => (page === 1 ? first : undefined))).toBeUndefined()
+  })
+
+  test("does not mark partial API discovery available, but accepts two complete empty results", () => {
+    expect(combineStatusCheckResults("head", [], undefined)).toEqual({ headSha: "head", state: "unavailable", contexts: [] })
+    expect(combineStatusCheckResults("head", undefined, [])).toEqual({ headSha: "head", state: "unavailable", contexts: [] })
+    expect(combineStatusCheckResults("head", [], [])).toEqual({ headSha: "head", state: "available", contexts: [] })
   })
 })
 

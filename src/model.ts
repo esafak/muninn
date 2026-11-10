@@ -30,6 +30,12 @@ export type AutoMergeMethod = "merge" | "squash" | "rebase"
 /** CI run states, the only thing a run row shows. */
 export type RunStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled"
 
+export interface StatusCheckSnapshot {
+  headSha: string
+  state: "available" | "unavailable" | "unsupported"
+  contexts: { name: string; status: RunStatus }[]
+}
+
 /**
  * A reference extracted from session text: `#1043`, `PR 4821`, `run 18402`, a pasted
  * URL, or `owner/repo#7`. `kind` is omitted when the text does not say (`#1043` could
@@ -97,6 +103,8 @@ export interface PullEntity extends Base {
   reviewState?: ReviewState | null
   /** The provider's auto-merge: armed with this method, or null when off. */
   autoMerge?: AutoMergeMethod | null
+  /** Commit statuses and check-runs discovered for headSha; older cache entries omit it. */
+  statusChecks?: StatusCheckSnapshot
 }
 
 export type Entity = IssueEntity | PullEntity | RunEntity
@@ -145,9 +153,14 @@ export const entityKey = (entity: Entity): string =>
  * hydrated by older code) don't block — they fall back to the checks. No
  * evidence, no merge: zero known runs merges only on the provider's explicit
  * clean state, never on absence of data. */
-export const mergeReady = (chain: Chain, pull = chain.prs[0]): boolean => {
+export const mergeReady = (chain: Chain, pull = chain.prs[0], waitForAllStatusChecks = true): boolean => {
   if (!pull || pull.state !== "open") return false
   if (!chain.runs.filter((run) => run.headSha === pull.headSha).every((run) => run.status === "succeeded")) return false
+  if (waitForAllStatusChecks) {
+    const snapshot = pull.statusChecks
+    if (!snapshot || snapshot.headSha !== pull.headSha || snapshot.state === "unavailable") return false
+    if (snapshot.state === "available" && !snapshot.contexts.every((context) => context.status === "succeeded")) return false
+  }
   if (pull.reviewState === "changes_requested" || pull.mergeState === "conflict") return false
   if (pull.mergeState && pull.mergeState !== "ready") return false
   // No evidence, no merge: a green run on this PR's current head, or the
@@ -161,11 +174,20 @@ export const mergeReady = (chain: Chain, pull = chain.prs[0]): boolean => {
 
 /** Why a PR can't merge yet — the disabled button's tooltip. Defaults to the
  * chain's lead; callers pass an explicit pull to explain another member. */
-export const mergeWhy = (chain: Chain, pull = chain.prs[0]): string => {
+export const mergeWhy = (chain: Chain, pull = chain.prs[0], waitForAllStatusChecks = true): string => {
   const currentRuns = chain.runs.filter((run) => run.headSha === pull?.headSha)
   const failed = currentRuns.find((run) => run.status === "failed")
   if (failed) return `checks failed (run #${failed.id})`
   if (currentRuns.some((run) => run.status === "queued" || run.status === "running")) return "checks still running"
+  if (waitForAllStatusChecks && pull) {
+    const snapshot = pull.statusChecks
+    if (!snapshot || snapshot.headSha !== pull.headSha || snapshot.state === "unavailable") return "status checks unavailable"
+    if (snapshot.state === "available") {
+      if (snapshot.contexts.some((context) => context.status === "failed")) return "status checks failed"
+      if (snapshot.contexts.some((context) => context.status === "queued" || context.status === "running")) return "status checks still running"
+      if (snapshot.contexts.some((context) => context.status === "cancelled")) return "status checks did not succeed"
+    }
+  }
   if (pull?.reviewState === "changes_requested") return "changes requested"
   if (pull?.mergeState === "conflict") return "merge conflicts with the base branch"
   if (pull?.mergeState === "blocked") return "blocked by branch rules or a missing review"
@@ -274,6 +296,7 @@ export interface ArmedEntry {
 export const armedTargets = (
   entries: readonly ArmedEntry[],
   chains: readonly Chain[],
+  waitForAllStatusChecks = true,
 ): { pull: PullEntity; chain: Chain; method: ArmedEntry["method"] }[] => {
   const out: { pull: PullEntity; chain: Chain; method: ArmedEntry["method"] }[] = []
   for (const entry of entries) {
@@ -286,7 +309,7 @@ export const armedTargets = (
     const pull = chain.prs.find(
       (candidate) => candidate.number === entry.number && repoKey(candidate.repo) === repoKey(entry.repo),
     )
-    if (pull && mergeReady(chain, pull)) out.push({ pull, chain, method: entry.method })
+    if (pull && mergeReady(chain, pull, waitForAllStatusChecks)) out.push({ pull, chain, method: entry.method })
   }
   return out
 }

@@ -5,21 +5,27 @@ import { associate } from "./associate"
 
 const repo = { host: "github.com", owner: "sst", repo: "opencode" }
 
-const pull = (over: Partial<PullEntity> = {}): PullEntity => ({
-  kind: "pr",
-  provider: "github",
-  repo,
-  number: 4821,
-  title: "feat: thing",
-  state: "open",
-  headBranch: "feat/thing",
-  baseBranch: "main",
-  closes: [],
-  headSha: "abc123",
-  url: "https://github.com/sst/opencode/pull/4821",
-  updatedAt: 0,
-  ...over,
-})
+const pull = (over: Partial<PullEntity> = {}): PullEntity => {
+  const base = {
+    kind: "pr" as const,
+    provider: "github",
+    repo,
+    number: 4821,
+    title: "feat: thing",
+    state: "open" as const,
+    headBranch: "feat/thing",
+    baseBranch: "main",
+    closes: [],
+    headSha: "abc123",
+    url: "https://github.com/sst/opencode/pull/4821",
+    updatedAt: 0,
+    ...over,
+  }
+  return {
+    ...base,
+    statusChecks: over.statusChecks ?? { headSha: base.headSha, state: "available", contexts: [] },
+  }
+}
 
 const run = (status: RunEntity["status"]): RunEntity => ({
   kind: "run",
@@ -88,6 +94,34 @@ describe("mergeReady", () => {
     expect(mergeReady(chain({ runs: [run("queued")] }))).toBe(false)
     expect(mergeReady(chain({ runs: [run("succeeded")] }))).toBe(true)
     expect(mergeReady(chain({ runs: [run("succeeded"), run("failed")] }))).toBe(false)
+  })
+
+  test("current-head status contexts must all succeed by default", () => {
+    const context = (status: "running" | "succeeded" | "failed" | "cancelled") => ({ name: "fresnel/renovate-ci", status })
+    expect(mergeReady(chain({ prs: [pull({ statusChecks: { headSha: "abc123", state: "available", contexts: [context("running")] } })] }))).toBe(false)
+    expect(mergeReady(chain({ prs: [pull({ statusChecks: { headSha: "abc123", state: "available", contexts: [context("failed")] } })] }))).toBe(false)
+    expect(mergeReady(chain({ prs: [pull({ statusChecks: { headSha: "abc123", state: "available", contexts: [context("succeeded")] } })] }))).toBe(true)
+    expect(mergeReady(chain({ prs: [pull({ statusChecks: { headSha: "abc123", state: "available", contexts: [] } })] }))).toBe(true)
+  })
+
+  test("unknown, unavailable, and stale status snapshots block; disabling the setting ignores them", () => {
+    const unknown = { ...pull(), statusChecks: undefined }
+    const unavailable = pull({ statusChecks: { headSha: "abc123", state: "unavailable", contexts: [] } })
+    const stale = pull({ headSha: "new-head", statusChecks: { headSha: "abc123", state: "available", contexts: [{ name: "old", status: "succeeded" }] } })
+    expect(mergeReady(chain({ prs: [unknown] }))).toBe(false)
+    expect(mergeReady(chain({ prs: [unavailable] }))).toBe(false)
+    expect(mergeReady(chain({ prs: [stale] }))).toBe(false)
+    expect(mergeReady(chain({ prs: [unavailable] }), unavailable, false)).toBe(true)
+    const unsupported = pull({ statusChecks: { headSha: "abc123", state: "unsupported", contexts: [] } })
+    expect(mergeReady(chain({ prs: [unsupported] }))).toBe(true)
+    expect(mergeReady(chain({ prs: [pull({ statusChecks: { headSha: "abc123", state: "available", contexts: [{ name: "pending", status: "running" }] } })], runs: [run("failed")] }), undefined, false)).toBe(false)
+  })
+
+  test("a refreshed current-head status can move from pending to succeeded", () => {
+    const pending = pull({ statusChecks: { headSha: "abc123", state: "available", contexts: [{ name: "gate", status: "running" }] } })
+    const passed = pull({ statusChecks: { headSha: "abc123", state: "available", contexts: [{ name: "gate", status: "succeeded" }] } })
+    expect(mergeReady(chain({ prs: [pending] }))).toBe(false)
+    expect(mergeReady(chain({ prs: [passed] }))).toBe(true)
   })
 
   test("red checks, closed and merged PRs are not ready", () => {
@@ -229,6 +263,12 @@ describe("armedTargets", () => {
   test("a green chain with a matching entry fires with its armed method", () => {
     const targets = armedTargets([entry({ method: "rebase" })], [chain({ prs: [pull({ mergeState: "ready" })] })])
     expect(targets).toEqual([{ pull: pull({ mergeState: "ready" }), chain: chain({ prs: [pull({ mergeState: "ready" })] }), method: "rebase" }])
+  })
+
+  test("default-on status waiting blocks armed dispatch until passed; opting out restores eligibility", () => {
+    const pending = chain({ prs: [pull({ statusChecks: { headSha: "abc123", state: "available", contexts: [{ name: "fresnel/renovate-ci", status: "running" }] } })] })
+    expect(armedTargets([entry()], [pending])).toEqual([])
+    expect(armedTargets([entry()], [pending], false).length).toBe(1)
   })
 
   test("readiness is checked for the armed PR, not another PR leading its chain", () => {

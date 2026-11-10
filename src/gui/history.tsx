@@ -29,6 +29,7 @@ export interface HistoryProps {
   onArm: (pull: PullEntity, enable: boolean) => Promise<void>
   /** Whether the PR is armed — locally by Muninn, or already on the forge. */
   isArmed: (pull: PullEntity) => boolean
+  waitForAllStatusChecks: Accessor<boolean>
 }
 
 /**
@@ -40,6 +41,7 @@ export interface HistoryProps {
 export const MergeButton = (props: {
   chain: Chain
   pull: PullEntity
+  waitForAllStatusChecks: () => boolean
   isArmed: (pull: PullEntity) => boolean
   onMerge: (pull: PullEntity) => Promise<void>
   onArm: (pull: PullEntity, enable: boolean) => Promise<void>
@@ -63,7 +65,7 @@ export const MergeButton = (props: {
           Armed
         </button>
       </Match>
-      <Match when={mergeReady(props.chain, props.pull)}>
+      <Match when={mergeReady(props.chain, props.pull, props.waitForAllStatusChecks())}>
         <button
           class="mn-merge"
           title="Merge now — method and delete-branch follow the pill menu's choices"
@@ -78,7 +80,7 @@ export const MergeButton = (props: {
       <Match when={props.pull.state === "open"}>
         <button
           class="mn-merge pending"
-          title={`${mergeWhy(props.chain, props.pull)} — click to merge when ready (auto-merge)`}
+          title={`${mergeWhy(props.chain, props.pull, props.waitForAllStatusChecks())} — click to merge when ready (auto-merge)`}
           onClick={(event) => {
             event.stopPropagation()
             void props.onArm(props.pull, true)
@@ -249,7 +251,7 @@ export const History = (props: HistoryProps) => {
                         {copied() === `p${chain.key}${pull.number}` ? "✓" : `#${pull.number}`}
                       </span>
                       <span class="mn-title">{pull.title}</span>
-                      <MergeButton chain={chain} pull={pull} isArmed={props.isArmed} onMerge={props.onMerge} onArm={props.onArm} />
+                      <MergeButton chain={chain} pull={pull} isArmed={props.isArmed} waitForAllStatusChecks={props.waitForAllStatusChecks} onMerge={props.onMerge} onArm={props.onArm} />
                     </div>
                   )}
                 </For>

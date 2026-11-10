@@ -391,7 +391,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
    * green. Runs after every refresh cycle; consumes the entry before firing so a
    * concurrent refresh can't double-fire. */
   const driveArmedMerges = () => {
-    for (const { pull, method } of armedTargets(ctx.stores.armed.value.entries, chains())) {
+    for (const { pull, method } of armedTargets(ctx.stores.armed.value.entries, chains(), ctx.stores.settings.value.waitForAllStatusChecks !== false)) {
       ctx.stores.armed.update((draft) => {
         draft.entries = draft.entries.filter(
           (entry) => !(repoKey(entry.repo) === repoKey(pull.repo) && entry.number === pull.number),
@@ -534,7 +534,14 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
                     </span>
                     <span class="mn-pop-id">#{pull.number}</span>
                     <span class="mn-pop-title">{pull.title}</span>
-                    <MergeButton chain={chain} pull={pull} isArmed={isArmed} onMerge={mergePull} onArm={armPull} />
+                    <MergeButton
+                      chain={chain}
+                      pull={pull}
+                      isArmed={isArmed}
+                      waitForAllStatusChecks={() => ctx.stores.settings.value.waitForAllStatusChecks !== false}
+                      onMerge={mergePull}
+                      onArm={armPull}
+                    />
                     <button class="mn-copy-link" type="button" title="Copy PR link" aria-label="Copy PR link" onClick={(event) => copyLink(event, pull.url)}>copy</button>
                   </div>
                 )}
@@ -591,11 +598,11 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
                   class="mn-pop-toggle"
                   title={
                     isArmed(lead().pull)
-                      ? `Muninn is driving the merge (${lead().pull.autoMerge ? "also armed on the forge" : "armed locally"}); ${mergeReady(lead().chain, lead().pull) ? "merging on the next check (within ~30s)" : `waiting: ${mergeWhy(lead().chain, lead().pull)}`} — click to cancel`
-                      : mergeReady(lead().chain, lead().pull)
+                      ? `Muninn is driving the merge (${lead().pull.autoMerge ? "also armed on the forge" : "armed locally"}); ${mergeReady(lead().chain, lead().pull, ctx.stores.settings.value.waitForAllStatusChecks !== false) ? "merging on the next check (within ~30s)" : `waiting: ${mergeWhy(lead().chain, lead().pull, ctx.stores.settings.value.waitForAllStatusChecks !== false)}`} — click to cancel`
+                      : mergeReady(lead().chain, lead().pull, ctx.stores.settings.value.waitForAllStatusChecks !== false)
                         ? "green now — Muninn merges on its next check (within ~30s)"
-                        : `Muninn merges when checks pass and reviews approve — now blocked: ${mergeWhy(lead().chain, lead().pull)}`
-                    }
+                        : `Muninn merges when checks pass and reviews approve — now blocked: ${mergeWhy(lead().chain, lead().pull, ctx.stores.settings.value.waitForAllStatusChecks !== false)}`
+                  }
                 >
                   <input
                     type="checkbox"
@@ -627,6 +634,14 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
               onChange={(event) => ctx.stores.settings.update((draft) => { draft.deleteBranch = event.currentTarget.checked })}
             />
             delete branch
+          </label>
+          <label class="mn-pop-toggle" title="Wait for every GitHub check-run and commit status context on the PR's current head SHA">
+            <input
+              type="checkbox"
+              checked={ctx.stores.settings.value.waitForAllStatusChecks !== false}
+              onChange={(event) => ctx.stores.settings.update((draft) => { draft.waitForAllStatusChecks = event.currentTarget.checked })}
+            />
+            {ctx.t("settings.waitForAllStatusChecks")}
           </label>
         </div>
         </Show>
@@ -684,6 +699,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
             error={() => meta.error}
             debug={debugLine}
             showDebug={() => ctx.stores.settings.value.debugMode}
+            waitForAllStatusChecks={() => ctx.stores.settings.value.waitForAllStatusChecks !== false}
             sessionReady={sessionReady}
             onOpen={open}
             onMerge={mergePull}

@@ -26,6 +26,22 @@ describe("cache schema", () => {
 
     const oldCache = decodeCache({ entries: { pull: basePull }, at: {} })
     expect(oldCache.entries.pull?.kind === "pr" && oldCache.entries.pull.mergedAt).toBeUndefined()
+    const statusChecks = { headSha: "abc", state: "available", contexts: [{ name: "gate", status: "running" }] } as const
+    const withChecks = decodeCache({ entries: { pull: { ...basePull, statusChecks } }, at: {} })
+    expect(withChecks.entries.pull?.kind === "pr" && withChecks.entries.pull.statusChecks).toEqual(statusChecks)
+  })
+})
+
+describe("settings schema", () => {
+  test("accepts existing persisted preferences without the new optional field", () => {
+    const decode = Schema.decodeUnknownSync(definition.stores!.settings.schema)
+    const priorSettings = {
+      retentionDays: 30,
+      debugMode: true,
+      mergeMethod: "squash",
+      deleteBranch: true,
+    } as const
+    expect(decode(priorSettings)).toEqual(priorSettings)
   })
 })
 
