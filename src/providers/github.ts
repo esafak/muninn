@@ -8,6 +8,7 @@ import type { Credential, Plugin } from "@opencode/plugin"
 import type { AutoMergeMethod, Entity, IssueEntity, MergeState, PullEntity, Ref, RepoRef, ReviewState, RunEntity } from "../model"
 import type { Auth, Hydration, MergeMethod, MergeSettings, SourceProvider } from "./types"
 import { execFile } from "node:child_process"
+import { createHash } from "node:crypto"
 import { promisify } from "node:util"
 
 const exec = promisify(execFile)
@@ -72,6 +73,21 @@ interface RunJson {
 
 interface JobsJson {
   jobs: readonly { name: string; status: string; conclusion: string | null }[]
+}
+
+interface CommitStatusJson {
+  id: number
+  context: string
+  state: string
+  updated_at: string
+}
+
+interface CheckRunJson {
+  id: number
+  name: string
+  status: "queued" | "in_progress" | "completed"
+  conclusion: string | null
+  app?: { id: number } | null
 }
 
 interface RepoJson {
@@ -154,6 +170,148 @@ const checkStatus = (job: { status: string; conclusion: string | null }): RunEnt
   return "failed"
 }
 
+const statusContextStatus = (state: string): RunEntity["status"] => {
+  if (state === "success") return "succeeded"
+  if (state === "pending") return "running"
+  return "failed"
+}
+
+const checkRunStatus = (check: CheckRunJson): RunEntity["status"] => {
+  if (check.status === "queued") return "queued"
+  if (check.status === "in_progress") return "running"
+  return check.status === "completed" && ["success", "neutral", "skipped"].includes(check.conclusion ?? "") ? "succeeded" : "failed"
+}
+
+const statusPageHasMore = (count: number): boolean => count === 100
+
+export const decodeStatusPage = <T>(response: unknown, field?: string): readonly T[] | undefined => {
+  if (Array.isArray(response)) return response as T[]
+  if (!field || !response || typeof response !== "object") return undefined
+  const rows = (response as Record<string, unknown>)[field]
+  return Array.isArray(rows) ? rows as T[] : undefined
+}
+
+export const collectStatusPages = async <T>(fetchPage: (page: number) => Promise<readonly T[] | undefined>): Promise<T[] | undefined> => {
+  const all: T[] = []
+  for (let page = 1; ; page++) {
+    const rows = await fetchPage(page)
+    if (!rows) return undefined
+    all.push(...rows)
+    if (!statusPageHasMore(rows.length)) return all
+  }
+}
+
+/** Exported for tests: latest status per context/attempt, already scoped to one head SHA. */
+export const statusCheckSnapshot = (
+  headSha: string,
+  statuses: readonly CommitStatusJson[],
+  checkRuns: readonly CheckRunJson[] = [],
+): NonNullable<PullEntity["statusChecks"]> => {
+  const latest = new Map<string, CommitStatusJson>()
+  for (const status of statuses) {
+    const previous = latest.get(status.context)
+    if (!previous || Date.parse(status.updated_at) > Date.parse(previous.updated_at) ||
+      (status.updated_at === previous.updated_at && status.id > previous.id)) latest.set(status.context, status)
+  }
+  const latestChecks = new Map<string, CheckRunJson>()
+  for (const check of checkRuns) {
+    const key = `${check.app?.id ?? "unknown"}:${check.name}`
+    const previous = latestChecks.get(key)
+    if (!previous || check.id > previous.id) latestChecks.set(key, check)
+  }
+  return {
+    headSha,
+    state: "available",
+    contexts: [
+      ...[...latest.values()].map((status) => ({ name: `status-context:${status.context}`, status: statusContextStatus(status.state) })),
+      ...[...latestChecks.entries()].map(([key, check]) => ({ name: `check-run:${key}`, status: checkRunStatus(check) })),
+    ],
+  }
+}
+
+const unavailableStatusChecks = (headSha: string): NonNullable<PullEntity["statusChecks"]> => ({
+  headSha,
+  state: "unavailable",
+  contexts: [],
+})
+
+export const combineStatusCheckResults = (
+  headSha: string,
+  statuses: readonly CommitStatusJson[] | undefined,
+  checkRuns: readonly CheckRunJson[] | undefined,
+): NonNullable<PullEntity["statusChecks"]> =>
+  statuses && checkRuns ? statusCheckSnapshot(headSha, statuses, checkRuns) : unavailableStatusChecks(headSha)
+
+const loadPages = async <T>(path: string, field: "statuses" | "check_runs", auth: Auth): Promise<T[] | undefined> => {
+  try {
+    return await collectStatusPages(async (page) => {
+      const separator = path.includes("?") ? "&" : "?"
+      const response = await request<unknown>(`${path}${separator}per_page=100&page=${page}`, auth)
+      return decodeStatusPage<T>(response, field === "statuses" ? undefined : field)
+    })
+  } catch {
+    return undefined
+  }
+}
+
+/** Whether this PR state can be merged and therefore needs current checks. */
+export const shouldLoadStatusChecks = (pull: Pick<PullEntity, "state">): boolean => pull.state === "open"
+
+/** Opaque, auth-scoped status cache identity. Never stores or logs the raw token. */
+export const statusCheckCacheKey = (repo: RepoRef, headSha: string, token: string | undefined): string => {
+  const credential = token ? createHash("sha256").update(token).digest("hex") : "anonymous"
+  return JSON.stringify([repo.host, repo.owner, repo.repo, headSha, credential])
+}
+
+export const cachedPromise = <T>(
+  cache: Map<string, { at: number; promise: Promise<T> }>,
+  key: string,
+  ttlMs: number,
+  load: () => Promise<T>,
+  now = Date.now(),
+): Promise<T> => {
+  const hit = cache.get(key)
+  if (hit && now - hit.at < ttlMs) return hit.promise
+  const promise = load()
+  cache.set(key, { at: now, promise })
+  return promise
+}
+
+/** Fetch both complete API surfaces; a partial response must never authorize a merge. */
+const fetchStatusChecks = async (
+  repo: RepoRef,
+  headSha: string,
+  token: string | undefined,
+): Promise<NonNullable<PullEntity["statusChecks"]>> => {
+  const base = `/repos/${repo.owner}/${repo.repo}/commits/${encodeURIComponent(headSha)}`
+  const auth: Auth = async () => token
+  const [statuses, checkRuns] = await Promise.all([
+    loadPages<CommitStatusJson>(`${base}/statuses`, "statuses", auth),
+    loadPages<CheckRunJson>(`${base}/check-runs?filter=latest`, "check_runs", auth),
+  ])
+  return combineStatusCheckResults(headSha, statuses, checkRuns)
+}
+
+const loadStatusChecks = async (
+  repo: RepoRef,
+  headSha: string,
+  auth: Auth,
+): Promise<NonNullable<PullEntity["statusChecks"]>> => {
+  let token: string | undefined
+  try {
+    token = await auth()
+  } catch {
+    return unavailableStatusChecks(headSha)
+  }
+  const key = statusCheckCacheKey(repo, headSha, token)
+  const snapshot = cachedPromise(statusCheckCache, key, STATUS_TTL_MS, () => fetchStatusChecks(repo, headSha, token))
+  if (statusCheckCache.size > STATUS_CACHE_MAX_ENTRIES) {
+    const oldest = statusCheckCache.keys().next().value
+    if (oldest) statusCheckCache.delete(oldest)
+  }
+  return snapshot
+}
+
 const mergeMethods = (repo: RepoJson): MergeSettings => {
   const methods: MergeMethod[] = []
   if (repo.allow_merge_commit) methods.push("merge")
@@ -173,8 +331,13 @@ const mergeMethods = (repo: RepoJson): MergeSettings => {
 const ENTITY_TTL_MS = 45_000
 const BRANCH_PR_TTL_MS = 5 * 60_000
 const MERGE_TTL_MS = 10 * 60_000
+// Fixed from request start: shorter than the 30s refresh interval and shared by
+// concurrent hydration paths; stale data is never used as fallback after expiry.
+const STATUS_TTL_MS = 20_000
+const STATUS_CACHE_MAX_ENTRIES = 512
 
 const cache = new Map<string, { at: number; entity?: Entity }>()
+const statusCheckCache = new Map<string, { at: number; promise: Promise<NonNullable<PullEntity["statusChecks"]>> }>()
 
 const cached = async (key: string, load: () => Promise<Entity | undefined>): Promise<Entity | undefined> => {
   const hit = cache.get(key)
@@ -265,9 +428,12 @@ const hydratePull = async (repo: RepoRef, number: number, auth: Auth): Promise<P
   const pull = await request<PullJson>(`/repos/${repo.owner}/${repo.repo}/pulls/${number}`, auth)
   if (!pull) return undefined
   const entity = toPullEntity(repo, pull)
-  // Reviews are one extra read per PR; only the hydrated detail carries them.
-  const reviews = await request<ReviewJson[]>(`/repos/${repo.owner}/${repo.repo}/pulls/${number}/reviews?per_page=30`, auth)
-  return { ...entity, reviewState: reviewState(reviews) }
+  // Reviews and commit statuses are extra reads per PR; only hydrated detail carries them.
+  const [reviews, statusChecks] = await Promise.all([
+    request<ReviewJson[]>(`/repos/${repo.owner}/${repo.repo}/pulls/${number}/reviews?per_page=30`, auth),
+    shouldLoadStatusChecks(entity) ? loadStatusChecks(repo, pull.head.sha, auth) : Promise.resolve(undefined),
+  ])
+  return { ...entity, reviewState: reviewState(reviews), ...(statusChecks ? { statusChecks } : {}) }
 }
 
 /**
@@ -458,7 +624,10 @@ export const github: SourceProvider = {
     const runEntities = await Promise.all((runs?.workflow_runs ?? []).map((run) => runEntity(repo, run, auth, true)))
     // Branch runs are push-triggered: their pull_requests array comes back empty,
     // so query the branch's open PRs and let the GUI associate by head SHA.
-    const prs = await pullsForBranch(repo, branch, auth).catch(() => [] as PullEntity[])
+    const pulls = await pullsForBranch(repo, branch, auth).catch(() => [] as PullEntity[])
+    const prs = await Promise.all(pulls.map(async (pull) =>
+      shouldLoadStatusChecks(pull) ? { ...pull, statusChecks: await loadStatusChecks(repo, pull.headSha, auth) } : pull,
+    ))
     return { runs: runEntities, prs }
   },
 

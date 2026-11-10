@@ -5,21 +5,27 @@ import { associate } from "./associate"
 
 const repo = { host: "github.com", owner: "sst", repo: "opencode" }
 
-const pull = (over: Partial<PullEntity> = {}): PullEntity => ({
-  kind: "pr",
-  provider: "github",
-  repo,
-  number: 4821,
-  title: "feat: thing",
-  state: "open",
-  headBranch: "feat/thing",
-  baseBranch: "main",
-  closes: [],
-  headSha: "abc123",
-  url: "https://github.com/sst/opencode/pull/4821",
-  updatedAt: 0,
-  ...over,
-})
+const pull = (over: Partial<PullEntity> = {}): PullEntity => {
+  const base = {
+    kind: "pr" as const,
+    provider: "github",
+    repo,
+    number: 4821,
+    title: "feat: thing",
+    state: "open" as const,
+    headBranch: "feat/thing",
+    baseBranch: "main",
+    closes: [],
+    headSha: "abc123",
+    url: "https://github.com/sst/opencode/pull/4821",
+    updatedAt: 0,
+    ...over,
+  }
+  return {
+    ...base,
+    statusChecks: over.statusChecks ?? { headSha: base.headSha, state: "available", contexts: [] },
+  }
+}
 
 const run = (status: RunEntity["status"]): RunEntity => ({
   kind: "run",
@@ -90,6 +96,34 @@ describe("mergeReady", () => {
     expect(mergeReady(chain({ runs: [run("succeeded"), run("failed")] }))).toBe(false)
   })
 
+  test("current-head status contexts must all succeed by default", () => {
+    const context = (status: "running" | "succeeded" | "failed" | "cancelled") => ({ name: "fresnel/renovate-ci", status })
+    expect(mergeReady(chain({ prs: [pull({ statusChecks: { headSha: "abc123", state: "available", contexts: [context("running")] } })] }))).toBe(false)
+    expect(mergeReady(chain({ prs: [pull({ statusChecks: { headSha: "abc123", state: "available", contexts: [context("failed")] } })] }))).toBe(false)
+    expect(mergeReady(chain({ prs: [pull({ statusChecks: { headSha: "abc123", state: "available", contexts: [context("succeeded")] } })] }))).toBe(true)
+    expect(mergeReady(chain({ prs: [pull({ statusChecks: { headSha: "abc123", state: "available", contexts: [] } })] }))).toBe(true)
+  })
+
+  test("unknown, unavailable, and stale status snapshots block; disabling the setting ignores them", () => {
+    const unknown = { ...pull(), statusChecks: undefined }
+    const unavailable = pull({ statusChecks: { headSha: "abc123", state: "unavailable", contexts: [] } })
+    const stale = pull({ headSha: "new-head", statusChecks: { headSha: "abc123", state: "available", contexts: [{ name: "old", status: "succeeded" }] } })
+    expect(mergeReady(chain({ prs: [unknown] }))).toBe(false)
+    expect(mergeReady(chain({ prs: [unavailable] }))).toBe(false)
+    expect(mergeReady(chain({ prs: [stale] }))).toBe(false)
+    expect(mergeReady(chain({ prs: [unavailable] }), unavailable, false)).toBe(true)
+    const unsupported = pull({ statusChecks: { headSha: "abc123", state: "unsupported", contexts: [] } })
+    expect(mergeReady(chain({ prs: [unsupported] }))).toBe(true)
+    expect(mergeReady(chain({ prs: [pull({ statusChecks: { headSha: "abc123", state: "available", contexts: [{ name: "pending", status: "running" }] } })], runs: [run("failed")] }), undefined, false)).toBe(false)
+  })
+
+  test("a refreshed current-head status can move from pending to succeeded", () => {
+    const pending = pull({ statusChecks: { headSha: "abc123", state: "available", contexts: [{ name: "gate", status: "running" }] } })
+    const passed = pull({ statusChecks: { headSha: "abc123", state: "available", contexts: [{ name: "gate", status: "succeeded" }] } })
+    expect(mergeReady(chain({ prs: [pending] }))).toBe(false)
+    expect(mergeReady(chain({ prs: [passed] }))).toBe(true)
+  })
+
   test("red checks, closed and merged PRs are not ready", () => {
     expect(mergeReady(chain({ runs: [run("failed")] }))).toBe(false)
     expect(mergeReady(chain({ prs: [pull({ state: "merged" })] }))).toBe(false)
@@ -150,6 +184,23 @@ describe("mergeWhy", () => {
     expect(mergeWhy(chain({ runs: [], prs: [pull({ mergeState: "ready" })] }))).toBe("not ready")
     expect(mergeWhy(chain({ runs: [run("failed")] }))).toBe("checks failed (run #906)")
   })
+
+  test("explains status-check blockers and preserves the previous reason when disabled", () => {
+    const statusPull = (statusChecks: PullEntity["statusChecks"]): PullEntity => ({ ...pull(), statusChecks })
+    const explain = (statusChecks: PullEntity["statusChecks"], wait = true) =>
+      mergeWhy(chain({ prs: [statusPull(statusChecks)] }), undefined, wait)
+    expect(explain(undefined)).toBe("status checks unavailable")
+    expect(explain({ headSha: "old-head", state: "available", contexts: [] })).toBe("status checks unavailable")
+    expect(explain({ headSha: "abc123", state: "unavailable", contexts: [] })).toBe("status checks unavailable")
+    expect(explain({ headSha: "abc123", state: "available", contexts: [{ name: "gate", status: "failed" }] })).toBe("status checks failed")
+    expect(explain({ headSha: "abc123", state: "available", contexts: [{ name: "gate", status: "running" }] })).toBe("status checks still running")
+    expect(explain({ headSha: "abc123", state: "available", contexts: [{ name: "gate", status: "cancelled" }] })).toBe("status checks did not succeed")
+    const pendingAndBlocked = pull({
+      mergeState: "blocked",
+      statusChecks: { headSha: "abc123", state: "available", contexts: [{ name: "gate", status: "running" }] },
+    })
+    expect(mergeWhy(chain({ prs: [pendingAndBlocked] }), pendingAndBlocked, false)).toBe("blocked by branch rules or a missing review")
+  })
 })
 
 describe("chainTone", () => {
@@ -187,6 +238,18 @@ describe("chainTone", () => {
   test("a fully green open chain and a merged PR are success", () => {
     expect(chainTone(chain({ prs: [pull({ mergeState: "ready", reviewState: "approved" })] }))).toBe("success")
     expect(chainTone(chain({ prs: [pull({ state: "merged" })] }))).toBe("success")
+  })
+
+  test("status-check policy controls green tone without hiding actual danger", () => {
+    const waiting = chain({ prs: [pull({ statusChecks: { headSha: "abc123", state: "available", contexts: [{ name: "gate", status: "running" }] } })] })
+    expect(chainTone(waiting)).toBeUndefined()
+    expect(chainTone(waiting, false)).toBe("success")
+    expect(pillPick([waiting])?.reason).toBe("newest")
+    expect(pillPick([waiting], false)?.reason).toBe("newest")
+
+    const danger = chain({ prs: [pull({ reviewState: "changes_requested", statusChecks: { headSha: "abc123", state: "available", contexts: [{ name: "gate", status: "running" }] } })] })
+    expect(chainTone(danger, false)).toBe("danger")
+    expect(pillPick([waiting, danger], false)?.chain).toBe(danger)
   })
 
   test("chain tone evaluates the open PR even when a merged PR leads the group", () => {
@@ -249,6 +312,12 @@ describe("armedTargets", () => {
   test("a green chain with a matching entry fires with its armed method", () => {
     const targets = armedTargets([entry({ method: "rebase" })], [chain({ prs: [pull({ mergeState: "ready" })] })])
     expect(targets).toEqual([{ pull: pull({ mergeState: "ready" }), chain: chain({ prs: [pull({ mergeState: "ready" })] }), method: "rebase" }])
+  })
+
+  test("default-on status waiting blocks armed dispatch until passed; opting out restores eligibility", () => {
+    const pending = chain({ prs: [pull({ statusChecks: { headSha: "abc123", state: "available", contexts: [{ name: "fresnel/renovate-ci", status: "running" }] } })] })
+    expect(armedTargets([entry()], [pending])).toEqual([])
+    expect(armedTargets([entry()], [pending], false).length).toBe(1)
   })
 
   test("readiness is checked for the armed PR, not another PR leading its chain", () => {
