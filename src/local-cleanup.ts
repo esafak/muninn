@@ -33,6 +33,7 @@ export const worktreeOccupancyDecision = (
     if (!containsPath(directory, session.directory)) return false
     // Completed agent children remain in session.list after their work is done.
     const finishedChild =
+      session.id !== originSessionID &&
       session.parentID !== undefined &&
       session.outcome !== undefined &&
       session.time?.busy !== undefined &&

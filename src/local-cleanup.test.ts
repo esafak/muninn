@@ -32,6 +32,24 @@ describe("worktreeOccupancyDecision", () => {
     expect(worktreeOccupancyDecision([{ id: "origin", directory: "/tree/sub" }], "origin", "/tree", false)).toEqual({ safe: true })
   })
 
+  test("keeps an idle child origin visible to the sole-occupant check", () => {
+    const origin = {
+      id: "origin",
+      parentID: "parent",
+      outcome: "succeeded" as const,
+      time: { busy: 10, idle: 10 },
+      directory: "/tree",
+    }
+    expect(worktreeOccupancyDecision([origin], "origin", "/tree", false)).toEqual({ safe: true })
+    expect(worktreeOccupancyDecision([
+      origin,
+      { id: "other", directory: "/tree/child" },
+    ], "origin", "/tree", false)).toEqual({
+      safe: false,
+      message: "another session uses the worktree; left it intact",
+    })
+  })
+
   test("ignores a child only when its last execution is terminal and idle", () => {
     const terminal = ["succeeded", "failed", "interrupted"] as const
     for (const outcome of terminal)
