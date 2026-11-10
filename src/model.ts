@@ -272,9 +272,9 @@ export const pillEligible = (
   // history, not attention.
   const current = chain.prs.length === 0
     ? chain.runs
-    : chain.runs.filter((run) =>
-        chain.prs.some((pull) => (pull.state === "open" || pull.state === "draft") && pull.headSha === run.headSha),
-      )
+    : chain.prs
+        .filter((pull) => pull.state === "open" || pull.state === "draft")
+        .flatMap((pull) => currentRunsForPull(chain, pull))
   if (current.some((run) => run.status === "queued" || run.status === "running" || run.status === "failed"))
     return true
   const armed = ctx.armed ?? []
@@ -359,7 +359,7 @@ export const armedTargets = (
 export const chainTone = (chain: Chain, waitForAllStatusChecks = true): "success" | "warning" | "danger" | undefined => {
   const lead = chain.prs.find((pull) => pull.state === "open" || pull.state === "draft") ?? chain.prs[0]
   const relevantRuns = lead
-    ? chain.runs.filter((run) => run.headSha === lead.headSha)
+    ? currentRunsForPull(chain, lead)
     : chain.prs.length === 0
       ? chain.runs
       : []

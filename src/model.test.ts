@@ -282,6 +282,14 @@ describe("chainTone", () => {
     expect(chainTone(chain({ prs: [pull({ state: "merged" })] }))).toBe("success")
   })
 
+  test("superseded failures do not keep the latest workflow series red", () => {
+    const supersededFailure = { ...run("failed"), id: 70, series: { key: "workflow-1", sequence: 70 } }
+    const latestSuccess = { ...run("succeeded"), id: 71, series: { key: "workflow-1", sequence: 71 } }
+    const current = chain({ runs: [supersededFailure, latestSuccess] })
+    expect(chainTone(current)).toBe("success")
+    expect(pillPick([current])?.reason).toBe("newest")
+  })
+
   test("status-check policy controls green tone without hiding actual danger", () => {
     const waiting = chain({ prs: [pull({ statusChecks: { headSha: "abc123", state: "available", contexts: [{ name: "gate", status: "running" }] } })] })
     expect(chainTone(waiting)).toBeUndefined()
@@ -545,6 +553,13 @@ describe("pillEligible", () => {
     expect(pillEligible(chain({ ...closed, runs: [run("failed")] }), ctx())).toBe(false)
     // Run-only chains have no head to be stale against: a discovered failure pills bare.
     expect(pillEligible(chain({ prs: [], runs: [run("failed")] }), ctx())).toBe(true)
+  })
+
+  test("superseded workflow failures do not count as current attention", () => {
+    const oldFailure = { ...run("failed"), id: 80, series: { key: "workflow-1", sequence: 80 } }
+    const latestSuccess = { ...run("succeeded"), id: 81, series: { key: "workflow-1", sequence: 81 } }
+    expect(pillEligible(branched(elsewhere), ctx())).toBe(false)
+    expect(pillEligible(chain({ prs: [pull({ headBranch: elsewhere })], runs: [oldFailure, latestSuccess] }), ctx())).toBe(false)
   })
 
   test("an armed open PR is eligible, even non-lead and from another branch — matched by repo and number", () => {

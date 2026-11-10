@@ -863,6 +863,12 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
           description: ctx.t("settings.retention.description"),
           keywords: "cache retention days history keep sidebar",
         },
+        {
+          id: "wait-for-all-status-checks",
+          title: ctx.t("settings.waitForAllStatusChecks"),
+          description: ctx.t("settings.waitForAllStatusChecks.description"),
+          keywords: "merge checks status ci ready",
+        },
       ]
     },
     render: () => <MuninnSettings />,
