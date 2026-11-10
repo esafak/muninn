@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import type { Chain, IssueEntity, PullEntity, RepoRef, RunEntity } from "./model"
-import { chainTone, mergeReady, mergeWhy, armedTargets, pillPick, type ArmedEntry, pillEligible, pullForRun, pullsForRun, prConflicted } from "./model"
+import { chainTone, mergeReady, mergeWhy, armedTargets, pillPick, type ArmedEntry, pillEligible, pullForRun, pullsForRun, jsonReady, prConflicted } from "./model"
 import { associate } from "./associate"
 
 const repo = { host: "github.com", owner: "sst", repo: "opencode" }
@@ -454,5 +454,23 @@ describe("pillEligible", () => {
       pillEligible(candidate, { sessionBranch: own, sessionRepo: repo, armed: [] }),
     )
     expect(eligible).toEqual([])
+  })
+})
+
+describe("jsonReady", () => {
+  test("removes properties whose value is undefined, at any depth", () => {
+    const input: Record<string, unknown> = { kind: "pr", mergedAt: undefined, repo: { host: "github.com", owner: undefined, repo: "x" } }
+    expect(jsonReady(input)).toEqual({ kind: "pr", repo: { host: "github.com", repo: "x" } })
+  })
+
+  test("preserves JSON values that merely look falsy", () => {
+    const kept = jsonReady({ a: null, b: 0, c: false, d: "", e: [], items: [{ f: null }] })
+    expect(kept).toEqual({ a: null, b: 0, c: false, d: "", e: [], items: [{ f: null }] })
+  })
+
+  test("passes primitives through", () => {
+    expect(jsonReady("x")).toBe("x")
+    expect(jsonReady(0)).toBe(0)
+    expect(jsonReady(null)).toBe(null)
   })
 })

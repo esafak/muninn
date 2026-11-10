@@ -315,3 +315,17 @@ export const chainTone = (chain: Chain): "success" | "warning" | "danger" | unde
   if (chain.prs.length === 0 && chain.runs.some((run) => run.status === "succeeded")) return "success"
   return undefined
 }
+
+/** The RPC transport encodes responses as strict JSON: a property whose value
+ * is `undefined` (zod's optional leaves the key present) fails the whole
+ * response with "Expected JSON value". Deep-remove those properties at the
+ * boundary. Null, 0, "" and false are JSON — they stay. */
+export const jsonReady = <T>(value: T): T => {
+  if (Array.isArray(value)) return value.map((item) => jsonReady(item)) as unknown as T
+  if (value !== null && typeof value === "object") {
+    const out: Record<string, unknown> = {}
+    for (const [key, item] of Object.entries(value)) if (item !== undefined) out[key] = jsonReady(item)
+    return out as T
+  }
+  return value
+}
