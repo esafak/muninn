@@ -1,0 +1,36 @@
+docs/plans/retry-stale-head-and-merged-pill-icon.md
+  h_ea91e2db23540f 1-51
+src/gui/definition.ts
+  h_ea91e2db23540f 102
+src/gui/icons.tsx
+  h_ea91e2db23540f 9-10,64,67-76
+src/gui/pill-status.test.ts
+  h_ea91e2db23540f 2,34-47
+src/gui/pill-status.ts
+  h_ea91e2db23540f 21-28
+src/gui/window.tsx
+  h_ea91e2db23540f 7-8,16,72-89,163,165-170,176-191,193-277,279,282,284,393,396,407,409-418,421,423,442,478,484-485,496-497,500-568,780,815,1126-1129
+src/model.test.ts
+  h_ea91e2db23540f 3,402-455
+src/model.ts
+  h_ea91e2db23540f 334-335,338-376
+src/providers/github.test.ts
+  h_ea91e2db23540f 2,42-50
+src/providers/github.ts
+  h_ea91e2db23540f 111-113,653-661
+src/providers/types.ts
+  h_ea91e2db23540f 31-32,53
+src/rpc.ts
+  h_ea91e2db23540f 135
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f2b9f41a3dc8d2f22a0cac3b2149887fcdd04efb",
+  "prompts": {},
+  "humans": {
+    "h_ea91e2db23540f": {
+      "author": "Emre Şafak <3928300+esafak@users.noreply.github.com>"
+    }
+  }
+}
