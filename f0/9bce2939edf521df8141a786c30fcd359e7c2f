@@ -1,0 +1,16 @@
+src/model.test.ts
+  h_ea91e2db23540f 156,159,174,179-186,293-300
+src/model.ts
+  h_ea91e2db23540f 239-240,298-300,311,313
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f09bce2939edf521df8141a786c30fcd359e7c2f",
+  "prompts": {},
+  "humans": {
+    "h_ea91e2db23540f": {
+      "author": "Emre Şafak <3928300+esafak@users.noreply.github.com>"
+    }
+  }
+}
