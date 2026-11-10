@@ -52,6 +52,7 @@ interface ReviewJson {
 
 interface RunJson {
   id: number
+  workflow_id?: number | null
   name: string
   display_title: string
   status: "queued" | "in_progress" | "completed"
@@ -470,6 +471,7 @@ export const runEntity = async (repo: RepoRef, run: RunJson, auth: Auth, withChe
     name: run.name || run.display_title,
     headBranch: run.head_branch,
     headSha: run.head_sha,
+    ...(run.workflow_id == null ? {} : { series: { key: String(run.workflow_id), sequence: run.id } }),
     status: runStatus(run),
     checks,
     pullRequests: (run.pull_requests ?? []).map((pr) => pr.number),

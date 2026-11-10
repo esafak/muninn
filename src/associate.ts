@@ -105,9 +105,20 @@ export const associate = (
       continue
     chains.push({ key: `${repoKey(issue.repo)}#issue${issue.number}`, prs: [], issues: [issue], runs: [], updatedAt: issue.updatedAt })
   }
+  const standaloneRuns = new Map<string, RunEntity[]>()
   for (const run of allRuns) {
     if (takenRuns.has(`${repoKey(run.repo)}#run${run.id}`)) continue
-    chains.push({ key: `${repoKey(run.repo)}#run${run.id}`, prs: [], issues: [], runs: [run], updatedAt: run.updatedAt })
+    const series = run.series
+    const key = series?.key && Number.isFinite(series.sequence)
+      ? JSON.stringify(["run-series", repoKey(run.repo), run.headSha, series.key])
+      : `${repoKey(run.repo)}#run${run.id}`
+    const group = standaloneRuns.get(key)
+    if (group) group.push(run)
+    else standaloneRuns.set(key, [run])
+  }
+  for (const [key, runs] of standaloneRuns) {
+    const updatedAt = Math.max(...runs.map((run) => run.updatedAt))
+    chains.push({ key, prs: [], issues: [], runs: runs.toSorted(byNewest), updatedAt })
   }
 
   return chains.toSorted(byNewest)

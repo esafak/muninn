@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { mergeResponse, toPullEntity, runEntity, toIssueEntity, statusCheckSnapshot, combineStatusCheckResults, decodeStatusPage, collectStatusPages, cachedPromise, statusCheckCacheKey, shouldLoadStatusChecks } from "./github"
-import { PullEntity } from "../rpc"
+import { PullEntity, RunEntity as RunEntitySchema } from "../rpc"
 
 describe("mergeResponse", () => {
   test("a confirmed merge succeeds, with or without a message", () => {
@@ -60,6 +60,30 @@ describe("PullEntity RPC schema", () => {
     expect(PullEntity.parse(entity).mergedAt).toBeUndefined()
     const checks = { headSha: "abc", state: "available" as const, contexts: [{ name: "gate", status: "running" as const }] }
     expect(PullEntity.parse({ ...entity, statusChecks: checks }).statusChecks).toEqual(checks)
+  })
+})
+
+describe("RunEntity RPC schema", () => {
+  test("accepts optional workflow-series metadata and legacy runs", () => {
+    const run = {
+      kind: "run",
+      provider: "github",
+      repo: { host: "github.com", owner: "octo", repo: "repo" },
+      id: 1,
+      name: "CI",
+      headBranch: "feature",
+      headSha: "abc",
+      status: "succeeded",
+      checks: [],
+      pullRequests: [1],
+      url: "https://github.com/octo/repo/actions/runs/1",
+      updatedAt: 1,
+    }
+    expect(RunEntitySchema.parse(run).series).toBeUndefined()
+    expect(RunEntitySchema.parse({ ...run, series: { key: "workflow-1", sequence: 1 } }).series).toEqual({
+      key: "workflow-1",
+      sequence: 1,
+    })
   })
 })
 
@@ -248,6 +272,7 @@ describe("strict JSON boundary", () => {
       repo,
       {
         id: 1,
+        workflow_id: 777,
         name: "",
         display_title: "ci: unit",
         status: "completed",
@@ -262,6 +287,7 @@ describe("strict JSON boundary", () => {
       false,
     )
     expect(run.name).toBe("ci: unit") // the display_title fallback behavior
+    expect(run.series).toEqual({ key: "777", sequence: 1 })
     expect(jsonIssues(run)).toEqual([])
 
     const issue = toIssueEntity(repo, {

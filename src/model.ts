@@ -76,6 +76,8 @@ export interface RunEntity extends Base {
   name: string
   headBranch: string
   headSha: string
+  /** Provider-defined identity and increasing invocation order for one workflow series. */
+  series?: { key: string; sequence: number }
   status: RunStatus
   /** Individual checks of the run, for the expanded row. */
   checks: Check[]
@@ -150,15 +152,50 @@ export const entityKey = (entity: Entity): string =>
 /** Whether an open PR should show the conflict-specific glyph. */
 export const prConflicted = (pull: PullEntity): boolean => pull.state === "open" && pull.mergeState === "conflict"
 
+export const latestRuns = (runs: readonly RunEntity[]): RunEntity[] => {
+  const independent: RunEntity[] = []
+  const grouped = new Map<string, { sequence: number; runs: RunEntity[] }>()
+  for (const run of runs) {
+    if (!run.series?.key || !Number.isFinite(run.series.sequence)) {
+      independent.push(run)
+      continue
+    }
+    const key = `${repoKey(run.repo)}\n${run.headSha}\n${run.series.key}`
+    const previous = grouped.get(key)
+    if (!previous || run.series.sequence > previous.sequence) {
+      grouped.set(key, { sequence: run.series.sequence, runs: [run] })
+      continue
+    }
+    if (run.series.sequence === previous.sequence) previous.runs.push(run)
+  }
+  const byIdentity = (a: RunEntity, b: RunEntity): number =>
+    repoKey(a.repo).localeCompare(repoKey(b.repo)) || a.headSha.localeCompare(b.headSha) || a.id - b.id
+  return [
+    ...independent.toSorted(byIdentity),
+    ...[...grouped.entries()]
+      .toSorted(([a], [b]) => a.localeCompare(b))
+      .flatMap(([, group]) => group.runs.toSorted(byIdentity)),
+  ]
+}
+
+/** The displayed/diagnostic representative run follows workflow sequence, not completion time. */
+export const latestRun = (runs: readonly RunEntity[]): RunEntity | undefined => latestRuns(runs)[0]
+
+const currentRunsForPull = (chain: Chain, pull: PullEntity): RunEntity[] => latestRuns(
+  chain.runs.filter((run) => run.headSha === pull.headSha && repoKey(run.repo) === repoKey(pull.repo)),
+)
+
 /** Whether a PR can merge right now: open, checks green, no conflicts, no
  * outstanding change requests. Defaults to the chain's lead; callers pass an
  * explicit pull to check another member of the chain. Unknown states (entries
  * hydrated by older code) don't block — they fall back to the checks. No
  * evidence, no merge: zero known runs merges only on the provider's explicit
- * clean state, never on absence of data. */
+ * clean state, never on absence of data. Superseded runs in a known series do
+ * not block; unrelated runs and runs without series metadata remain independent. */
 export const mergeReady = (chain: Chain, pull = chain.prs[0], waitForAllStatusChecks = true): boolean => {
   if (!pull || pull.state !== "open") return false
-  if (!chain.runs.filter((run) => run.headSha === pull.headSha).every((run) => run.status === "succeeded")) return false
+  const currentRuns = currentRunsForPull(chain, pull)
+  if (!currentRuns.every((run) => run.status === "succeeded")) return false
   if (waitForAllStatusChecks) {
     const snapshot = pull.statusChecks
     if (!snapshot || snapshot.headSha !== pull.headSha || snapshot.state === "unavailable") return false
@@ -171,17 +208,19 @@ export const mergeReady = (chain: Chain, pull = chain.prs[0], waitForAllStatusCh
   // block nor count as evidence, and a minimal forge with no run discovery and
   // no merge state is never auto-mergeable (accepted: GitHub always hydrates
   // state, so its clean `ready` is itself the evidence when no runs are known).
-  if (!chain.runs.some((run) => run.headSha === pull.headSha) && pull.mergeState !== "ready") return false
+  if (currentRuns.length === 0 && pull.mergeState !== "ready") return false
   return true
 }
 
 /** Why a PR can't merge yet — the disabled button's tooltip. Defaults to the
  * chain's lead; callers pass an explicit pull to explain another member. */
 export const mergeWhy = (chain: Chain, pull = chain.prs[0], waitForAllStatusChecks = true): string => {
-  const currentRuns = chain.runs.filter((run) => run.headSha === pull?.headSha)
+  const currentRuns = pull ? currentRunsForPull(chain, pull) : []
   const failed = currentRuns.find((run) => run.status === "failed")
   if (failed) return `checks failed (run #${failed.id})`
   if (currentRuns.some((run) => run.status === "queued" || run.status === "running")) return "checks still running"
+  const cancelled = currentRuns.find((run) => run.status === "cancelled")
+  if (cancelled) return `checks cancelled (run #${cancelled.id})`
   if (waitForAllStatusChecks && pull) {
     const snapshot = pull.statusChecks
     if (!snapshot || snapshot.headSha !== pull.headSha || snapshot.state === "unavailable") return "status checks unavailable"
@@ -196,7 +235,7 @@ export const mergeWhy = (chain: Chain, pull = chain.prs[0], waitForAllStatusChec
   if (pull?.mergeState === "blocked") return "blocked by branch rules or a missing review"
   if (!pull || pull.state !== "open") return "pull request is not open"
   // Mirror the evidence gate: this is the chain that just lost merge readiness.
-  if (!chain.runs.some((run) => run.headSha === pull?.headSha) && pull?.mergeState !== "ready")
+  if (currentRuns.length === 0 && pull?.mergeState !== "ready")
     return "no checks on record for the current head"
   return "not ready"
 }
@@ -238,10 +277,10 @@ export const pillEligible = (
   // mention at all). Stale runs — earlier heads, merged/closed PRs — are
   // history, not attention.
   const current = chain.prs.length === 0
-    ? chain.runs
-    : chain.runs.filter((run) =>
-        chain.prs.some((pull) => (pull.state === "open" || pull.state === "draft") && pull.headSha === run.headSha),
-      )
+    ? latestRuns(chain.runs)
+    : chain.prs
+        .filter((pull) => pull.state === "open" || pull.state === "draft")
+        .flatMap((pull) => currentRunsForPull(chain, pull))
   if (current.some((run) => run.status === "queued" || run.status === "running" || run.status === "failed"))
     return true
   const armed = ctx.armed ?? []
@@ -275,7 +314,7 @@ export const pillPick = (
   const attention = chains
     .filter((chain) =>
       chain.prs.length === 0 &&
-      chain.runs.some((run) => run.status === "queued" || run.status === "running" || run.status === "failed"),
+      latestRuns(chain.runs).some((run) => run.status === "queued" || run.status === "running" || run.status === "failed"),
     )
     .toSorted(byNewest)
   if (attention[0]) return { chain: attention[0], reason: "runs-only", considered: attention.length }
@@ -326,9 +365,9 @@ export const armedTargets = (
 export const chainTone = (chain: Chain, waitForAllStatusChecks = true): "success" | "warning" | "danger" | undefined => {
   const lead = chain.prs.find((pull) => pull.state === "open" || pull.state === "draft") ?? chain.prs[0]
   const relevantRuns = lead
-    ? chain.runs.filter((run) => run.headSha === lead.headSha)
+    ? currentRunsForPull(chain, lead)
     : chain.prs.length === 0
-      ? chain.runs
+      ? latestRuns(chain.runs)
       : []
   if (relevantRuns.some((run) => run.status === "failed")) return "danger"
   if (lead?.mergeState === "conflict" || lead?.reviewState === "changes_requested") return "danger"
@@ -337,7 +376,7 @@ export const chainTone = (chain: Chain, waitForAllStatusChecks = true): "success
   if (lead?.state === "open" && lead.mergeState === "pending") return "warning"
   if (lead?.state === "open" && mergeReady(chain, lead, waitForAllStatusChecks)) return "success"
   if (lead?.state === "merged") return "success"
-  if (chain.prs.length === 0 && chain.runs.some((run) => run.status === "succeeded")) return "success"
+  if (chain.prs.length === 0 && relevantRuns.some((run) => run.status === "succeeded")) return "success"
   return undefined
 }
 

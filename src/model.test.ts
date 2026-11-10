@@ -96,6 +96,48 @@ describe("mergeReady", () => {
     expect(mergeReady(chain({ runs: [run("succeeded"), run("failed")] }))).toBe(false)
   })
 
+  test("a later successful run supersedes an older cancelled or failed run in the same series", () => {
+    const cancelled = { ...run("cancelled"), id: 10, updatedAt: 20, series: { key: "workflow-1", sequence: 10 } }
+    const latest = { ...run("succeeded"), id: 11, updatedAt: 10, series: { key: "workflow-1", sequence: 11 } }
+    const failed = { ...run("failed"), id: 9, series: { key: "workflow-1", sequence: 9 } }
+    expect(mergeReady(chain({ runs: [cancelled, failed, latest] }))).toBe(true)
+    expect(mergeReady(chain({ runs: [latest, failed, cancelled] }))).toBe(true)
+    expect(mergeWhy(chain({ runs: [cancelled, failed, latest] }))).toBe("not ready")
+  })
+
+  test("latest queued, running, failed, or cancelled run in a series still blocks", () => {
+    const statuses: RunEntity["status"][] = ["queued", "running", "failed", "cancelled"]
+    for (const status of statuses) {
+      const earlierSuccess = { ...run("succeeded"), id: 20, series: { key: "workflow-1", sequence: 20 } }
+      const latest = { ...run(status), id: 21, series: { key: "workflow-1", sequence: 21 } }
+      expect(mergeReady(chain({ runs: [earlierSuccess, latest] })), status).toBe(false)
+    }
+    const cancelled = { ...run("cancelled"), id: 31, series: { key: "workflow-1", sequence: 31 } }
+    expect(mergeWhy(chain({ runs: [cancelled] }))).toBe("checks cancelled (run #31)")
+  })
+
+  test("separate workflow series block independently even when names match", () => {
+    const passing = { ...run("succeeded"), id: 40, series: { key: "workflow-1", sequence: 40 } }
+    const failing = { ...run("failed"), id: 41, series: { key: "workflow-2", sequence: 41 } }
+    expect(mergeReady(chain({ runs: [passing, failing] }))).toBe(false)
+  })
+
+  test("different repositories and heads do not join a workflow series", () => {
+    const otherRepo = { ...repo, owner: "someone-else" }
+    const cancelled = { ...run("cancelled"), id: 50, repo: otherRepo, series: { key: "workflow-1", sequence: 50 } }
+    const staleHead = { ...run("cancelled"), id: 51, headSha: "old-head", series: { key: "workflow-1", sequence: 51 } }
+    expect(mergeReady(chain({ runs: [run("succeeded"), cancelled, staleHead] }))).toBe(true)
+  })
+
+  test("missing series metadata remains independent and duplicate order ties block conservatively", () => {
+    const cancelledWithoutSeries = { ...run("cancelled"), id: 60 }
+    expect(mergeReady(chain({ runs: [run("succeeded"), cancelledWithoutSeries] }))).toBe(false)
+    const tiedSuccess = { ...run("succeeded"), id: 61, series: { key: "workflow-1", sequence: 61 } }
+    const tiedCancelled = { ...run("cancelled"), id: 62, series: { key: "workflow-1", sequence: 61 } }
+    expect(mergeReady(chain({ runs: [tiedSuccess, tiedCancelled] }))).toBe(false)
+    expect(mergeReady(chain({ runs: [tiedCancelled, tiedSuccess] }))).toBe(false)
+  })
+
   test("current-head status contexts must all succeed by default", () => {
     const context = (status: "running" | "succeeded" | "failed" | "cancelled") => ({ name: "fresnel/renovate-ci", status })
     expect(mergeReady(chain({ prs: [pull({ statusChecks: { headSha: "abc123", state: "available", contexts: [context("running")] } })] }))).toBe(false)
@@ -238,6 +280,14 @@ describe("chainTone", () => {
   test("a fully green open chain and a merged PR are success", () => {
     expect(chainTone(chain({ prs: [pull({ mergeState: "ready", reviewState: "approved" })] }))).toBe("success")
     expect(chainTone(chain({ prs: [pull({ state: "merged" })] }))).toBe("success")
+  })
+
+  test("superseded failures do not keep the latest workflow series red", () => {
+    const supersededFailure = { ...run("failed"), id: 70, series: { key: "workflow-1", sequence: 70 } }
+    const latestSuccess = { ...run("succeeded"), id: 71, series: { key: "workflow-1", sequence: 71 } }
+    const current = chain({ runs: [supersededFailure, latestSuccess] })
+    expect(chainTone(current)).toBe("success")
+    expect(pillPick([current])?.reason).toBe("newest")
   })
 
   test("status-check policy controls green tone without hiding actual danger", () => {
@@ -503,6 +553,13 @@ describe("pillEligible", () => {
     expect(pillEligible(chain({ ...closed, runs: [run("failed")] }), ctx())).toBe(false)
     // Run-only chains have no head to be stale against: a discovered failure pills bare.
     expect(pillEligible(chain({ prs: [], runs: [run("failed")] }), ctx())).toBe(true)
+  })
+
+  test("superseded workflow failures do not count as current attention", () => {
+    const oldFailure = { ...run("failed"), id: 80, series: { key: "workflow-1", sequence: 80 } }
+    const latestSuccess = { ...run("succeeded"), id: 81, series: { key: "workflow-1", sequence: 81 } }
+    expect(pillEligible(branched(elsewhere), ctx())).toBe(false)
+    expect(pillEligible(chain({ prs: [pull({ headBranch: elsewhere })], runs: [oldFailure, latestSuccess] }), ctx())).toBe(false)
   })
 
   test("an armed open PR is eligible, even non-lead and from another branch — matched by repo and number", () => {
