@@ -125,6 +125,8 @@ export const definition = Plugin.define({
       "auth.unresolved.one": "{{count}} reference couldn't be read — check it exists in this repo. Private repos need a forge connection or `gh auth login`.",
       "auth.unresolved.other": "{{count}} references couldn't be read — check they exist in this repo. Private repos need a forge connection or `gh auth login`.",
       "panel.error": "Couldn't reach the forge ({{message}}). Fix credentials or connection, then switch sessions to retry.",
+      "panel.error.copy": "Copy error details",
+      "panel.error.copied": "Copied",
       "settings.title": "Muninn",
       "settings.description": "How source references are extracted, refreshed and remembered in your sessions.",
       "settings.section.caching": "Caching",
