@@ -616,10 +616,9 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       const chainStatus = chainTone(worst, waitForAllStatusChecks())
       const tone = lead?.state === "merged" && chainStatus === "success" ? undefined : chainStatus
 
-      // The capsule reads like GitHub's PR status: a circle icon in the worst
-      // state's color, then `#number title ⌄` — short enough that the chevron
-      // (the affordance that this opens a menu) survives truncation. An armed
-      // lead PR puts a ticking braille spinner in front: a merge is pending.
+      // The icon shape encodes the provider merge state; pill tone still encodes
+      // overall chain health. The label stays `#number title ⌄`. An armed lead PR
+      // puts a ticking braille spinner in front: a merge is pending.
       const mergeStatus = lead?.state === "open" ? lead.mergeState : undefined
       const circle =
         lead?.state === "merged" || mergeStatus === "ready"
@@ -647,7 +646,9 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
         title: lead
           ? `#${lead.number} ${lead.title}${lead.state === "merged"
             ? ` · merged${lead.mergedAt === undefined ? "" : ` · ${new Date(lead.mergedAt).toLocaleString()}`}`
-            : mergeStatus ? ` · merge ${mergeStatus}${lead.reviewState ? ` · reviews ${lead.reviewState}` : ""}` : ""}`
+            : lead.state === "open"
+              ? ` · merge ${mergeStatus ?? "unknown"}${lead.reviewState ? ` · reviews ${lead.reviewState}` : ""}`
+              : ""}`
           : ctx.t("pill.title"),
       }
     },
