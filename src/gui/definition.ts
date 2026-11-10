@@ -136,6 +136,7 @@ export const definition = Plugin.define({
       "settings.debug": "Debug mode",
       "settings.debug.description": "Show the diagnostics footer (build SHAs, pill state, hydration stats) at the bottom of the panel.",
       "state.open": "open",
+      "state.pr-conflict": "Pull request has merge conflicts",
       "state.draft": "draft",
       "state.merged": "merged",
       "state.closed": "closed",

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import type { Chain, IssueEntity, PullEntity, RepoRef, RunEntity } from "./model"
-import { chainTone, mergeReady, mergeWhy, armedTargets, pillPick, type ArmedEntry, pillEligible, pullForRun, pullsForRun, jsonReady } from "./model"
+import { chainTone, mergeReady, mergeWhy, armedTargets, pillPick, type ArmedEntry, pillEligible, pullForRun, pullsForRun, jsonReady, prConflicted } from "./model"
 import { associate } from "./associate"
 
 const repo = { host: "github.com", owner: "sst", repo: "opencode" }
@@ -117,6 +117,18 @@ describe("mergeReady", () => {
   })
 })
 
+describe("prConflicted", () => {
+  test("only open conflicting PRs use the conflict glyph", () => {
+    expect(prConflicted(pull({ mergeState: "conflict" }))).toBe(true)
+    expect(prConflicted(pull({ state: "draft", mergeState: "conflict" }))).toBe(false)
+    expect(prConflicted(pull({ state: "merged", mergeState: "conflict" }))).toBe(false)
+    expect(prConflicted(pull({ state: "closed", mergeState: "conflict" }))).toBe(false)
+    expect(prConflicted(pull({ mergeState: "ready" }))).toBe(false)
+    expect(prConflicted(pull({ mergeState: null }))).toBe(false)
+    expect(prConflicted(pull())).toBe(false)
+  })
+})
+
 describe("mergeWhy", () => {
   test("names the first blocking reason", () => {
     expect(mergeWhy(chain({ runs: [run("failed")] }))).toBe("checks failed (run #906)")
@@ -141,9 +153,10 @@ describe("mergeWhy", () => {
 })
 
 describe("chainTone", () => {
-  test("failures and conflicts are danger; change requests too", () => {
+  test("failures, conflicts, blocked merges, and change requests are danger", () => {
     expect(chainTone(chain({ runs: [run("failed")] }))).toBe("danger")
     expect(chainTone(chain({ prs: [pull({ mergeState: "conflict" })] }))).toBe("danger")
+    expect(chainTone(chain({ prs: [pull({ mergeState: "blocked" })] }))).toBe("danger")
     expect(chainTone(chain({ prs: [pull({ reviewState: "changes_requested" })] }))).toBe("danger")
   })
 
@@ -158,10 +171,17 @@ describe("chainTone", () => {
     expect(chainTone(chain({ runs: [run("running")] }))).toBe("warning")
   })
 
-  test("in-flight work and blocked merges are warning", () => {
+  test("in-flight work and pending merges are warning", () => {
     expect(chainTone(chain({ runs: [run("running")] }))).toBe("warning")
-    expect(chainTone(chain({ prs: [pull({ mergeState: "blocked" })] }))).toBe("warning")
     expect(chainTone(chain({ prs: [pull({ mergeState: "pending" })] }))).toBe("warning")
+  })
+
+  test("blocked is danger even while checks run, but only for open PRs", () => {
+    expect(chainTone(chain({ prs: [pull({ mergeState: "blocked" })], runs: [] }))).toBe("danger")
+    expect(chainTone(chain({ prs: [pull({ mergeState: "blocked" })], runs: [run("running")] }))).toBe("danger")
+    expect(chainTone(chain({ prs: [pull({ state: "draft", mergeState: "blocked" })] }))).toBeUndefined()
+    expect(chainTone(chain({ prs: [pull({ state: "closed", mergeState: "blocked" })] }))).toBeUndefined()
+    expect(chainTone(chain({ prs: [pull({ state: "merged", mergeState: "blocked" })] }))).toBe("success")
   })
 
   test("a fully green open chain and a merged PR are success", () => {
@@ -268,6 +288,14 @@ describe("pillPick", () => {
     expect(picked?.reason).toBe("danger")
     expect(picked?.chain.key).toBe("danger")
     expect(picked?.considered).toBe(2)
+  })
+
+  test("an older blocked chain outranks a calm newer chain", () => {
+    const calm = chain({ key: "calm", updatedAt: 200, prs: [pull({ number: 100, mergeState: "ready" })] })
+    const blocked = chain({ key: "blocked", updatedAt: 100, prs: [pull({ number: 101, mergeState: "blocked" })] })
+    const picked = pillPick([calm, blocked])
+    expect(picked?.reason).toBe("danger")
+    expect(picked?.chain.key).toBe("blocked")
   })
 
   test("otherwise the most recently updated PR chain wins", () => {
