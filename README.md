@@ -26,6 +26,6 @@ opencode plugin add github:esafak/muninn
 
 OpenCode watches configuration directories and may load the plugin automatically;
 if it does not appear, restart OpenCode Desktop. See the [plugin reload
-notes](https://opencode.ai/docs/plugins#reload).
+notes](https://opencode.ai/docs/plugins/#reload).
 
 For development and contributor guidance, see [CONTRIBUTORS.md](CONTRIBUTORS.md).

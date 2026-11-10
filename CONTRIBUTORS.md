@@ -14,6 +14,23 @@ in [README.md](README.md).
   `dist/gui-experimental.cjs`. The server is loaded as TypeScript source and is
   not built.
 
+## Load a local checkout
+
+To develop against this checkout in OpenCode Desktop, add its absolute
+directory path to the `plugins` array in the global config at
+`~/.config/opencode/opencode.jsonc`:
+
+```jsonc
+{
+  "plugins": ["/absolute/path/to/muninn"]
+}
+```
+
+Replace the example with this checkout's path. If you installed Muninn from
+GitHub, replace that plugin entry with the local path rather than loading both.
+Run `bun run watch` to rebuild the GUI bundle; each rebuild reloads the GUI in
+every window. Server source changes require restarting the server.
+
 ## Architecture
 
 - Package exports: `.` is the OpenCode server plugin, `./rpc` is the shared
