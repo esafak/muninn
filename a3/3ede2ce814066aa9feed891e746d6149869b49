@@ -1,0 +1,37 @@
+CONTRIBUTORS.md
+  s_772a13820a0a55::t_e62bf0ac38a499 1-71
+README.md
+  s_772a13820a0a55::t_59d224e520ecb1 17,19-21,24,27-29,31
+src/gui/definition.test.ts
+  s_772a13820a0a55::t_42282bdf32f8f3 29-44
+src/gui/history.tsx
+  s_772a13820a0a55::t_a18e7fa8765a5f 32,44,68,83,219,256
+src/gui/window.tsx
+  s_772a13820a0a55::t_086c01c887e0c3 254,263,405,615,671-678,735-736,738-739,780-787,844
+src/model.test.ts
+  s_772a13820a0a55::t_7362c31e73af71 8-28,99-126,187-203,243-254,317-322
+src/model.ts
+  s_772a13820a0a55::t_cbe4a28f35577f 33-38,106-107,159,162-166,180,185-193,268,272,303,316,326,338
+src/providers/github.test.ts
+  s_772a13820a0a55::t_e1e9808c63aa88 2,61-62,97-197
+src/providers/github.ts
+  s_772a13820a0a55::t_1558301363a082 11,78-92,173-314,334-337,340,431-436,627-630
+src/rpc.ts
+  s_772a13820a0a55::t_aeb752150ab3b1 27-32,78
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a33ede2ce814066aa9feed891e746d6149869b49",
+  "prompts": {},
+  "sessions": {
+    "s_772a13820a0a55": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_e3c4b6ca8ffePRtMmPSqMSy379",
+        "model": "unknown"
+      },
+      "human_author": "Emre Şafak <3928300+esafak@users.noreply.github.com>"
+    }
+  }
+}
