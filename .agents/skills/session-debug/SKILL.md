@@ -123,10 +123,11 @@ mn gui <sha+time> · srv <sha> · gate ✓ <sessionID> · chains N · eligible N
   updates `unresolved` but not the stats line, so stats can lag the newest
   messages. Unresolved = the provider was asked and returned nothing (wrong
   number, deleted run, private repo without a credential); refs skipped before
-  hydration never appear here. `SENT/TOTAL` appears when `wireRefs` capped the
-  payload (64, user-tier kept first) and `K invalid dropped` counts refs whose
-  numbers fail the wire contract (a prose `#0`) — before `wireRefs` existed,
-  one such ref rejected the whole hydrate RPC and wedged the panel error on
+  hydration never appear here. `SENT/TOTAL` appears when `wireRefs` drops
+  invalid refs or caps the payload at 64 (most deliberate tiers first);
+  `K invalid dropped` counts refs whose numbers fail the wire contract (a
+  prose `#0`) — before `wireRefs` existed, one such ref rejected the whole
+  hydrate RPC and wedged the panel error on
 - `err <step>` — the last refresh failure's step (`repo` / `hydrate` /
   `branch-runs`); the panel shows the full `step: message` line. The server
   swallows provider errors into `unresolved`, so an error here is almost
