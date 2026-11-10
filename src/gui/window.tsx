@@ -5,7 +5,7 @@ import { ComposerPill, MenuItem, Panel, SettingsPage, createKeyed, usePlugin, ty
 import { associate } from "../associate"
 import { deliberateRefs, messageBuckets } from "../extract"
 import type { Chain, Entity, PullEntity, RepoRef, RunEntity, RunStatus } from "../model"
-import { chainTone, armedTargets, pillPick, mergeReady, mergeWhy, pullForRun, refKey, repoKey, entityKey } from "../model"
+import { chainTone, armedTargets, pillPick, pillEligible, mergeReady, mergeWhy, pullForRun, refKey, repoKey, entityKey } from "../model"
 import { githubLexicon } from "../providers/github/lexicon"
 import { Muninn } from "../rpc"
 import type { definition } from "./definition"
@@ -217,31 +217,28 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
   })
 
   // ── Component 1: pills above the composer ────────────────────────────────
-  // Live chains only: merged, closed and settled work drops out of the pill row
-  // (the history panel keeps it) — so backfilling an old session stays quiet.
-  // Run-only chains are the exception: they exist because the session explicitly
-  // referenced a run, so they stay until a day passes without activity.
-  const live = (chain: Chain): boolean => {
-    const currentRuns = chain.prs.length === 0
-      ? chain.runs
-      : chain.runs.filter((run) =>
-          chain.prs.some((pull) => (pull.state === "open" || pull.state === "draft") && pull.headSha === run.headSha),
-        )
-    return chain.prs.some((pull) => pull.state === "open" || pull.state === "draft") ||
-    currentRuns.some((run) => run.status === "queued" || run.status === "running" || run.status === "failed") ||
-    (chain.prs.length === 0 && chain.issues.some((issue) => issue.state === "open")) ||
-    (chain.prs.length === 0 && chain.issues.length === 0 && Date.now() - chain.updatedAt < DAY_MS)
-  }
-
-  /** Keep a sole completed PR visible as a terminal pill; otherwise show live work only. */
-  const pillChains = (): readonly Chain[] => {
-    const active = chains().filter(live)
-    if (active.length > 0) return active
-    const pullChains = chains().filter((chain) => chain.prs.length > 0)
-    return pullChains.length === 1 && pullChains[0]!.prs.some((pull) => pull.state === "merged") ? pullChains : []
-  }
+  // One eligibility policy, one memo, three consumers (`show`, `menu`,
+  // `debugLine`) — the same values everywhere, with no per-consumer filter for
+  // the footer's census to drift away from (the failure mode the old
+  // `live()`-counts-vs-`pillChains()`-pick split already produced). State-driven
+  // via `pillEligible`: the session's own PR (still shown after it merges — the
+  // pill is the session's work, and a newer PR outranks it through `pillPick`),
+  // CI needing attention, an armed merge pending. Mentions of other branches'
+  // work stay in the sidebar; settled history never pills.
+  const pillState = createMemo(() => {
+    const eligible = chains().filter((chain) =>
+      pillEligible(chain, {
+        sessionBranch: meta.branch || undefined,
+        sessionRepo: meta.repo || undefined,
+        armed: ctx.stores.armed.value.entries,
+      }),
+    )
+    return { eligible, picked: pillPick(eligible) }
+  })
+  // The menu's merge-when-ready toggle binds to the first open PR across
+  // eligible chains. Reactive — the popover updates while it's open.
   const menuLead = createMemo(() =>
-    pillChains().flatMap((chain) => chain.prs.filter((pull) => pull.state === "open").map((pull) => ({ chain, pull })))[0],
+    pillState().eligible.flatMap((chain) => chain.prs.filter((pull) => pull.state === "open").map((pull) => ({ chain, pull })))[0],
   )
 
   /** Whether a PR is armed for Muninn-driven merge-when-ready — ours, or already
@@ -383,17 +380,16 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
   const debugLine = () => {
     const current = session()
     const gate = current?.id === meta.sessionID ? "✓" : "✗"
-    const liveChains = chains().filter((chain) => live(chain))
-    const liveCount = liveChains.length
+    const { eligible, picked } = pillState()
     // The capsule's exact pick, then the why: which rule won and out of how many
-    // candidates, and how the chain chose its lead PR.
-    const picked = pillPick(pillChains())
+    // candidates, and how the chain chose its lead PR. Read from the same memo
+    // the capsule uses — eligibility and pick are never recomputed per consumer.
     const lead = picked?.chain.prs.find((pull) => pull.state === "open" || pull.state === "draft") ??
       (picked?.reason === "merged" ? picked.chain.prs.find((pull) => pull.state === "merged") : undefined)
     const pill = !picked
-      ? liveCount > 0
+      ? eligible.length > 0
         ? "off: no eligible chains"
-        : "off: no live chains"
+        : "off: nothing eligible"
       : lead
         ? `#${lead.number} ${lead.title.slice(0, 36)}${lead.state === "merged" ? " · merged" : ""}`
         : picked.chain.runs[0]
@@ -419,7 +415,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       : `pick: ${picked.reason}${picked.considered > 1 ? ` of ${picked.considered}` : ""} · lead ${
           picked.chain.prs[0] ? (picked.chain.prs[0].headBranch === meta.branch ? "branch match" : "newest") : "—"
         }`
-    return `mn gui ${__MN_BUILD__}${meta.debug ? ` · ${meta.debug}` : " · srv ?"} · gate ${gate} ${current?.id ?? "?"} · chains ${chains().length} · live ${liveCount} · pill: ${pill} · ${pick} · refs ${refList.length} (user ${tiers.user} cmd ${tiers.command} prose ${tiers.prose} out ${tiers.output}) → hits ${hits}/${Object.keys(entities).length} ents${meta.stats ? ` · ${meta.stats}` : ""}`
+    return `mn gui ${__MN_BUILD__}${meta.debug ? ` · ${meta.debug}` : " · srv ?"} · gate ${gate} ${current?.id ?? "?"} · chains ${chains().length} · eligible ${eligible.length} · pill: ${pill} · ${pick} · refs ${refList.length} (user ${tiers.user} cmd ${tiers.command} prose ${tiers.prose} out ${tiers.output}) → hits ${hits}/${Object.keys(entities).length} ents${meta.stats ? ` · ${meta.stats}` : ""}`
   }
 
   /** The braille spinner frames for the pill's pending-merge indicator. The host
@@ -448,15 +444,13 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     order: 10,
     show: (input) => {
       if (!input.session || input.session.id !== meta.sessionID) return undefined
-      const list = pillChains()
-      if (list.length === 0) return undefined
+      const { eligible: list, picked } = pillState()
+      if (list.length === 0 || !picked) return undefined
 
       // PR chains are the primary work: the pill leads with the worst-toned PR
       // chain (failing/conflicted/review-blocked beats a calm newer one), else
-      // the most recently updated; run-only chains are the last resort. The same
-      // `pillPick` powers the footer's pick diagnostics.
-      const picked = pillPick(list)
-      if (!picked) return undefined
+      // the most recently updated; run-only chains are the last resort. The
+      // pick comes from the shared memo — exactly what the footer reports.
       const worst = picked.chain
       const lead = worst.prs.find((pull) => pull.state === "open" || pull.state === "draft") ??
         (picked.reason === "merged" ? worst.prs.find((pull) => pull.state === "merged") : undefined)
@@ -491,11 +485,11 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     // sidebar has, plus the merge-method/delete-branch choices. Reads the stores
     // itself, so it stays live while open. Run ids live only here (pill grammar).
     menu: (input) => {
-      // The lead open PR across live chains: the footer's merge-when-ready
+      // The lead open PR across eligible chains: the footer's merge-when-ready
       // toggle binds to it. Reactive — the popover updates while it's open.
       return (
       <div class="mn-pop">
-        <For each={pillChains().slice(0, 3)}>
+        <For each={pillState().eligible.slice(0, 3)}>
           {(chain) => (
             <div class="mn-pop-chain">
               <For each={chain.prs}>

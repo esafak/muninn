@@ -5,8 +5,11 @@
    (`window.bottom`) was rejected but stays depicted in the mockup for reference.
 3. **Pill grammar** — PR/CI first: `#4821 ✓ ready ⇢ #1043 +1`. Linked issues collapse
    to `+N` in the label; the dropdown always shows every member. Merge lives in its
-   own pill beside the chain pill. Worst chain first, capped at three. Merged/closed
-   chains drop out of the row and live on in history.
+   own pill beside the chain pill. Worst chain first, capped at three. Chains leave
+   the row when nothing needs attention (no open PR, no in-flight/failing runs, no
+   armed merge) and live on in history — except the session's own PR (repository-
+   and branch-matched), which stays as a terminal "· merged" capsule until the
+   session produces newer work.
 4. **History shape** — triplet cards (issue → PR → runs), chronologically by last
    activity, grouped by day, runs newest-first, run rows expand to their checks.
    A flat event log was rejected.
