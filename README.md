@@ -14,38 +14,18 @@ Two components, one data model:
 - **Muninn side panel** — chains as triplet cards (issue → PR → runs),
   chronologically by last activity, grouped by day.
 
-## Parts
+## Add the plugin
 
-| Export | Runtime | What it does |
-|---|---|---|
-| `.` | OpenCode server | Repo resolution from `git remote`, reference hydration, merge policy — behind the `Muninn` RPC. GitHub REST via integration credentials, `GITHUB_TOKEN`, or anonymous public access. |
-| `./rpc` | both | The RPC contract — the only shared runtime token. |
-| `./gui-experimental` | desktop windows | Prebuilt bundle: pills, side panel, scanning. |
-
-## Providers
-
-One narrow seam (`src/providers/types.ts`); the GUI renders only generic kinds
-(`issue | pr | run`), statuses, and repo slugs — never provider specifics.
-
-- **Pure, bundled into windows:** the lexicon (URL + shorthand patterns for
-  session scanning) and the product mark (`src/providers/github/lexicon.ts`,
-  `src/gui/marks.tsx`).
-- **Server-side, dispatched by claimed host:** auth, hydration, merge settings,
-  branch runs (`src/providers/github.ts`).
-
-Adding a provider: implement `SourceProvider` + a lexicon, add both to the
-registries, extend the `ProviderID` union. No UI changes.
-
-## Develop
+Install the plugin directly from its GitHub repository with OpenCode's plugin
+manager. OpenCode documents the `github:owner/repo` form for `plugin add` in its
+[plugin docs](https://opencode.ai/docs/plugins/#manage):
 
 ```sh
-bun install
-bun test            # bun test
-bun run check       # tsc --noEmit
-bun run watch       # vite build --watch → dist/gui-experimental.cjs
+opencode plugin add github:esafak/muninn
 ```
 
-Load locally in OpenCode Desktop by adding this directory to the `plugins` array
-of your global `opencode.jsonc`; rebuilds reload the GUI in every window.
+OpenCode watches configuration directories and may load the plugin automatically;
+if it does not appear, restart OpenCode Desktop. See the [plugin reload
+notes](https://opencode.ai/docs/plugins/#reload).
 
-Design rationale and settled decisions: `docs/design/`.
+For development and contributor guidance, see [CONTRIBUTORS.md](CONTRIBUTORS.md).
