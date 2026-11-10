@@ -238,14 +238,17 @@ const reviewState = (reviews: ReviewJson[] | undefined): ReviewState | null => {
   return "pending"
 }
 
-const toPullEntity = (repo: RepoRef, pull: PullJson): PullEntity => ({
+/** Exported for tests: the entity contract this provider returns for a pull. */
+export const toPullEntity = (repo: RepoRef, pull: PullJson): PullEntity => ({
   kind: "pr",
   provider: "github",
   repo,
   number: pull.number,
   title: pull.title,
   state: pull.merged_at ? "merged" : pull.draft ? "draft" : pull.state,
-  mergedAt: pull.merged_at ? epoch(pull.merged_at) : undefined,
+  // Absent, not undefined: the response transport encodes strict JSON, and a
+  // key whose value is undefined fails the whole hydrate response.
+  ...(pull.merged_at ? { mergedAt: epoch(pull.merged_at) } : {}),
   headBranch: pull.head.ref,
   baseBranch: pull.base.ref,
   closes: closingIssues(pull.body),

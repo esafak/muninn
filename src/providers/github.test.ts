@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { mergeResponse } from "./github"
+import { mergeResponse, toPullEntity } from "./github"
 import { PullEntity } from "../rpc"
 
 describe("mergeResponse", () => {
@@ -58,5 +58,36 @@ describe("PullEntity RPC schema", () => {
     const timestamp = 1_794_192_637_000
     expect(PullEntity.parse({ ...entity, mergedAt: timestamp }).mergedAt).toBe(timestamp)
     expect(PullEntity.parse(entity).mergedAt).toBeUndefined()
+  })
+})
+
+describe("toPullEntity", () => {
+  const repo = { host: "github.com", owner: "octo", repo: "repo" }
+  const basePull = {
+    node_id: "n1",
+    number: 7,
+    title: "T",
+    state: "open",
+    draft: false,
+    merged_at: null,
+    body: null,
+    html_url: "https://github.com/octo/repo/pull/7",
+    head: { sha: "abc", ref: "feature" },
+    base: { ref: "main" },
+    mergeable: null,
+    mergeable_state: "unknown",
+    auto_merge: null,
+    updated_at: "2026-11-10T00:00:00Z",
+  } as const
+
+  test("an open pull carries no mergedAt key at all — undefined fails strict JSON", () => {
+    const entity = toPullEntity(repo, { ...basePull })
+    expect("mergedAt" in entity).toBe(false)
+  })
+
+  test("a merged pull carries the merge timestamp", () => {
+    const entity = toPullEntity(repo, { ...basePull, merged_at: "2026-11-10T00:33:47Z", state: "closed" })
+    expect(entity.mergedAt).toBe(Date.parse("2026-11-10T00:33:47Z"))
+    expect(entity.state).toBe("merged")
   })
 })

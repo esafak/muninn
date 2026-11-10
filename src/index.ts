@@ -8,6 +8,7 @@
 import { Credential, Plugin } from "@opencode/plugin"
 import { github } from "./providers/github"
 import type { Ref, RepoRef } from "./model"
+import { jsonReady } from "./model"
 import type { SourceProvider } from "./providers/types"
 import { readRemote } from "./remote"
 import { Muninn } from "./rpc"
@@ -77,8 +78,8 @@ export default Plugin.define({
           ),
         )
         return {
-          entities: results.flatMap((result) => result.entities),
-          unresolved: results.flatMap((result) => result.unresolved),
+          entities: results.flatMap((result) => result.entities).map(jsonReady),
+          unresolved: results.flatMap((result) => result.unresolved).map(jsonReady),
         }
       },
 
