@@ -8,6 +8,7 @@ import type { Credential, Plugin } from "@opencode/plugin"
 import type { AutoMergeMethod, Entity, IssueEntity, MergeState, PullEntity, Ref, RepoRef, ReviewState, RunEntity } from "../model"
 import type { Auth, Hydration, MergeMethod, MergeSettings, SourceProvider } from "./types"
 import { execFile } from "node:child_process"
+import { createHash } from "node:crypto"
 import { promisify } from "node:util"
 
 const exec = promisify(execFile)
@@ -253,18 +254,62 @@ const loadPages = async <T>(path: string, field: "statuses" | "check_runs", auth
   }
 }
 
+/** Whether this PR state can be merged and therefore needs current checks. */
+export const shouldLoadStatusChecks = (pull: Pick<PullEntity, "state">): boolean => pull.state === "open"
+
+/** Opaque, auth-scoped status cache identity. Never stores or logs the raw token. */
+export const statusCheckCacheKey = (repo: RepoRef, headSha: string, token: string | undefined): string => {
+  const credential = token ? createHash("sha256").update(token).digest("hex") : "anonymous"
+  return JSON.stringify([repo.host, repo.owner, repo.repo, headSha, credential])
+}
+
+export const cachedPromise = <T>(
+  cache: Map<string, { at: number; promise: Promise<T> }>,
+  key: string,
+  ttlMs: number,
+  load: () => Promise<T>,
+  now = Date.now(),
+): Promise<T> => {
+  const hit = cache.get(key)
+  if (hit && now - hit.at < ttlMs) return hit.promise
+  const promise = load()
+  cache.set(key, { at: now, promise })
+  return promise
+}
+
 /** Fetch both complete API surfaces; a partial response must never authorize a merge. */
-const loadStatusChecks = async (
+const fetchStatusChecks = async (
   repo: RepoRef,
   headSha: string,
-  auth: Auth,
+  token: string | undefined,
 ): Promise<NonNullable<PullEntity["statusChecks"]>> => {
   const base = `/repos/${repo.owner}/${repo.repo}/commits/${encodeURIComponent(headSha)}`
+  const auth: Auth = async () => token
   const [statuses, checkRuns] = await Promise.all([
     loadPages<CommitStatusJson>(`${base}/statuses`, "statuses", auth),
     loadPages<CheckRunJson>(`${base}/check-runs?filter=latest`, "check_runs", auth),
   ])
   return combineStatusCheckResults(headSha, statuses, checkRuns)
+}
+
+const loadStatusChecks = async (
+  repo: RepoRef,
+  headSha: string,
+  auth: Auth,
+): Promise<NonNullable<PullEntity["statusChecks"]>> => {
+  let token: string | undefined
+  try {
+    token = await auth()
+  } catch {
+    return unavailableStatusChecks(headSha)
+  }
+  const key = statusCheckCacheKey(repo, headSha, token)
+  const snapshot = cachedPromise(statusCheckCache, key, STATUS_TTL_MS, () => fetchStatusChecks(repo, headSha, token))
+  if (statusCheckCache.size > STATUS_CACHE_MAX_ENTRIES) {
+    const oldest = statusCheckCache.keys().next().value
+    if (oldest) statusCheckCache.delete(oldest)
+  }
+  return snapshot
 }
 
 const mergeMethods = (repo: RepoJson): MergeSettings => {
@@ -286,8 +331,13 @@ const mergeMethods = (repo: RepoJson): MergeSettings => {
 const ENTITY_TTL_MS = 45_000
 const BRANCH_PR_TTL_MS = 5 * 60_000
 const MERGE_TTL_MS = 10 * 60_000
+// Fixed from request start: shorter than the 30s refresh interval and shared by
+// concurrent hydration paths; stale data is never used as fallback after expiry.
+const STATUS_TTL_MS = 20_000
+const STATUS_CACHE_MAX_ENTRIES = 512
 
 const cache = new Map<string, { at: number; entity?: Entity }>()
+const statusCheckCache = new Map<string, { at: number; promise: Promise<NonNullable<PullEntity["statusChecks"]>> }>()
 
 const cached = async (key: string, load: () => Promise<Entity | undefined>): Promise<Entity | undefined> => {
   const hit = cache.get(key)
@@ -381,9 +431,9 @@ const hydratePull = async (repo: RepoRef, number: number, auth: Auth): Promise<P
   // Reviews and commit statuses are extra reads per PR; only hydrated detail carries them.
   const [reviews, statusChecks] = await Promise.all([
     request<ReviewJson[]>(`/repos/${repo.owner}/${repo.repo}/pulls/${number}/reviews?per_page=30`, auth),
-    loadStatusChecks(repo, pull.head.sha, auth),
+    shouldLoadStatusChecks(entity) ? loadStatusChecks(repo, pull.head.sha, auth) : Promise.resolve(undefined),
   ])
-  return { ...entity, reviewState: reviewState(reviews), statusChecks }
+  return { ...entity, reviewState: reviewState(reviews), ...(statusChecks ? { statusChecks } : {}) }
 }
 
 /**
@@ -575,10 +625,9 @@ export const github: SourceProvider = {
     // Branch runs are push-triggered: their pull_requests array comes back empty,
     // so query the branch's open PRs and let the GUI associate by head SHA.
     const pulls = await pullsForBranch(repo, branch, auth).catch(() => [] as PullEntity[])
-    const prs = await Promise.all(pulls.map(async (pull) => ({
-      ...pull,
-      statusChecks: await loadStatusChecks(repo, pull.headSha, auth),
-    })))
+    const prs = await Promise.all(pulls.map(async (pull) =>
+      shouldLoadStatusChecks(pull) ? { ...pull, statusChecks: await loadStatusChecks(repo, pull.headSha, auth) } : pull,
+    ))
     return { runs: runEntities, prs }
   },
 

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { mergeResponse, toPullEntity, runEntity, toIssueEntity, statusCheckSnapshot, combineStatusCheckResults, decodeStatusPage, collectStatusPages } from "./github"
+import { mergeResponse, toPullEntity, runEntity, toIssueEntity, statusCheckSnapshot, combineStatusCheckResults, decodeStatusPage, collectStatusPages, cachedPromise, statusCheckCacheKey, shouldLoadStatusChecks } from "./github"
 import { PullEntity } from "../rpc"
 
 describe("mergeResponse", () => {
@@ -150,6 +150,48 @@ describe("statusCheckSnapshot", () => {
     expect(combineStatusCheckResults("head", [], undefined)).toEqual({ headSha: "head", state: "unavailable", contexts: [] })
     expect(combineStatusCheckResults("head", undefined, [])).toEqual({ headSha: "head", state: "unavailable", contexts: [] })
     expect(combineStatusCheckResults("head", [], [])).toEqual({ headSha: "head", state: "available", contexts: [] })
+  })
+})
+
+describe("status-check caching", () => {
+  test("shares in-flight promises and refreshes once the fixed TTL expires", async () => {
+    const cache = new Map<string, { at: number; promise: Promise<string> }>()
+    let loads = 0
+    const load = async () => String(++loads)
+    const first = cachedPromise(cache, "key", 20, load, 0)
+    const concurrent = cachedPromise(cache, "key", 20, load, 10)
+    expect(concurrent).toBe(first)
+    expect(await concurrent).toBe("1")
+    const refreshed = cachedPromise(cache, "key", 20, load, 20)
+    expect(refreshed).not.toBe(first)
+    expect(await refreshed).toBe("2")
+    expect(loads).toBe(2)
+  })
+
+  test("a failed refresh replaces the prior success instead of falling back to it", async () => {
+    const cache = new Map<string, { at: number; promise: Promise<string> }>()
+    const success = cachedPromise(cache, "key", 20, async () => "available", 0)
+    expect(await success).toBe("available")
+    const failedRefresh = cachedPromise(cache, "key", 20, async () => "unavailable", 20)
+    expect(await failedRefresh).toBe("unavailable")
+    expect(await cachedPromise(cache, "key", 20, async () => "should-not-load", 21)).toBe("unavailable")
+  })
+
+  test("scopes cache identity by host, repository, SHA, and opaque credential fingerprint", () => {
+    const repo = { host: "github.com", owner: "octo", repo: "repo" }
+    const first = statusCheckCacheKey(repo, "sha-1", "secret-token-one")
+    expect(statusCheckCacheKey(repo, "sha-1", "secret-token-one")).toBe(first)
+    expect(statusCheckCacheKey(repo, "sha-1", "secret-token-two")).not.toBe(first)
+    expect(statusCheckCacheKey(repo, "sha-2", "secret-token-one")).not.toBe(first)
+    expect(statusCheckCacheKey({ ...repo, host: "ghe.example" }, "sha-1", "secret-token-one")).not.toBe(first)
+    expect(first).not.toContain("secret-token-one")
+  })
+
+  test("only open pull requests need status discovery", () => {
+    expect(shouldLoadStatusChecks({ state: "open" })).toBe(true)
+    expect(shouldLoadStatusChecks({ state: "draft" })).toBe(false)
+    expect(shouldLoadStatusChecks({ state: "closed" })).toBe(false)
+    expect(shouldLoadStatusChecks({ state: "merged" })).toBe(false)
   })
 })
 

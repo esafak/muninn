@@ -184,6 +184,23 @@ describe("mergeWhy", () => {
     expect(mergeWhy(chain({ runs: [], prs: [pull({ mergeState: "ready" })] }))).toBe("not ready")
     expect(mergeWhy(chain({ runs: [run("failed")] }))).toBe("checks failed (run #906)")
   })
+
+  test("explains status-check blockers and preserves the previous reason when disabled", () => {
+    const statusPull = (statusChecks: PullEntity["statusChecks"]): PullEntity => ({ ...pull(), statusChecks })
+    const explain = (statusChecks: PullEntity["statusChecks"], wait = true) =>
+      mergeWhy(chain({ prs: [statusPull(statusChecks)] }), undefined, wait)
+    expect(explain(undefined)).toBe("status checks unavailable")
+    expect(explain({ headSha: "old-head", state: "available", contexts: [] })).toBe("status checks unavailable")
+    expect(explain({ headSha: "abc123", state: "unavailable", contexts: [] })).toBe("status checks unavailable")
+    expect(explain({ headSha: "abc123", state: "available", contexts: [{ name: "gate", status: "failed" }] })).toBe("status checks failed")
+    expect(explain({ headSha: "abc123", state: "available", contexts: [{ name: "gate", status: "running" }] })).toBe("status checks still running")
+    expect(explain({ headSha: "abc123", state: "available", contexts: [{ name: "gate", status: "cancelled" }] })).toBe("status checks did not succeed")
+    const pendingAndBlocked = pull({
+      mergeState: "blocked",
+      statusChecks: { headSha: "abc123", state: "available", contexts: [{ name: "gate", status: "running" }] },
+    })
+    expect(mergeWhy(chain({ prs: [pendingAndBlocked] }), pendingAndBlocked, false)).toBe("blocked by branch rules or a missing review")
+  })
 })
 
 describe("chainTone", () => {
