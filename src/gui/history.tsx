@@ -2,7 +2,7 @@ import { For, Match, Show, Switch, createSignal } from "solid-js"
 import type { Accessor, JSX } from "solid-js"
 import { usePlugin } from "@opencode/plugin/gui"
 import type { Chain, PullEntity, RepoRef, RunEntity, RunStatus } from "../model"
-import { chainTone, mergeReady, mergeWhy, repoKey } from "../model"
+import { chainTone, mergeReady, mergeWhy, prConflicted, repoKey } from "../model"
 import type { definition } from "./definition"
 import { Mark } from "./marks"
 import { CancelledGlyph, CheckGlyph, CrossGlyph, IssueGlyph, MergeGlyph, MergedGlyph, PullConflictGlyph, PullGlyph, QueuedGlyph, UnknownGlyph } from "./icons"
@@ -227,10 +227,10 @@ export const History = (props: HistoryProps) => {
                       </span>
                       <span
                         class="mn-kind"
-                        data-state={pull.state === "open" && pull.mergeState === "conflict" ? "pr-conflict" : `pr-${pull.state}`}
-                        title={pull.state === "open" && pull.mergeState === "conflict" ? "Pull request has merge conflicts" : ctx.t(`state.${pull.state}`)}
+                        data-state={prConflicted(pull) ? "pr-conflict" : `pr-${pull.state}`}
+                        title={ctx.t(prConflicted(pull) ? "state.pr-conflict" : `state.${pull.state}`)}
                       >
-                        {pull.state === "merged" ? <MergedGlyph /> : pull.state === "open" && pull.mergeState === "conflict" ? <PullConflictGlyph /> : <PullGlyph />}
+                        {pull.state === "merged" ? <MergedGlyph /> : prConflicted(pull) ? <PullConflictGlyph /> : <PullGlyph />}
                       </span>
                       <Show when={pull.state === "open"}>
                         <span

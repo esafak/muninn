@@ -139,6 +139,9 @@ export const refKey = (ref: Ref): string =>
 export const entityKey = (entity: Entity): string =>
   `${repoKey(entity.repo)}#${entity.kind}${entity.kind === "run" ? entity.id : entity.number}`
 
+/** Whether an open PR should show the conflict-specific glyph. */
+export const prConflicted = (pull: PullEntity): boolean => pull.state === "open" && pull.mergeState === "conflict"
+
 /** Whether a PR can merge right now: open, checks green, no conflicts, no
  * outstanding change requests. Defaults to the chain's lead; callers pass an
  * explicit pull to check another member of the chain. Unknown states (entries

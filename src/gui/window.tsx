@@ -5,7 +5,7 @@ import { ComposerPill, MenuItem, Panel, SettingsPage, createKeyed, usePlugin, ty
 import { associate } from "../associate"
 import { deliberateRefs, messageBuckets, wireRefs } from "../extract"
 import type { Chain, Entity, PullEntity, RepoRef, RunEntity, RunStatus } from "../model"
-import { chainTone, armedTargets, pillPick, pillEligible, mergeReady, mergeWhy, pullForRun, refKey, repoKey, entityKey } from "../model"
+import { chainTone, armedTargets, pillPick, pillEligible, mergeReady, mergeWhy, pullForRun, prConflicted, refKey, repoKey, entityKey } from "../model"
 import { githubLexicon } from "../providers/github/lexicon"
 import { Muninn } from "../rpc"
 import type { definition } from "./definition"
@@ -523,10 +523,10 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
                   <div class="mn-pop-row" onClick={() => { input.close(); open(pull.url) }}>
                     <span
                       class="mn-kind"
-                      data-state={pull.state === "open" && pull.mergeState === "conflict" ? "pr-conflict" : `pr-${pull.state}`}
-                      title={pull.state === "open" && pull.mergeState === "conflict" ? "Pull request has merge conflicts" : ctx.t(`state.${pull.state}`)}
+                      data-state={prConflicted(pull) ? "pr-conflict" : `pr-${pull.state}`}
+                      title={ctx.t(prConflicted(pull) ? "state.pr-conflict" : `state.${pull.state}`)}
                     >
-                      {pull.state === "merged" ? <MergedGlyph /> : pull.state === "open" && pull.mergeState === "conflict" ? <PullConflictGlyph /> : <PullGlyph />}
+                      {pull.state === "merged" ? <MergedGlyph /> : prConflicted(pull) ? <PullConflictGlyph /> : <PullGlyph />}
                     </span>
                     <span
                       class="mn-merge-state"
@@ -874,7 +874,6 @@ const STYLES = `
 .mn-kind[data-state="draft"], .mn-kind[data-state="queued"], .mn-kind[data-state="running"] { color: var(--v2-state-fg-warning); }
 .mn-kind[data-state="merged"] { color: var(--v2-state-fg-success); }
 .mn-kind[data-state="closed"], .mn-kind[data-state="failed"], .mn-kind[data-state="cancelled"] { color: var(--v2-state-fg-danger); }
-.mn-kind[data-state="conflict"] { color: var(--v2-icon-icon-muted); }
 
 /* Merge action: green when ready, amber while checks run, grey when blocked. */
 .mn-merge {

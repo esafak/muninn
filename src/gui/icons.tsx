@@ -110,7 +110,7 @@ export const CancelledGlyph = (): JSX.Element =>
   )
 
 /** GitHub's merge-status mark: a circle with a center dot, colored by the
- * chain's merge state (green mergeable, amber settling, red conflicted). */
+ * chain's merge state (green ready, amber pending, red blocked). */
 export const MergeGlyph = (): JSX.Element =>
   svg(
     <>

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import type { Chain, IssueEntity, PullEntity, RepoRef, RunEntity } from "./model"
-import { chainTone, mergeReady, mergeWhy, armedTargets, pillPick, type ArmedEntry, pillEligible, pullForRun, pullsForRun } from "./model"
+import { chainTone, mergeReady, mergeWhy, armedTargets, pillPick, type ArmedEntry, pillEligible, pullForRun, pullsForRun, prConflicted } from "./model"
 import { associate } from "./associate"
 
 const repo = { host: "github.com", owner: "sst", repo: "opencode" }
@@ -114,6 +114,18 @@ describe("mergeReady", () => {
     const grouped = chain({ prs: [closedLead, openTarget], runs: [oldFailure, currentSuccess] })
     expect(mergeReady(grouped, openTarget)).toBe(true)
     expect(mergeWhy(grouped, openTarget)).toBe("not ready")
+  })
+})
+
+describe("prConflicted", () => {
+  test("only open conflicting PRs use the conflict glyph", () => {
+    expect(prConflicted(pull({ mergeState: "conflict" }))).toBe(true)
+    expect(prConflicted(pull({ state: "draft", mergeState: "conflict" }))).toBe(false)
+    expect(prConflicted(pull({ state: "merged", mergeState: "conflict" }))).toBe(false)
+    expect(prConflicted(pull({ state: "closed", mergeState: "conflict" }))).toBe(false)
+    expect(prConflicted(pull({ mergeState: "ready" }))).toBe(false)
+    expect(prConflicted(pull({ mergeState: null }))).toBe(false)
+    expect(prConflicted(pull())).toBe(false)
   })
 })
 
