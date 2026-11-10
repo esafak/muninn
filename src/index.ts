@@ -88,7 +88,8 @@ export default Plugin.define({
         const source = sourceFor(repo?.host)
         if (!repo || !source) return { runs: [], prs: [] }
         const result = await source.branchRuns(repo, input.branch, () => source.auth(ctx)).catch(() => ({ runs: [], prs: [] }))
-        return { runs: result.runs, prs: result.prs }
+        // Entity-carrying like hydrate: the strict-JSON boundary applies here too.
+        return { runs: result.runs.map((run) => jsonReady(run)), prs: result.prs.map((pull) => jsonReady(pull)) }
       },
       debug: async () => ({ server: await serverBuild(), directory: pluginRoot }),
       merge: async (input) => {
