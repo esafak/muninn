@@ -1,0 +1,14 @@
+.agents/skills/session-debug/SKILL.md
+  h_ea91e2db23540f 126-130
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0f2eda5117da8e16019a481da90354a172060b76",
+  "prompts": {},
+  "humans": {
+    "h_ea91e2db23540f": {
+      "author": "Emre Şafak <3928300+esafak@users.noreply.github.com>"
+    }
+  }
+}
