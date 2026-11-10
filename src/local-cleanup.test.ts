@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { baseCheckoutDecision, cleanupDecision, cleanupResultMessage, cleanupSessionMatches, fastForwardDecision, safeFastForward, sessionMoveConfirmed, shouldFastForwardBase } from "./local-cleanup"
+import { baseCheckoutDecision, cleanupDecision, cleanupResultMessage, cleanupSessionMatches, fastForwardDecision, safeFastForward, sessionMoveConfirmed, shouldFastForwardBase, shouldRecordCleanupFailure, worktreeOccupancyDecision } from "./local-cleanup"
 
 describe("cleanupSessionMatches", () => {
   test("does not redirect an in-flight merge cleanup after switching sessions", () => {
@@ -23,6 +23,41 @@ describe("sessionMoveConfirmed", () => {
     expect(sessionMoveConfirmed("/worktrees/feature", "/repo")).toBe(false)
     expect(sessionMoveConfirmed(undefined, "/repo")).toBe(false)
     expect(sessionMoveConfirmed("/repo", "/repo")).toBe(true)
+  })
+})
+
+describe("worktreeOccupancyDecision", () => {
+  test("moves only the origin session when it is the sole exact or nested occupant", () => {
+    expect(worktreeOccupancyDecision([{ id: "origin", directory: "/tree" }], "origin", "/tree", false)).toEqual({ safe: true })
+    expect(worktreeOccupancyDecision([{ id: "origin", directory: "/tree/sub" }], "origin", "/tree", false)).toEqual({ safe: true })
+  })
+
+  test("protects other sessions and requires an empty old tree after moving the origin", () => {
+    expect(worktreeOccupancyDecision([
+      { id: "origin", directory: "/tree" },
+      { id: "other", directory: "/tree/child" },
+    ], "origin", "/tree", false)).toEqual({ safe: false, message: "another session uses the worktree; left it intact" })
+    expect(worktreeOccupancyDecision([{ id: "other", directory: "/tree" }], "origin", "/tree", true)).toEqual({
+      safe: false,
+      message: "another session still uses the old worktree; left it intact",
+    })
+    expect(worktreeOccupancyDecision([], "origin", "/tree", true)).toEqual({ safe: true })
+  })
+
+  test("a session found on a later page or archived is still an occupant", () => {
+    const pages = [
+      [{ id: "origin", directory: "/tree" }],
+      [{ id: "archived-session", directory: "/tree/nested" }],
+    ]
+    expect(worktreeOccupancyDecision(pages.flat(), "origin", "/tree", false).safe).toBe(false)
+  })
+})
+
+describe("shouldRecordCleanupFailure", () => {
+  test("does not log a skipped cleanup as a failure", () => {
+    expect(shouldRecordCleanupFailure(false, false)).toBe(false)
+    expect(shouldRecordCleanupFailure(true, false)).toBe(true)
+    expect(shouldRecordCleanupFailure(true, true)).toBe(false)
   })
 })
 

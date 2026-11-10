@@ -46,7 +46,13 @@ const deleteLocalBranch = async (directory: string, branch: string, expectedHead
     await exec("git", ["-C", directory, "branch", "-d", "--", branch], { timeout: 5_000 })
     return { deleted: true }
   } catch (error) {
-    return { deleted: false, message: error instanceof Error ? error.message : String(error) }
+    const detail = error instanceof Error ? error.message : String(error)
+    return {
+      deleted: false,
+      message: detail.toLowerCase().includes("not fully merged")
+        ? "local branch is not merged into the local base; kept it to preserve history"
+        : detail,
+    }
   }
 }
 const fastForwardBase = async (directory: string, expectedRepo: RepoRef, branch: string) => {

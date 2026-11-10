@@ -11,6 +11,31 @@ export type CleanupChecks = {
 export const cleanupSessionMatches = (origin: string, current: string | undefined): boolean => origin === current
 export const sessionMoveConfirmed = (actualDirectory: string | undefined, targetDirectory: string): boolean => actualDirectory === targetDirectory
 
+const containsPath = (parent: string, child: string): boolean => {
+  const normalized = parent.replace(/[\\/]+$/, "")
+  const prefix = normalized ? `${normalized}/` : "/"
+  return child === normalized || child.startsWith(prefix) || (normalized !== "" && child.startsWith(`${normalized}\\`))
+}
+
+export const worktreeOccupancyDecision = (
+  sessions: readonly { id: string; directory: string }[],
+  originSessionID: string,
+  directory: string,
+  originMoved: boolean,
+): { safe: boolean; message?: string } => {
+  const occupants = sessions.filter((session) => containsPath(directory, session.directory))
+  if (originMoved) {
+    if (occupants.length === 0) return { safe: true }
+    return { safe: false, message: "another session still uses the old worktree; left it intact" }
+  }
+  if (occupants.length === 1 && occupants[0]!.id === originSessionID) return { safe: true }
+  if (occupants.some((session) => session.id !== originSessionID))
+    return { safe: false, message: "another session uses the worktree; left it intact" }
+  return { safe: false, message: "origin session is not confirmed as the sole worktree user; left it intact" }
+}
+
+export const shouldRecordCleanupFailure = (attempted: boolean, deleted: boolean): boolean => attempted && !deleted
+
 export const baseCheckoutDecision = (checks: { differentTree: boolean; onBaseBranch: boolean; clean: boolean }): { move: boolean; message?: string } => {
   if (!checks.differentTree) return { move: false, message: "worktree is the canonical checkout; left it intact" }
   if (!checks.onBaseBranch) return { move: false, message: "canonical checkout is not on the PR base branch; worktree left intact" }
