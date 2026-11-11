@@ -1157,7 +1157,7 @@ const STYLES = `
 .mn-kind { flex: none; display: inline-flex; }
 .mn-kind[data-state="issue-open"], .mn-kind[data-state="pr-open"] { color: var(--v2-state-fg-success); }
 .mn-kind[data-state="pr-draft"] { color: var(--v2-icon-icon-faint); }
-.mn-kind[data-state="pr-merged"] { color: var(--v2-state-fg-success); }
+.mn-kind[data-state="pr-merged"] { color: var(--v2-text-text-accent); }
 .mn-kind[data-state="issue-closed"] { color: var(--v2-text-text-accent); }
 .mn-chain[data-tone="warning"] .mn-kind[data-state="pr-merged"], .mn-pop-chain[data-tone="warning"] .mn-kind[data-state="pr-merged"] { color: var(--v2-state-fg-warning); }
 .mn-chain[data-tone="danger"] .mn-kind[data-state="pr-merged"], .mn-pop-chain[data-tone="danger"] .mn-kind[data-state="pr-merged"] { color: var(--v2-state-fg-danger); }
@@ -1240,7 +1240,7 @@ const STYLES = `
 .mn-kind { color: var(--v2-icon-icon-muted); flex: none; display: inline-flex; }
 .mn-kind[data-state="open"], .mn-kind[data-state="succeeded"] { color: var(--v2-state-fg-success); }
 .mn-kind[data-state="draft"], .mn-kind[data-state="queued"], .mn-kind[data-state="running"] { color: var(--v2-state-fg-warning); }
-.mn-kind[data-state="merged"] { color: var(--v2-state-fg-success); }
+.mn-kind[data-state="merged"] { color: var(--v2-text-text-accent); }
 .mn-kind[data-state="closed"], .mn-kind[data-state="failed"], .mn-kind[data-state="cancelled"] { color: var(--v2-state-fg-danger); }
 
 /* Merge action: green when ready, amber while checks run, grey when blocked. */
@@ -1275,7 +1275,7 @@ const STYLES = `
 .mn-merge-state[data-state="blocked"] { color: var(--v2-state-fg-danger, #cf222e); }
 .mn-merge-state[data-state="unknown"] { color: var(--v2-icon-icon-muted); }
 .mn-merge-state[data-state="conflict"] { color: var(--v2-icon-icon-muted); }
-.mn-merge-state[data-state="merged"] { color: var(--v2-state-fg-success, #1a7f37); }
+.mn-merge-state[data-state="merged"] { color: var(--v2-text-text-accent); }
 /* Armed: Muninn is watching — the dot pulses until the merge fires. */
 .mn-merge-state[data-armed] { color: var(--v2-state-fg-warning, #9a6700); animation: mn-pulse 1.6s ease-in-out infinite; }
 @keyframes mn-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
