@@ -121,6 +121,22 @@ export const safeFastForward = (operation: Promise<FastForwardResult>): Promise<
     message: `local fast-forward failed: ${error instanceof Error ? error.message : String(error)}`,
   }))
 
+/** Where a session directory lives: a linked OpenCode worktree, a project
+ * canonical checkout, or outside managed checkouts. Pure routing input for
+ * post-merge cleanup: worktrees are removed, canonicals switch branches. */
+export type CheckoutKind = "worktree" | "canonical" | "unmanaged"
+
+export const locateCheckout = (
+  projects: readonly { canonical: string; trees: readonly string[] }[],
+  directory: string,
+): CheckoutKind => {
+  for (const project of projects) {
+    if (project.trees.includes(directory)) return "worktree"
+    if (project.canonical === directory) return "canonical"
+  }
+  return "unmanaged"
+}
+
 /** Pure safety gate shared with tests; no failed merge can reach destructive cleanup. */
 export const cleanupDecision = (checks: CleanupChecks): { remove: boolean; message?: string } => {
   if (!checks.enabled) return { remove: false, message: "local cleanup is disabled" }

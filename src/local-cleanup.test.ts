@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { baseCheckoutDecision, cleanupDecision, cleanupResultMessage, cleanupSessionMatches, fastForwardDecision, isSameRepo, safeFastForward, selectCanonicalRemote, selectDirectRemote, sessionMoveConfirmed, shouldFastForwardBase, shouldRecordCleanupFailure, worktreeOccupancyDecision } from "./local-cleanup"
+import { baseCheckoutDecision, cleanupDecision, cleanupResultMessage, cleanupSessionMatches, fastForwardDecision, isSameRepo, locateCheckout, safeFastForward, selectCanonicalRemote, selectDirectRemote, sessionMoveConfirmed, shouldFastForwardBase, shouldRecordCleanupFailure, worktreeOccupancyDecision } from "./local-cleanup"
 
 describe("cleanupSessionMatches", () => {
   test("does not redirect an in-flight merge cleanup after switching sessions", () => {
@@ -117,6 +117,28 @@ describe("worktreeOccupancyDecision", () => {
       safe: false,
       message: "origin session is not confirmed as the sole worktree user; left it intact",
     })
+  })
+})
+
+describe("locateCheckout", () => {
+  const projects = [
+    { canonical: "/repo", trees: ["/trees/a", "/trees/b"] },
+    { canonical: "/other", trees: [] as string[] },
+  ]
+
+  test("routes linked worktrees, canonical checkouts, and unmanaged directories", () => {
+    expect(locateCheckout(projects, "/trees/a")).toBe("worktree")
+    expect(locateCheckout(projects, "/trees/b")).toBe("worktree")
+    expect(locateCheckout(projects, "/repo")).toBe("canonical")
+    expect(locateCheckout(projects, "/other")).toBe("canonical")
+    expect(locateCheckout(projects, "/elsewhere")).toBe("unmanaged")
+    expect(locateCheckout([], "/repo")).toBe("unmanaged")
+  })
+
+  test("matches exact directories, never prefixes", () => {
+    expect(locateCheckout(projects, "/repo2")).toBe("unmanaged")
+    expect(locateCheckout(projects, "/trees/a-child")).toBe("unmanaged")
+    expect(locateCheckout(projects, "/trees")).toBe("unmanaged")
   })
 })
 
