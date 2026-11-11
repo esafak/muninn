@@ -240,6 +240,13 @@ export const mergeWhy = (chain: Chain, pull = chain.prs[0], waitForAllStatusChec
   return "not ready"
 }
 
+/** Confirmation fragment for merge/arm dialogs when review activity exists
+ * without an approval (comments, dismissed, or otherwise non-decisive
+ * reviews). The provider does not block these, so merging stays allowed —
+ * but the dialog names it so the approval gap is a conscious accept. */
+export const pendingReviewNotice = (pull: PullEntity): string | undefined =>
+  pull.reviewState === "pending" ? "reviews are pending (no approval on record)" : undefined
+
 /** Pill eligibility — what deserves the composer's highest-commitment surface.
  * Eligible: the session's own work (a PR from the session's repository on the
  * session's branch — repo-scoped, since a foreign PR can share a branch name;

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import type { Chain, IssueEntity, PullEntity, RepoRef, RunEntity } from "./model"
-import { chainTone, mergeReady, mergeWhy, armedTargets, staleHeadRetryEligible, staleHeadEvidenceUsable, sessionAttemptCurrent, targetRefreshConfirmed, pillPick, type ArmedEntry, pillEligible, pullForRun, pullsForRun, jsonReady, prConflicted } from "./model"
+import { chainTone, mergeReady, mergeWhy, pendingReviewNotice, armedTargets, staleHeadRetryEligible, staleHeadEvidenceUsable, sessionAttemptCurrent, targetRefreshConfirmed, pillPick, type ArmedEntry, pillEligible, pullForRun, pullsForRun, jsonReady, prConflicted } from "./model"
 import { associate } from "./associate"
 
 const repo = { host: "github.com", owner: "sst", repo: "opencode" }
@@ -242,6 +242,16 @@ describe("mergeWhy", () => {
       statusChecks: { headSha: "abc123", state: "available", contexts: [{ name: "gate", status: "running" }] },
     })
     expect(mergeWhy(chain({ prs: [pendingAndBlocked] }), pendingAndBlocked, false)).toBe("blocked by branch rules or a missing review")
+  })
+})
+
+describe("pendingReviewNotice", () => {
+  test("names the approval gap only when reviews exist without a decision", () => {
+    expect(pendingReviewNotice(pull({ reviewState: "pending" }))).toBe("reviews are pending (no approval on record)")
+    expect(pendingReviewNotice(pull({ reviewState: "approved" }))).toBeUndefined()
+    expect(pendingReviewNotice(pull({ reviewState: "changes_requested" }))).toBeUndefined()
+    expect(pendingReviewNotice(pull({ reviewState: null }))).toBeUndefined()
+    expect(pendingReviewNotice(pull({ reviewState: undefined }))).toBeUndefined()
   })
 })
 
