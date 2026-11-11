@@ -244,9 +244,9 @@ export const mergeWhy = (chain: Chain, pull = chain.prs[0], waitForAllStatusChec
  * Eligible: the session's own work (a PR from the session's repository on the
  * session's branch — repo-scoped, since a foreign PR can share a branch name;
  * or a PR whose head SHA equals the session checkout's HEAD — a push from any
- * local branch name counts as own work; it stays shown after merging; the pill
- * represents the session's work and moves on only when a newer PR appears,
- * which `pillPick`'s ranking handles)
+ * local branch name counts as own work). Own work remains eligible after merging
+ * while either ownership match holds; SHA-only ownership lapses if local HEAD
+ * advances beyond the PR head. `pillPick` ranks the eligible chains.
  * and anything needing attention now: CI queued/running/failed on current heads
  * (status-derived, so a discovered failure pills with no mention at all) and
  * an armed PR pending merge, matched by repository and number. Everything else
