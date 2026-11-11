@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { mergeResponse, staleHeadConflict, toPullEntity, runEntity, toIssueEntity, statusCheckSnapshot, combineStatusCheckResults, decodeStatusPage, collectStatusPages, cachedPromise, statusCheckCacheKey, shouldLoadStatusChecks } from "./github"
+import { mergeResponse, staleHeadConflict, toPullEntity, runEntity, toIssueEntity, statusCheckSnapshot, combineStatusCheckResults, decodeStatusPage, collectStatusPages, cachedPromise, statusCheckCacheKey, shouldLoadStatusChecks, branchPullSnapshot } from "./github"
 import { PullEntity, RunEntity as RunEntitySchema } from "../rpc"
 
 describe("mergeResponse", () => {
@@ -124,6 +124,41 @@ describe("toPullEntity", () => {
     const entity = toPullEntity(repo, { ...basePull, merged_at: "2026-11-10T00:33:47Z", state: "closed" })
     expect(entity.mergedAt).toBe(Date.parse("2026-11-10T00:33:47Z"))
     expect(entity.state).toBe("merged")
+  })
+
+  test("list-shaped pull responses may omit mergeability", () => {
+    const listPull = { ...basePull, mergeable: undefined, mergeable_state: undefined }
+    expect(toPullEntity(repo, listPull).mergeState).toBeNull()
+  })
+})
+
+describe("branchPullSnapshot", () => {
+  const repo = { host: "github.com", owner: "octo", repo: "repo" }
+  const listed = toPullEntity(repo, {
+    node_id: "n1",
+    number: 7,
+    title: "T",
+    state: "open",
+    draft: false,
+    merged_at: null,
+    body: null,
+    html_url: "https://github.com/octo/repo/pull/7",
+    head: { sha: "abc", ref: "feature" },
+    base: { ref: "main" },
+    updated_at: "2026-11-10T00:00:00Z",
+    auto_merge: null,
+  })
+
+  test("prefers the detail snapshot over list data and fallback checks", () => {
+    const detail = { ...listed, mergeState: "ready" as const, reviewState: "approved" as const }
+    const fallbackChecks = { headSha: "abc", state: "available" as const, contexts: [] }
+    expect(branchPullSnapshot(listed, detail, fallbackChecks)).toBe(detail)
+  })
+
+  test("preserves list data and fallback checks when detail hydration fails", () => {
+    const fallbackChecks = { headSha: "abc", state: "available" as const, contexts: [] }
+    expect(branchPullSnapshot(listed, undefined, fallbackChecks)).toEqual({ ...listed, statusChecks: fallbackChecks })
+    expect(branchPullSnapshot(listed, undefined, undefined)).toBe(listed)
   })
 })
 
