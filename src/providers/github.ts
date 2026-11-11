@@ -397,7 +397,7 @@ const branchPullsCache = new Map<string, { at: number; prs: PullEntity[] }>()
 
 const mergeSettingsCache = new Map<string, { at: number; settings?: MergeSettings }>()
 
-const canonicalRepoCache = new Map<string, { at: number; repo: RepoRef }>()
+const canonicalRepoCache = new Map<string, { at: number; repo?: RepoRef }>()
 
 const hydrateOne = async (ref: Ref & { repo: RepoRef }, auth: Auth): Promise<Entity | undefined> => {
   const base = `/repos/${ref.repo.owner}/${ref.repo.repo}`
@@ -640,7 +640,10 @@ export const github: SourceProvider = {
     const hit = canonicalRepoCache.get(key)
     if (hit && Date.now() - hit.at < MERGE_TTL_MS) return hit.repo
     const json = await request<RepoJson>(`/repos/${repo.owner}/${repo.repo}`, auth).catch(() => undefined)
-    if (!json?.full_name) return undefined
+    if (!json?.full_name) {
+      canonicalRepoCache.set(key, { at: Date.now(), repo: undefined })
+      return undefined
+    }
     const canonical = repoFromFullName(json.full_name, repo)
     canonicalRepoCache.set(key, { at: Date.now(), repo: canonical })
     return canonical
