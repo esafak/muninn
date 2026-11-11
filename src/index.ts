@@ -95,7 +95,10 @@ const fastForwardBase = async (
     await exec("git", ["-C", directory, "check-ref-format", "--branch", branch], { timeout: 5_000 })
     const currentBranch = (await exec("git", ["-C", directory, "branch", "--show-current"], { timeout: 5_000 })).stdout.trim()
     if (currentBranch !== branch) return { fastForwarded: false, message: `local checkout is not on ${branch}` }
-    const status = (await exec("git", ["-C", directory, "status", "--porcelain", "--untracked-files=all"], { timeout: 5_000 })).stdout
+    // Tracked dirt only: untracked files never block a fast-forward (`merge
+    // --ff-only` below refuses safely on its own), so plan files and the like
+    // must not veto the base update. Worktree removal keeps the strict check.
+    const status = (await exec("git", ["-C", directory, "status", "--porcelain", "--untracked-files=no"], { timeout: 5_000 })).stdout
     if (status.trim()) return { fastForwarded: false, message: "local base checkout has changes" }
     await exec("git", ["-C", directory, "fetch", "--no-tags", matchingRemote, `refs/heads/${branch}:${fetchedRef}`], { timeout: 30_000 })
     const target = (await exec("git", ["-C", directory, "rev-parse", `${fetchedRef}^{commit}`], { timeout: 5_000 })).stdout.trim()
@@ -115,7 +118,7 @@ const fastForwardBase = async (
     if (!decision.advance) return { fastForwarded: false, message: decision.message }
 
     const recheckBranch = (await exec("git", ["-C", directory, "branch", "--show-current"], { timeout: 5_000 })).stdout.trim()
-    const recheckStatus = (await exec("git", ["-C", directory, "status", "--porcelain", "--untracked-files=all"], { timeout: 5_000 })).stdout
+    const recheckStatus = (await exec("git", ["-C", directory, "status", "--porcelain", "--untracked-files=no"], { timeout: 5_000 })).stdout
     const recheckHead = (await exec("git", ["-C", directory, "rev-parse", "HEAD"], { timeout: 5_000 })).stdout.trim()
     if (recheckBranch !== branch || recheckStatus.trim() || recheckHead !== before)
       return { fastForwarded: false, message: "local base changed during fetch; left it unchanged" }
