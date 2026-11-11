@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { mergeResponse, staleHeadConflict, toPullEntity, runEntity, toIssueEntity, statusCheckSnapshot, combineStatusCheckResults, decodeStatusPage, collectStatusPages, cachedPromise, statusCheckCacheKey, shouldLoadStatusChecks, branchPullSnapshot, invalidatePullCacheEntries } from "./github"
+import { mergeResponse, staleHeadConflict, toPullEntity, runEntity, toIssueEntity, checkStatus, statusCheckSnapshot, combineStatusCheckResults, decodeStatusPage, collectStatusPages, cachedPromise, statusCheckCacheKey, shouldLoadStatusChecks, branchPullSnapshot, invalidatePullCacheEntries } from "./github"
 import { PullEntity, RunEntity as RunEntitySchema } from "../rpc"
 
 describe("mergeResponse", () => {
@@ -368,5 +368,35 @@ describe("strict JSON boundary", () => {
       updated_at: "2026-11-10T00:00:00Z",
     })
     expect(jsonIssues(issue)).toEqual([])
+  })
+
+})
+
+describe("runEntity", () => {
+  test("treats skipped workflow runs as succeeded and cancelled runs as cancelled", async () => {
+    const repo = { host: "github.com", owner: "octo", repo: "repo" }
+    const run = (id: number, conclusion: "skipped" | "cancelled") => runEntity(repo, {
+      id,
+      workflow_id: 777,
+      name: "optional",
+      display_title: "optional",
+      status: "completed",
+      conclusion,
+      head_branch: "main",
+      head_sha: "abc",
+      html_url: `https://github.com/octo/repo/actions/runs/${id}`,
+      updated_at: "2026-11-10T00:00:00Z",
+      pull_requests: [],
+    }, async () => undefined, false)
+
+    expect((await run(3, "skipped")).status).toBe("succeeded")
+    expect((await run(4, "cancelled")).status).toBe("cancelled")
+  })
+})
+
+describe("checkStatus", () => {
+  test("treats skipped jobs as succeeded and cancelled jobs as cancelled", () => {
+    expect(checkStatus({ status: "completed", conclusion: "skipped" })).toBe("succeeded")
+    expect(checkStatus({ status: "completed", conclusion: "cancelled" })).toBe("cancelled")
   })
 })

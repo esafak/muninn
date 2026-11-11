@@ -162,15 +162,17 @@ const runStatus = (run: RunJson): RunEntity["status"] => {
   if (run.status === "queued") return "queued"
   if (run.status === "in_progress") return "running"
   if (run.conclusion === "success") return "succeeded"
-  if (run.conclusion === "cancelled" || run.conclusion === "skipped") return "cancelled"
+  if (run.conclusion === "skipped") return "succeeded"
+  if (run.conclusion === "cancelled") return "cancelled"
   return "failed"
 }
 
-const checkStatus = (job: { status: string; conclusion: string | null }): RunEntity["status"] => {
+export const checkStatus = (job: { status: string; conclusion: string | null }): RunEntity["status"] => {
   if (job.status === "queued") return "queued"
   if (job.status === "in_progress") return "running"
   if (job.conclusion === "success") return "succeeded"
-  if (job.conclusion === "cancelled" || job.conclusion === "skipped") return "cancelled"
+  if (job.conclusion === "skipped") return "succeeded"
+  if (job.conclusion === "cancelled") return "cancelled"
   return "failed"
 }
 
