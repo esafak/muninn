@@ -92,6 +92,7 @@ interface CheckRunJson {
 }
 
 interface RepoJson {
+  full_name?: string
   allow_merge_commit: boolean
   allow_squash_merge: boolean
   allow_rebase_merge: boolean
@@ -407,11 +408,33 @@ const hydrateOne = async (ref: Ref & { repo: RepoRef }, auth: Auth): Promise<Ent
   return toIssueEntity(ref.repo, issue)
 }
 
+/** Repo coordinates as GitHub spells them after renames: `html_url` carries the
+ * canonical `owner/repo`, while the request ref may use a stale alias that only
+ * redirects. Falls back to the request repo when the URL is missing or foreign. */
+export const repoFromUrl = (url: string | undefined, fallback: RepoRef): RepoRef => {
+  try {
+    const parsed = new URL(url ?? "")
+    const segments = parsed.pathname.split("/").filter(Boolean)
+    if (segments.length >= 2 && segments[0] && segments[1])
+      return { host: parsed.hostname.toLowerCase(), owner: segments[0], repo: segments[1] }
+  } catch {
+    // Malformed URL: keep the request repo.
+  }
+  return fallback
+}
+
+/** `full_name` is `owner/repo` in GitHub's canonical casing after renames. */
+export const repoFromFullName = (fullName: string | undefined, fallback: RepoRef): RepoRef => {
+  const parts = (fullName ?? "").split("/")
+  if (parts.length === 2 && parts[0] && parts[1]) return { host: fallback.host, owner: parts[0], repo: parts[1] }
+  return fallback
+}
+
 /** Exported for tests: the entity contract this provider returns for an issue. */
 export const toIssueEntity = (repo: RepoRef, issue: IssueJson): IssueEntity => ({
   kind: "issue",
   provider: "github",
-  repo,
+  repo: repoFromUrl(issue.html_url, repo),
   number: issue.number,
   title: issue.title,
   state: issue.state,
@@ -448,7 +471,7 @@ const reviewState = (reviews: ReviewJson[] | undefined): ReviewState | null => {
 export const toPullEntity = (repo: RepoRef, pull: PullJson): PullEntity => ({
   kind: "pr",
   provider: "github",
-  repo,
+  repo: repoFromUrl(pull.html_url, repo),
   number: pull.number,
   title: pull.title,
   state: pull.merged_at ? "merged" : pull.draft ? "draft" : pull.state,
@@ -510,7 +533,7 @@ export const runEntity = async (repo: RepoRef, run: RunJson, auth: Auth, withChe
   return {
     kind: "run",
     provider: "github",
-    repo,
+    repo: repoFromUrl(run.html_url, repo),
     id: run.id,
     name: run.name || run.display_title,
     headBranch: run.head_branch,
@@ -608,6 +631,12 @@ export const github: SourceProvider = {
     const settings = json ? mergeMethods(json) : undefined
     mergeSettingsCache.set(key, { at: Date.now(), settings })
     return settings
+  },
+
+  canonicalRepo: async (repo, auth) => {
+    const json = await request<RepoJson>(`/repos/${repo.owner}/${repo.repo}`, auth).catch(() => undefined)
+    if (!json?.full_name) return undefined
+    return repoFromFullName(json.full_name, repo)
   },
 
   hydrate: async (refs, _sessionRepo, auth) => {

@@ -139,11 +139,14 @@ export default Plugin.define({
 
         const auth = () => source.auth(ctx)
         const authenticated = (await auth()) !== undefined
-        const merge = await source.mergeSettings(remote, auth).catch(() => undefined)
-        const headSha = await exec("git", ["-C", input.directory, "rev-parse", "HEAD"], { timeout: 5_000 })
-          .then((result) => result.stdout.trim() || null)
-          .catch(() => null)
-        return { provider: source.id, repo: remote, authenticated, headSha, merge: merge ?? null }
+        const [merge, canonical, headSha] = await Promise.all([
+          source.mergeSettings(remote, auth).catch(() => undefined),
+          source.canonicalRepo?.(remote, auth).catch(() => undefined),
+          exec("git", ["-C", input.directory, "rev-parse", "HEAD"], { timeout: 5_000 })
+            .then((result) => result.stdout.trim() || null)
+            .catch(() => null),
+        ])
+        return { provider: source.id, repo: canonical ?? remote, authenticated, headSha, merge: merge ?? null }
       },
 
       hydrate: async (input) => {
