@@ -352,13 +352,23 @@ const statusCheckCache = new Map<string, { at: number; promise: Promise<NonNulla
 const repositoryEpochs = new Map<string, number>()
 const repositoryCacheKey = (repo: RepoRef): string => `${repo.owner.toLowerCase()}/${repo.repo.toLowerCase()}`
 const repositoryEpoch = (repo: RepoRef): number => repositoryEpochs.get(repositoryCacheKey(repo)) ?? 0
+export const invalidatePullCacheEntries = <EntityEntry, BranchEntry>(
+  entityCache: Map<string, EntityEntry>,
+  branchCache: Map<string, BranchEntry>,
+  repo: RepoRef,
+  number: number,
+): void => {
+  const key = repositoryCacheKey(repo)
+  entityCache.delete(`${key}#pr${number}`)
+  entityCache.delete(`${key}#any${number}`)
+  for (const branchKey of branchCache.keys())
+    if (branchKey.toLowerCase().startsWith(`${key}:`)) branchCache.delete(branchKey)
+}
+
 const invalidatePullCaches = (repo: RepoRef, number: number): void => {
   const key = repositoryCacheKey(repo)
   repositoryEpochs.set(key, repositoryEpoch(repo) + 1)
-  cache.delete(`${key}#pr${number}`)
-  cache.delete(`${key}#any${number}`)
-  for (const branchKey of branchPullsCache.keys())
-    if (branchKey.toLowerCase().startsWith(`${key}:`)) branchPullsCache.delete(branchKey)
+  invalidatePullCacheEntries(cache, branchPullsCache, repo, number)
 }
 
 const cached = async (
@@ -718,6 +728,7 @@ export const github: SourceProvider = {
     }
     const outcome = mergeResponse(await merge.json().catch(() => undefined))
     if (!outcome.merged) return outcome
+    invalidatePullCaches(repo, number)
     return { merged: true }
   },
 

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { mergeResponse, staleHeadConflict, toPullEntity, runEntity, toIssueEntity, statusCheckSnapshot, combineStatusCheckResults, decodeStatusPage, collectStatusPages, cachedPromise, statusCheckCacheKey, shouldLoadStatusChecks, branchPullSnapshot } from "./github"
+import { mergeResponse, staleHeadConflict, toPullEntity, runEntity, toIssueEntity, statusCheckSnapshot, combineStatusCheckResults, decodeStatusPage, collectStatusPages, cachedPromise, statusCheckCacheKey, shouldLoadStatusChecks, branchPullSnapshot, invalidatePullCacheEntries } from "./github"
 import { PullEntity, RunEntity as RunEntitySchema } from "../rpc"
 
 describe("mergeResponse", () => {
@@ -159,6 +159,31 @@ describe("branchPullSnapshot", () => {
     const fallbackChecks = { headSha: "abc", state: "available" as const, contexts: [] }
     expect(branchPullSnapshot(listed, undefined, fallbackChecks)).toEqual({ ...listed, statusChecks: fallbackChecks })
     expect(branchPullSnapshot(listed, undefined, undefined)).toBe(listed)
+  })
+})
+
+describe("invalidatePullCacheEntries", () => {
+  test("clears both PR entity keys and branch lookups for only that repository", () => {
+    const repo = { host: "github.com", owner: "Octo", repo: "Repo" }
+    const entityCache = new Map([
+      ["octo/repo#pr7", "detailed"],
+      ["octo/repo#any7", "resolved"],
+      ["octo/repo#pr8", "other pull"],
+      ["another/repo#pr7", "other repo"],
+    ])
+    const branchCache = new Map([
+      ["octo/repo:main", "cached listing"],
+      ["octo/repo:release", "cached listing"],
+      ["another/repo:main", "other repo"],
+    ])
+
+    invalidatePullCacheEntries(entityCache, branchCache, repo, 7)
+
+    expect([...entityCache]).toEqual([
+      ["octo/repo#pr8", "other pull"],
+      ["another/repo#pr7", "other repo"],
+    ])
+    expect([...branchCache]).toEqual([["another/repo:main", "other repo"]])
   })
 })
 
