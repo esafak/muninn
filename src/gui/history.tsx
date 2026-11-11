@@ -53,8 +53,8 @@ export const MergeButton = (props: {
           class="mn-merge armed"
           title={
             props.pull.autoMerge
-              ? `armed here and on the forge (${props.pull.autoMerge}) — Muninn merges when checks pass and reviews approve. Click to cancel.`
-              : "Muninn is watching — it merges the moment checks pass and reviews approve. Click to cancel."
+              ? `armed here and on the forge (${props.pull.autoMerge}) — Muninn merges once checks pass and merge requirements are satisfied. Click to cancel.`
+              : "Muninn is watching — it merges once checks pass and merge requirements are satisfied. Click to cancel."
           }
           onClick={(event) => {
             event.stopPropagation()

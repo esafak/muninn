@@ -5,7 +5,7 @@ import { ComposerPill, MenuItem, Panel, SettingsPage, createKeyed, usePlugin, ty
 import { associate } from "../associate"
 import { deliberateRefs, messageBuckets, wireRefs } from "../extract"
 import type { ArmedEntry, Chain, Entity, PullEntity, RepoRef, RunEntity, RunStatus } from "../model"
-import { chainTone, armedTargets, staleHeadRetryEligible, staleHeadEvidenceUsable, sessionAttemptCurrent, targetRefreshConfirmed, pillPick, pillEligible, mergeReady, mergeWhy, latestRun, pullForRun, prConflicted, refKey, repoKey, entityKey } from "../model"
+import { chainTone, armedTargets, staleHeadRetryEligible, staleHeadEvidenceUsable, sessionAttemptCurrent, targetRefreshConfirmed, pillPick, pillEligible, mergeReady, mergeWhy, pendingReviewNotice, latestRun, pullForRun, prConflicted, refKey, repoKey, entityKey } from "../model"
 import { githubLexicon } from "../providers/github/lexicon"
 import { baseCheckoutDecision, cleanupDecision, cleanupResultMessage, cleanupSessionMatches, safeFastForward, sessionMoveConfirmed, shouldFastForwardBase, shouldRecordCleanupFailure, worktreeOccupancyDecision } from "../local-cleanup"
 import { Muninn } from "../rpc"
@@ -469,9 +469,10 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     const method = ctx.stores.settings.value.mergeMethod
     const deleteBranch = ctx.stores.settings.value.deleteBranch
     const fastForward = ctx.stores.settings.value.fastForwardBase
+    const reviewNotice = pendingReviewNotice(pull)
     const ok = await ctx.dialogs.confirm({
-      title: `Merge PR #${pull.number}?`,
-      description: `${method[0]!.toUpperCase()}${method.slice(1)}-merges "${pull.title}" into ${pull.baseBranch}${deleteBranch ? ` and deletes the clean local tree and branch ${pull.headBranch}` : ""}${fastForward ? ` and fast-forwards the local ${pull.baseBranch} when safe` : ""}.`,
+      title: reviewNotice ? `Merge PR #${pull.number} without approval?` : `Merge PR #${pull.number}?`,
+      description: `${method[0]!.toUpperCase()}${method.slice(1)}-merges "${pull.title}" into ${pull.baseBranch}${deleteBranch ? ` and deletes the clean local tree and branch ${pull.headBranch}` : ""}${fastForward ? ` and fast-forwards the local ${pull.baseBranch} when safe` : ""}.${reviewNotice ? ` ${reviewNotice[0]!.toUpperCase()}${reviewNotice.slice(1)} — merge anyway?` : ""}`,
       confirm: "Merge",
       danger: true,
     })
@@ -488,9 +489,10 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       const method = ctx.stores.settings.value.mergeMethod
       const deleteBranch = ctx.stores.settings.value.deleteBranch
       const fastForward = ctx.stores.settings.value.fastForwardBase
+      const reviewNotice = pendingReviewNotice(pull)
       const ok = await ctx.dialogs.confirm({
         title: `Merge PR #${pull.number} when ready?`,
-        description: `Muninn watches "${pull.title}" and merges into ${pull.baseBranch} with ${method} as soon as checks pass and reviews approve.${fastForward ? ` It will also fast-forward the local ${pull.baseBranch} when safe.` : ""}${deleteBranch ? ` It will delete the clean local tree and branch ${pull.headBranch} when possible.` : ""} You can cancel any time.`,
+        description: `Muninn watches "${pull.title}" and merges into ${pull.baseBranch} with ${method} once checks pass and merge requirements are satisfied.${fastForward ? ` It will also fast-forward the local ${pull.baseBranch} when safe.` : ""}${deleteBranch ? ` It will delete the clean local tree and branch ${pull.headBranch} when possible.` : ""}${reviewNotice ? ` ${reviewNotice[0]!.toUpperCase()}${reviewNotice.slice(1)} — arming proceeds without an approval.` : ""} You can cancel any time.`,
         confirm: "Merge when ready",
       })
       if (!ok) return
@@ -824,7 +826,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       return {
         icon: circle,
         label: lead
-          ? `${pending ? `${SPIN_FRAMES[spin()]} ` : ""}#${lead.number} ${short(lead.title)} ▾`
+          ? `${pending ? `${SPIN_FRAMES[spin()]} ` : ""}#${lead.number} ${short(lead.title)}${lead.state === "merged" ? ` · ${ctx.t("state.merged")}` : ""} ▾`
           : `run #${run!.id}${run!.status === "succeeded" ? "" : ` · ${ctx.t(`state.${run!.status}`)}`} ▾`,
         tone,
         title: lead
@@ -934,7 +936,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
                       ? `Muninn is driving the merge (${lead().pull.autoMerge ? "also armed on the forge" : "armed locally"}); ${mergeReady(lead().chain, lead().pull, waitForAllStatusChecks()) ? "merging on the next check (within ~30s)" : `waiting: ${mergeWhy(lead().chain, lead().pull, waitForAllStatusChecks())}`} — click to cancel`
                       : mergeReady(lead().chain, lead().pull, waitForAllStatusChecks())
                         ? "green now — Muninn merges on its next check (within ~30s)"
-                        : `Muninn merges when checks pass and reviews approve — now blocked: ${mergeWhy(lead().chain, lead().pull, waitForAllStatusChecks())}`
+                        : `Muninn merges once checks pass and merge requirements are satisfied — now blocked: ${mergeWhy(lead().chain, lead().pull, waitForAllStatusChecks())}`
                   }
                 >
                   <input
@@ -1157,7 +1159,7 @@ const STYLES = `
 .mn-kind { flex: none; display: inline-flex; }
 .mn-kind[data-state="issue-open"], .mn-kind[data-state="pr-open"] { color: var(--v2-state-fg-success); }
 .mn-kind[data-state="pr-draft"] { color: var(--v2-icon-icon-faint); }
-.mn-kind[data-state="pr-merged"] { color: var(--v2-text-text-accent); }
+.mn-kind[data-state="pr-merged"] { color: #8250df; }
 .mn-kind[data-state="issue-closed"] { color: var(--v2-text-text-accent); }
 .mn-chain[data-tone="warning"] .mn-kind[data-state="pr-merged"], .mn-pop-chain[data-tone="warning"] .mn-kind[data-state="pr-merged"] { color: var(--v2-state-fg-warning); }
 .mn-chain[data-tone="danger"] .mn-kind[data-state="pr-merged"], .mn-pop-chain[data-tone="danger"] .mn-kind[data-state="pr-merged"] { color: var(--v2-state-fg-danger); }
@@ -1170,7 +1172,8 @@ const STYLES = `
 .mn-meta { flex: none; font-size: 10.5px; color: var(--v2-text-text-faint); font-family: var(--v2-font-family-code); }
 .mn-state { display: inline-flex; align-items: center; gap: 4px; flex: none; font-size: 10.5px; font-family: var(--v2-font-family-code); }
 .mn-state[data-state="open"], .mn-state[data-status="succeeded"] { color: var(--v2-state-fg-success); }
-.mn-state[data-state="merged"], .mn-state[data-state="closed"], .mn-state[data-status="running"] { color: var(--v2-text-text-accent); }
+.mn-state[data-state="merged"] { color: #8250df; }
+.mn-state[data-state="closed"], .mn-state[data-status="running"] { color: var(--v2-text-text-accent); }
 .mn-state[data-state="closed"][data-issue] { color: var(--v2-text-text-accent); }
 .mn-state[data-state="draft"], .mn-state[data-status="queued"], .mn-state[data-status="cancelled"] { color: var(--v2-text-text-faint); }
 .mn-state[data-state="closed"] { color: var(--v2-state-fg-danger); }
@@ -1240,7 +1243,7 @@ const STYLES = `
 .mn-kind { color: var(--v2-icon-icon-muted); flex: none; display: inline-flex; }
 .mn-kind[data-state="open"], .mn-kind[data-state="succeeded"] { color: var(--v2-state-fg-success); }
 .mn-kind[data-state="draft"], .mn-kind[data-state="queued"], .mn-kind[data-state="running"] { color: var(--v2-state-fg-warning); }
-.mn-kind[data-state="merged"] { color: var(--v2-text-text-accent); }
+.mn-kind[data-state="merged"] { color: #8250df; }
 .mn-kind[data-state="closed"], .mn-kind[data-state="failed"], .mn-kind[data-state="cancelled"] { color: var(--v2-state-fg-danger); }
 
 /* Merge action: green when ready, amber while checks run, grey when blocked. */
@@ -1275,7 +1278,14 @@ const STYLES = `
 .mn-merge-state[data-state="blocked"] { color: var(--v2-state-fg-danger, #cf222e); }
 .mn-merge-state[data-state="unknown"] { color: var(--v2-icon-icon-muted); }
 .mn-merge-state[data-state="conflict"] { color: var(--v2-icon-icon-muted); }
-.mn-merge-state[data-state="merged"] { color: var(--v2-text-text-accent); }
+.mn-merge-state[data-state="merged"] { color: #8250df; }
+/* GitHub's merged purple needs its dark-mode pair. Placed after every merged
+ * light declaration so it wins those ties; the armed rule below stays last so
+ * the watching-pulse keeps precedence, and warning/danger chain tones win by
+ * higher specificity anywhere. */
+@media (prefers-color-scheme: dark) {
+  .mn-kind[data-state="pr-merged"], .mn-kind[data-state="merged"], .mn-merge-state[data-state="merged"], .mn-state[data-state="merged"] { color: #a371f7; }
+}
 /* Armed: Muninn is watching — the dot pulses until the merge fires. */
 .mn-merge-state[data-armed] { color: var(--v2-state-fg-warning, #9a6700); animation: mn-pulse 1.6s ease-in-out infinite; }
 @keyframes mn-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
