@@ -147,10 +147,15 @@ export const Muninn = Rpc.define({
       input: z.object({ directory: z.string(), branch: z.string(), expectedHeadSha: z.string() }),
       output: z.object({ eligible: z.boolean(), message: z.string().optional() }),
     },
-    /** Delete a local PR branch after a clean OpenCode worktree has been removed. */
+    /** Delete a local PR branch after a clean OpenCode worktree has been removed. force uses an atomic expected-SHA push-lease instead of -d, for a forge-confirmed merge whose squash/rebase tip is not a local ancestor; the lease rejects a concurrently advanced tip and refuses a checked-out branch, and head-SHA identity still applies first. */
     deleteLocalBranch: {
-      input: z.object({ directory: z.string(), branch: z.string(), expectedHeadSha: z.string() }),
+      input: z.object({ directory: z.string(), branch: z.string(), expectedHeadSha: z.string(), force: z.boolean().optional() }),
       output: z.object({ deleted: z.boolean(), message: z.string().optional() }),
+    },
+    /** Switch a clean canonical checkout to its base branch after a merge. */
+    checkoutBase: {
+      input: z.object({ directory: z.string(), baseBranch: z.string() }),
+      output: z.object({ switched: z.boolean(), previous: z.string().optional(), message: z.string().optional() }),
     },
     /** Fast-forward a clean local base checkout to its forge's base branch. */
     fastForwardBase: {

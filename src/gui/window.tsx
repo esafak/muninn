@@ -7,7 +7,8 @@ import { deliberateRefs, messageBuckets, wireRefs } from "../extract"
 import type { ArmedEntry, Chain, Entity, PullEntity, RepoRef, RunEntity, RunStatus } from "../model"
 import { chainTone, armedTargets, staleHeadRetryEligible, staleHeadEvidenceUsable, sessionAttemptCurrent, targetRefreshConfirmed, pillPick, pillEligible, mergeReady, mergeWhy, pendingReviewNotice, latestRun, pullForRun, prConflicted, refKey, repoKey, entityKey } from "../model"
 import { githubLexicon } from "../providers/github/lexicon"
-import { baseCheckoutDecision, cleanupDecision, cleanupResultMessage, cleanupSessionMatches, safeFastForward, sessionMoveConfirmed, shouldFastForwardBase, shouldRecordCleanupFailure, worktreeOccupancyDecision } from "../local-cleanup"
+import { baseCheckoutDecision, cleanupDecision, cleanupResultMessage, cleanupSessionMatches, locateCheckout, safeFastForward, sessionMoveConfirmed, shouldFastForwardBase, shouldRecordCleanupFailure, worktreeOccupancyDecision } from "../local-cleanup"
+import type { CheckoutKind } from "../local-cleanup"
 import { Muninn } from "../rpc"
 import type { definition } from "./definition"
 import { History, MergeButton } from "./history"
@@ -444,12 +445,20 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     mergedAwaitingRefresh.add(mergeKey(pull.repo, pull.number))
     record(pull, "merged", via, method)
     let description = `${method} into ${pull.baseBranch}`
-    if (shouldFastForwardBase(ctx.stores.settings.value.fastForwardBase ?? false, result.merged)) {
-      const update = await fastForwardLocalBase(origin, pull)
-      description += ` · ${update.message ?? (update.fastForwarded ? "local base fast-forwarded" : "local base unchanged")}`
-    }
+    const fastForward = shouldFastForwardBase(ctx.stores.settings.value.fastForwardBase ?? false, result.merged)
     if (deleteBranch) {
-      const cleanup = await cleanupTreeAndBranch(origin, pull)
+      // Canonical checkouts skip the standalone fast-forward: the canonical
+      // flow fast-forwards after switching to the base branch instead.
+      const kind = await checkoutKind(origin.directory)
+      if (kind !== "canonical" && fastForward) {
+        const update = await fastForwardLocalBase(origin, pull)
+        description += ` · ${update.message ?? (update.fastForwarded ? "local base fast-forwarded" : "local base unchanged")}`
+      }
+      const raw = kind === "canonical"
+        ? await cleanupCanonicalBranch(origin, pull, fastForward)
+        : await cleanupTreeAndBranch(origin, pull)
+      // Normalise: only the canonical path reports the base-update attempt.
+      const cleanup = { ...raw, fastForwardAttempted: "fastForwardAttempted" in raw ? raw.fastForwardAttempted : false }
       if (cleanup.deleted) {
         record(pull, "branch-deleted", via, method)
         description += ` · ${cleanup.message}`
@@ -458,6 +467,16 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
           record(pull, "branch-delete-failed", via, method, cleanup.message)
         description += ` · ${cleanup.message}`
       }
+      // A canonical bail before switching (already on base, dirty tree, not
+      // on the PR branch) skips the in-flow update: fall back to the
+      // standalone fast-forward unless one already ran.
+      if (kind === "canonical" && fastForward && !cleanup.fastForwardAttempted) {
+        const update = await fastForwardLocalBase(origin, pull)
+        description += ` · ${update.message ?? (update.fastForwarded ? "local base fast-forwarded" : "local base unchanged")}`
+      }
+    } else if (fastForward) {
+      const update = await fastForwardLocalBase(origin, pull)
+      description += ` · ${update.message ?? (update.fastForwarded ? "local base fast-forwarded" : "local base unchanged")}`
     }
     ctx.toast.show({ title: `PR #${pull.number} merged`, description, variant: "success" })
     return "merged"
@@ -470,9 +489,19 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     const deleteBranch = ctx.stores.settings.value.deleteBranch
     const fastForward = ctx.stores.settings.value.fastForwardBase
     const reviewNotice = pendingReviewNotice(pull)
+    const kind = await checkoutKind(session()?.directory ?? "")
+    const methodName = `${method[0]!.toUpperCase()}${method.slice(1)}`
+    const cleanupClause = !deleteBranch
+      ? ""
+      : kind === "canonical"
+        ? `, switches to ${pull.baseBranch}${fastForward ? ", fast-forwards it when safe," : ""} and deletes the local branch ${pull.headBranch}`
+        : ` and deletes the clean local tree and branch ${pull.headBranch}`
+    const ffClause = fastForward && (!deleteBranch || kind !== "canonical")
+      ? ` and fast-forwards the local ${pull.baseBranch} when safe`
+      : ""
     const ok = await ctx.dialogs.confirm({
       title: reviewNotice ? `Merge PR #${pull.number} without approval?` : `Merge PR #${pull.number}?`,
-      description: `${method[0]!.toUpperCase()}${method.slice(1)}-merges "${pull.title}" into ${pull.baseBranch}${deleteBranch ? ` and deletes the clean local tree and branch ${pull.headBranch}` : ""}${fastForward ? ` and fast-forwards the local ${pull.baseBranch} when safe` : ""}.${reviewNotice ? ` ${reviewNotice[0]!.toUpperCase()}${reviewNotice.slice(1)} — merge anyway?` : ""}`,
+      description: `${methodName}-merges "${pull.title}" into ${pull.baseBranch}${cleanupClause}${ffClause}.${reviewNotice ? ` ${reviewNotice[0]!.toUpperCase()}${reviewNotice.slice(1)} — merge anyway?` : ""}`,
       confirm: "Merge",
       danger: true,
     })
@@ -490,9 +519,19 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       const deleteBranch = ctx.stores.settings.value.deleteBranch
       const fastForward = ctx.stores.settings.value.fastForwardBase
       const reviewNotice = pendingReviewNotice(pull)
+      const kind = await checkoutKind(session()?.directory ?? "")
+      const sentences = [`Muninn watches "${pull.title}" and merges into ${pull.baseBranch} with ${method} once checks pass and merge requirements are satisfied.`]
+      if (fastForward && (!deleteBranch || kind !== "canonical"))
+        sentences.push(`It will also fast-forward the local ${pull.baseBranch} when safe.`)
+      if (deleteBranch)
+        sentences.push(kind === "canonical"
+          ? `It will switch to ${pull.baseBranch}${fastForward ? ", fast-forward it when safe," : ""} and delete the local branch ${pull.headBranch} when possible.`
+          : `It will delete the clean local tree and branch ${pull.headBranch} when possible.`)
+      if (reviewNotice) sentences.push(`${reviewNotice[0]!.toUpperCase()}${reviewNotice.slice(1)} — arming proceeds without an approval.`)
+      sentences.push("You can cancel any time.")
       const ok = await ctx.dialogs.confirm({
         title: `Merge PR #${pull.number} when ready?`,
-        description: `Muninn watches "${pull.title}" and merges into ${pull.baseBranch} with ${method} once checks pass and merge requirements are satisfied.${fastForward ? ` It will also fast-forward the local ${pull.baseBranch} when safe.` : ""}${deleteBranch ? ` It will delete the clean local tree and branch ${pull.headBranch} when possible.` : ""}${reviewNotice ? ` ${reviewNotice[0]!.toUpperCase()}${reviewNotice.slice(1)} — arming proceeds without an approval.` : ""} You can cancel any time.`,
+        description: sentences.join(" "),
         confirm: "Merge when ready",
       })
       if (!ok) return
@@ -693,6 +732,90 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       }))
     }))
     return lists.flat()
+  }
+
+  /** Whether the session directory is a linked worktree, a project canonical
+   * checkout, or outside managed checkouts. Never throws: unknowns route to
+   * the worktree cleanup path, which reports its own errors. */
+  const checkoutKind = async (directory: string): Promise<CheckoutKind> => {
+    try {
+      const client = ctx.client
+      if (!client) return "unmanaged"
+      const located = []
+      for (const project of await client.project.list()) {
+        const trees = await client.worktree.list({ projectID: project.id }).catch(() => [])
+        located.push({ canonical: project.canonical, trees: trees.map((tree) => tree.directory) })
+      }
+      return locateCheckout(located, directory)
+    } catch {
+      return "unmanaged"
+    }
+  }
+
+  /** Post-merge cleanup for a canonical checkout: the session stays put, so
+   * switch it to the base branch, fast-forward when enabled, and delete the
+   * merged branch. Force-deletion is safe here: the PR merged on the forge,
+   * the local tip equals the merged head, and the tree is clean. Reports
+   * whether the base update ran so the caller can fall back to a standalone
+   * fast-forward when cleanup bails first. */
+  const cleanupCanonicalBranch = async (
+    origin: { sessionID: string; directory: string; repo: RepoRef | null | undefined },
+    pull: PullEntity,
+    fastForward: boolean,
+  ) => {
+    const client = ctx.client
+    let branchDeleteAttempted = false
+    let fastForwardAttempted = false
+    const parts: string[] = []
+    const fail = (message: string) => ({ deleted: false, attempted: branchDeleteAttempted, fastForwardAttempted, message: [...parts, message].join(" · ") })
+    try {
+      if (!cleanupSessionMatches(origin.sessionID, session()?.id))
+        return fail("active session changed during merge; local checkout left intact")
+      const directory = origin.directory
+      const sameRepo = !!origin.repo && repoKey(origin.repo) === repoKey(pull.repo)
+      if (!sameRepo)
+        return fail(cleanupDecision({ enabled: true, merged: true, sameRepo, managedWorktree: false, branchMatches: false, headMatches: false, clean: false }).message ?? "PR belongs to another repository; local checkout left intact")
+      const sessions = await sessionsAtWorktree(directory)
+      const occupancy = worktreeOccupancyDecision(sessions, origin.sessionID, directory, false)
+      if (!occupancy.safe) return fail(occupancy.message ?? "another session uses this checkout; local branch left intact")
+      const check = await client.rpc(Muninn).checkLocalWorktree({ directory, branch: pull.headBranch, expectedHeadSha: pull.headSha })
+      const decision = cleanupDecision({
+        enabled: true,
+        merged: true,
+        sameRepo,
+        managedWorktree: true,
+        branchMatches: check.eligible,
+        headMatches: check.eligible,
+        clean: check.eligible,
+      })
+      if (!decision.remove) return fail(check.message ?? decision.message ?? "local checkout is not ready; left it intact")
+      if (!cleanupSessionMatches(origin.sessionID, session()?.id))
+        return fail("active session changed during cleanup; checkout left intact")
+      const switched = await client.rpc(Muninn).checkoutBase({ directory, baseBranch: pull.baseBranch })
+      if (!switched.switched && switched.previous !== pull.baseBranch)
+        return fail(switched.message ?? `could not switch to ${pull.baseBranch}; checkout left intact`)
+      parts.push(switched.switched ? `switched to ${pull.baseBranch}` : `already on ${pull.baseBranch}`)
+      if (fastForward) {
+        fastForwardAttempted = true
+        const update = await fastForwardLocalBase(origin, pull)
+        parts.push(update.message ?? (update.fastForwarded ? "local base fast-forwarded" : "local base unchanged"))
+      }
+      branchDeleteAttempted = true
+      const result = await client.rpc(Muninn).deleteLocalBranch({ directory, branch: pull.headBranch, expectedHeadSha: pull.headSha, force: true })
+      if (result.deleted)
+        return { deleted: true, attempted: branchDeleteAttempted, fastForwardAttempted, message: [...parts, `local branch ${pull.headBranch} deleted`].join(" · ") }
+      return fail(result.message ?? "local branch could not be safely deleted")
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      return {
+        deleted: false,
+        attempted: branchDeleteAttempted,
+        fastForwardAttempted,
+        message: parts.length > 0
+          ? [...parts, `local cleanup failed: ${detail}`].join(" · ")
+          : `local cleanup failed; checkout and branch left intact: ${detail}`,
+      }
+    }
   }
 
   const cleanupTreeAndBranch = async (

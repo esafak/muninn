@@ -34,7 +34,7 @@ const checkLocalWorktree = async (directory: string, branch: string, expectedHea
     return { eligible: false, message: error instanceof Error ? error.message : String(error) }
   }
 }
-const deleteLocalBranch = async (directory: string, branch: string, expectedHeadSha: string) => {
+const deleteLocalBranch = async (directory: string, branch: string, expectedHeadSha: string, force = false) => {
   if (!safeBranch(branch))
     return { deleted: false, message: "local branch name is not safe to delete" }
   try {
@@ -44,16 +44,50 @@ const deleteLocalBranch = async (directory: string, branch: string, expectedHead
     const trees = (await exec("git", ["-C", directory, "worktree", "list", "--porcelain"], { timeout: 5_000 })).stdout
     if (trees.split("\n").some((line) => line === `branch refs/heads/${branch}`))
       return { deleted: false, message: "local branch is still checked out in another worktree" }
-    await exec("git", ["-C", directory, "branch", "-d", "--", branch], { timeout: 5_000 })
+    if (force) {
+      // Atomic expected-SHA deletion: the lease rejects a tip that advanced
+      // after validation, and the push refuses a checked-out branch. Plain
+      // `git branch -D` and `update-ref -d` offer neither guarantee.
+      await exec(
+        "git",
+        ["-C", directory, "push", `--force-with-lease=refs/heads/${branch}:${expectedHeadSha}`, directory, `:refs/heads/${branch}`],
+        { timeout: 5_000 },
+      )
+    } else {
+      await exec("git", ["-C", directory, "branch", "-d", "--", branch], { timeout: 5_000 })
+    }
     return { deleted: true }
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error)
+    const lowered = detail.toLowerCase()
     return {
       deleted: false,
-      message: detail.toLowerCase().includes("not fully merged")
+      message: lowered.includes("not fully merged")
         ? "local branch is not merged into the local base; kept it to preserve history"
-        : detail,
+        : lowered.includes("stale info")
+          ? "local branch advanced during cleanup; left it intact"
+          : detail,
     }
+  }
+}
+/** Switch a canonical checkout to its base branch after a merge. The caller
+ * verifies PR ownership and head identity; this re-checks cleanliness at the
+ * environment boundary so no uncommitted work is carried across branches. */
+const switchToBase = async (directory: string, branch: string) => {
+  if (!safeBranch(branch)) return { switched: false, message: "base branch name is invalid" }
+  try {
+    const current = (await exec("git", ["-C", directory, "branch", "--show-current"], { timeout: 5_000 })).stdout.trim()
+    if (current === branch) return { switched: false, previous: current }
+    const status = (await exec("git", ["-C", directory, "status", "--porcelain", "--untracked-files=all"], { timeout: 5_000 })).stdout
+    if (status.trim()) return { switched: false, previous: current, message: "local checkout has changes; left it intact" }
+    // Branch-only semantics: unlike `checkout`, `switch` never detaches HEAD
+    // onto a same-named tag. Verify the landing spot regardless.
+    await exec("git", ["-C", directory, "switch", branch], { timeout: 5_000 })
+    const landed = (await exec("git", ["-C", directory, "branch", "--show-current"], { timeout: 5_000 })).stdout.trim()
+    if (landed !== branch) return { switched: false, previous: current, message: `local checkout did not land on ${branch}; left it intact` }
+    return { switched: true, previous: current }
+  } catch (error) {
+    return { switched: false, message: error instanceof Error ? error.message : String(error) }
   }
 }
 const fastForwardBase = async (
@@ -223,7 +257,8 @@ export default Plugin.define({
         )
       },
       checkLocalWorktree: async (input) => checkLocalWorktree(input.directory, input.branch, input.expectedHeadSha),
-      deleteLocalBranch: async (input) => deleteLocalBranch(input.directory, input.branch, input.expectedHeadSha),
+      deleteLocalBranch: async (input) => deleteLocalBranch(input.directory, input.branch, input.expectedHeadSha, input.force ?? false),
+      checkoutBase: async (input) => switchToBase(input.directory, input.baseBranch),
       fastForwardBase: async (input) => {
         const source = sourceFor(input.repo.host)
         const auth = () => source!.auth(ctx)
