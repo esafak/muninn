@@ -247,7 +247,7 @@ export const mergeWhy = (chain: Chain, pull = chain.prs[0], waitForAllStatusChec
  * local branch name counts as own work). Own work remains eligible after merging
  * while either ownership match holds; SHA-only ownership lapses if local HEAD
  * advances beyond the PR head. `pillPick` ranks the eligible chains.
- * and anything needing attention now: CI queued/running/failed on current heads
+ * Also eligible is anything needing attention now: CI queued/running/failed on current heads
  * (status-derived, so a discovered failure pills with no mention at all) and
  * an armed PR pending merge, matched by repository and number. Everything else
  * is sidebar material: other branches' PRs (mention is not intent — see the

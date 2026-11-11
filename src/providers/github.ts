@@ -397,6 +397,8 @@ const branchPullsCache = new Map<string, { at: number; prs: PullEntity[] }>()
 
 const mergeSettingsCache = new Map<string, { at: number; settings?: MergeSettings }>()
 
+const canonicalRepoCache = new Map<string, { at: number; repo: RepoRef }>()
+
 const hydrateOne = async (ref: Ref & { repo: RepoRef }, auth: Auth): Promise<Entity | undefined> => {
   const base = `/repos/${ref.repo.owner}/${ref.repo.repo}`
   if (ref.kind === "run") return hydrateRun(ref.repo, ref.number, auth)
@@ -410,7 +412,7 @@ const hydrateOne = async (ref: Ref & { repo: RepoRef }, auth: Auth): Promise<Ent
 
 /** Repo coordinates as GitHub spells them after renames: `html_url` carries the
  * canonical `owner/repo`, while the request ref may use a stale alias that only
- * redirects. Falls back to the request repo when the URL is missing or foreign. */
+ * redirects. Falls back to the request repo when the URL is missing or malformed. */
 export const repoFromUrl = (url: string | undefined, fallback: RepoRef): RepoRef => {
   try {
     const parsed = new URL(url ?? "")
@@ -634,9 +636,14 @@ export const github: SourceProvider = {
   },
 
   canonicalRepo: async (repo, auth) => {
+    const key = repositoryCacheKey(repo)
+    const hit = canonicalRepoCache.get(key)
+    if (hit && Date.now() - hit.at < MERGE_TTL_MS) return hit.repo
     const json = await request<RepoJson>(`/repos/${repo.owner}/${repo.repo}`, auth).catch(() => undefined)
     if (!json?.full_name) return undefined
-    return repoFromFullName(json.full_name, repo)
+    const canonical = repoFromFullName(json.full_name, repo)
+    canonicalRepoCache.set(key, { at: Date.now(), repo: canonical })
+    return canonical
   },
 
   hydrate: async (refs, _sessionRepo, auth) => {

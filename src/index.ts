@@ -12,7 +12,7 @@ import { jsonReady } from "./model"
 import type { SourceProvider } from "./providers/types"
 import { parseRemoteUrl, readRemote } from "./remote"
 import { Muninn } from "./rpc"
-import { fastForwardDecision } from "./local-cleanup"
+import { fastForwardDecision, selectCanonicalRemote, selectDirectRemote } from "./local-cleanup"
 import { execFile } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { promisify } from "node:util"
@@ -56,20 +56,41 @@ const deleteLocalBranch = async (directory: string, branch: string, expectedHead
     }
   }
 }
-const fastForwardBase = async (directory: string, expectedRepo: RepoRef, branch: string) => {
+const fastForwardBase = async (
+  directory: string,
+  expectedRepo: RepoRef,
+  branch: string,
+  canonicalize?: (repo: RepoRef) => Promise<RepoRef | undefined>,
+) => {
   if (!safeBranch(branch)) return { fastForwarded: false, message: "base branch name is invalid" }
   const fetchedRef = `refs/muninn/fast-forward/${process.pid}-${randomUUID()}`
   try {
     const remotes = (await exec("git", ["-C", directory, "remote"], { timeout: 5_000 })).stdout.trim().split(/\s+/).filter(Boolean)
-    const matchingRemote = await remotes.reduce<Promise<string | undefined>>(async (found, name) => {
-      if (await found) return found
-      const url = (await exec("git", ["-C", directory, "remote", "get-url", name], { timeout: 5_000 })).stdout.trim()
-      const remote = parseRemoteUrl(url)
-      return remote && remote.host.toLowerCase() === expectedRepo.host.toLowerCase() &&
-        remote.owner.toLowerCase() === expectedRepo.owner.toLowerCase() && remote.repo.toLowerCase() === expectedRepo.repo.toLowerCase()
-        ? name
-        : undefined
-    }, Promise.resolve(undefined))
+    const candidates = await Promise.all(
+      remotes.map(async (name) => {
+        try {
+          const url = (await exec("git", ["-C", directory, "remote", "get-url", name], { timeout: 5_000 })).stdout.trim()
+          return { name, remote: parseRemoteUrl(url) }
+        } catch {
+          return { name, remote: undefined }
+        }
+      }),
+    )
+    const direct = selectDirectRemote(candidates, expectedRepo)
+    let matchingRemote = direct
+    if (!matchingRemote && canonicalize) {
+      const canonicalByName = new Map<string, RepoRef | undefined>()
+      for (const candidate of candidates) {
+        if (candidate.remote === undefined) continue
+        if (candidate.remote.host.toLowerCase() !== expectedRepo.host.toLowerCase()) continue
+        try {
+          canonicalByName.set(candidate.name, await canonicalize(candidate.remote))
+        } catch {
+          canonicalByName.set(candidate.name, undefined)
+        }
+      }
+      matchingRemote = selectCanonicalRemote(candidates, expectedRepo, canonicalByName)
+    }
     if (!matchingRemote) return { fastForwarded: false, message: "no configured remote matches the PR base repository" }
     await exec("git", ["-C", directory, "check-ref-format", "--branch", branch], { timeout: 5_000 })
     const currentBranch = (await exec("git", ["-C", directory, "branch", "--show-current"], { timeout: 5_000 })).stdout.trim()
@@ -200,7 +221,13 @@ export default Plugin.define({
       },
       checkLocalWorktree: async (input) => checkLocalWorktree(input.directory, input.branch, input.expectedHeadSha),
       deleteLocalBranch: async (input) => deleteLocalBranch(input.directory, input.branch, input.expectedHeadSha),
-      fastForwardBase: async (input) => fastForwardBase(input.directory, input.repo, input.baseBranch),
+      fastForwardBase: async (input) => {
+        const source = sourceFor(input.repo.host)
+        const auth = () => source!.auth(ctx)
+        return fastForwardBase(input.directory, input.repo, input.baseBranch, async (repo) =>
+          source?.canonicalRepo?.(repo, auth).catch(() => undefined),
+        )
+      },
       autoMerge: async (input) => {
         const repo = await readRemote(input.directory)
         if (!repo) return { armed: false, message: "no repository resolved for this directory" }

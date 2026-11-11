@@ -80,6 +80,40 @@ export const fastForwardDecision = (checks: {
 
 export const shouldFastForwardBase = (enabled: boolean, merged: boolean): boolean => enabled && merged
 
+/** Case-insensitive repo equality for remote matching (hosts, owners, and names). */
+export const isSameRepo = (
+  a: { host: string; owner: string; repo: string },
+  b: { host: string; owner: string; repo: string },
+): boolean =>
+  a.host.toLowerCase() === b.host.toLowerCase() &&
+  a.owner.toLowerCase() === b.owner.toLowerCase() &&
+  a.repo.toLowerCase() === b.repo.toLowerCase()
+
+/** First remote whose parsed URL directly matches the expected repo. Pure: no network. */
+export const selectDirectRemote = (
+  candidates: readonly { name: string; remote: { host: string; owner: string; repo: string } | undefined }[],
+  expected: { host: string; owner: string; repo: string },
+): string | undefined =>
+  candidates.find((candidate) => candidate.remote !== undefined && isSameRepo(candidate.remote, expected))?.name
+
+/** First same-host remote whose canonical repo matches the expected repo (renames).
+ * Pure: canonical answers are supplied by the caller; failures (undefined) never match
+ * and never block later candidates. */
+export const selectCanonicalRemote = (
+  candidates: readonly { name: string; remote: { host: string; owner: string; repo: string } | undefined }[],
+  expected: { host: string; owner: string; repo: string },
+  canonicalByName: ReadonlyMap<string, { host: string; owner: string; repo: string } | undefined>,
+): string | undefined => {
+  for (const candidate of candidates) {
+    if (candidate.remote === undefined) continue
+    if (candidate.remote.host.toLowerCase() !== expected.host.toLowerCase()) continue
+    if (isSameRepo(candidate.remote, expected)) continue
+    const canonical = canonicalByName.get(candidate.name)
+    if (canonical !== undefined && isSameRepo(canonical, expected)) return candidate.name
+  }
+  return undefined
+}
+
 export type FastForwardResult = { fastForwarded: boolean; message?: string }
 export const safeFastForward = (operation: Promise<FastForwardResult>): Promise<FastForwardResult> =>
   operation.catch((error: unknown) => ({
