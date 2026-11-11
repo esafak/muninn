@@ -243,8 +243,10 @@ export const mergeWhy = (chain: Chain, pull = chain.prs[0], waitForAllStatusChec
 /** Pill eligibility — what deserves the composer's highest-commitment surface.
  * Eligible: the session's own work (a PR from the session's repository on the
  * session's branch — repo-scoped, since a foreign PR can share a branch name;
- * it stays shown after merging; the pill represents the session's work and
- * moves on only when a newer PR appears, which `pillPick`'s ranking handles)
+ * or a PR whose head SHA equals the session checkout's HEAD — a push from any
+ * local branch name counts as own work; it stays shown after merging; the pill
+ * represents the session's work and moves on only when a newer PR appears,
+ * which `pillPick`'s ranking handles)
  * and anything needing attention now: CI queued/running/failed on current heads
  * (status-derived, so a discovered failure pills with no mention at all) and
  * an armed PR pending merge, matched by repository and number. Everything else
@@ -256,19 +258,21 @@ export const pillEligible = (
   ctx: {
     sessionBranch?: string
     sessionRepo?: RepoRef
+    sessionHeadSha?: string
     armed?: readonly { repo: RepoRef; number: number }[]
   } = {},
 ): boolean => {
   // The session's own work: repository-scoped, since a foreign PR can share a
-  // branch name (the PR #5 incident itself was cross-repo).
+  // branch name (the PR #5 incident itself was cross-repo). A HEAD-SHA match
+  // covers pushing the PR's branch from a differently-named local branch.
   if (
-    ctx.sessionBranch !== undefined &&
     ctx.sessionRepo !== undefined &&
     chain.prs.some(
       (pull) =>
-        pull.headBranch === ctx.sessionBranch &&
         pull.state !== "closed" &&
-        repoKey(pull.repo) === repoKey(ctx.sessionRepo!),
+        repoKey(pull.repo) === repoKey(ctx.sessionRepo!) &&
+        ((ctx.sessionBranch !== undefined && pull.headBranch === ctx.sessionBranch) ||
+          (ctx.sessionHeadSha !== undefined && pull.headSha === ctx.sessionHeadSha)),
     )
   )
     return true

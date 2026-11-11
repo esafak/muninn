@@ -28,6 +28,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     repo: null as RepoRef | null,
     provider: null as string | null,
     branch: "",
+    headSha: null as string | null,
     authenticated: false,
     unresolved: 0,
     error: null as string | null,
@@ -172,7 +173,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     if (targetKey) refreshedPullByPR.delete(targetKey)
     setSessionReady(true)
     // Gate pills on this session before any network: identity is known up front.
-    setMeta((previous) => ({ ...previous, sessionID: current.id, repo: null, provider: null, branch: "" }))
+    setMeta((previous) => ({ ...previous, sessionID: current.id, repo: null, provider: null, branch: "", headSha: null }))
     const client = ctx.client
 
     const refreshed = await (async (): Promise<boolean> => {
@@ -186,6 +187,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
           provider: info.provider,
           authenticated: info.authenticated,
           branch: "",
+          headSha: info.headSha,
         })
         if (!repo) {
           setMeta("error", null)
@@ -346,6 +348,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       pillEligible(chain, {
         sessionBranch: meta.branch || undefined,
         sessionRepo: meta.repo || undefined,
+        sessionHeadSha: meta.headSha || undefined,
         armed: ctx.stores.armed.value.entries,
       }),
     )

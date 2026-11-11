@@ -132,15 +132,18 @@ export default Plugin.define({
     await ctx.rpc.register(Muninn, {
       repo: async (input) => {
         const remote = await readRemote(input.directory)
-        if (!remote) return { provider: null, repo: null, authenticated: false, merge: null }
+        if (!remote) return { provider: null, repo: null, authenticated: false, headSha: null, merge: null }
 
         const source = sourceFor(remote.host)
-        if (!source) return { provider: null, repo: remote, authenticated: false, merge: null }
+        if (!source) return { provider: null, repo: remote, authenticated: false, headSha: null, merge: null }
 
         const auth = () => source.auth(ctx)
         const authenticated = (await auth()) !== undefined
         const merge = await source.mergeSettings(remote, auth).catch(() => undefined)
-        return { provider: source.id, repo: remote, authenticated, merge: merge ?? null }
+        const headSha = await exec("git", ["-C", input.directory, "rev-parse", "HEAD"], { timeout: 5_000 })
+          .then((result) => result.stdout.trim() || null)
+          .catch(() => null)
+        return { provider: source.id, repo: remote, authenticated, headSha, merge: merge ?? null }
       },
 
       hydrate: async (input) => {
