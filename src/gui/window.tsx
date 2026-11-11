@@ -856,6 +856,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
           differentTree: project.canonical !== directory,
           onBaseBranch: base?.data.branch?.current === pull.baseBranch,
           clean: cleanFromCheck(baseClean),
+          cleanMessage: baseClean?.message,
         })
         if (!baseDecision.move) return { deleted: false, attempted: branchDeleteAttempted, message: baseDecision.message }
         if (!cleanupSessionMatches(origin.sessionID, session()?.id))

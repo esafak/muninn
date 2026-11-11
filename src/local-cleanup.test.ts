@@ -16,6 +16,26 @@ describe("baseCheckoutDecision", () => {
     expect(baseCheckoutDecision({ ...ready, onBaseBranch: false }).move).toBe(false)
     expect(baseCheckoutDecision({ ...ready, clean: false }).move).toBe(false)
   })
+
+  test("surfaces the clean-check message on fail-closed vetoes without overriding earlier gates", () => {
+    const ready = { differentTree: true, onBaseBranch: true, clean: false }
+    expect(baseCheckoutDecision(ready)).toEqual({
+      move: false,
+      message: "canonical checkout has changes; worktree left intact",
+    })
+    expect(baseCheckoutDecision({ ...ready, cleanMessage: "git failed: timeout" })).toEqual({
+      move: false,
+      message: "git failed: timeout",
+    })
+    expect(baseCheckoutDecision({ ...ready, onBaseBranch: false, cleanMessage: "git failed: timeout" })).toEqual({
+      move: false,
+      message: "canonical checkout is not on the PR base branch; worktree left intact",
+    })
+    expect(baseCheckoutDecision({ ...ready, differentTree: false, cleanMessage: "git failed: timeout" })).toEqual({
+      move: false,
+      message: "worktree is the canonical checkout; left it intact",
+    })
+  })
 })
 
 describe("canonical tracked-only cleanliness", () => {

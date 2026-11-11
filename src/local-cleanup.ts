@@ -54,10 +54,10 @@ export const worktreeOccupancyDecision = (
 
 export const shouldRecordCleanupFailure = (branchDeleteAttempted: boolean, deleted: boolean): boolean => branchDeleteAttempted && !deleted
 
-export const baseCheckoutDecision = (checks: { differentTree: boolean; onBaseBranch: boolean; clean: boolean }): { move: boolean; message?: string } => {
+export const baseCheckoutDecision = (checks: { differentTree: boolean; onBaseBranch: boolean; clean: boolean; cleanMessage?: string }): { move: boolean; message?: string } => {
   if (!checks.differentTree) return { move: false, message: "worktree is the canonical checkout; left it intact" }
   if (!checks.onBaseBranch) return { move: false, message: "canonical checkout is not on the PR base branch; worktree left intact" }
-  if (!checks.clean) return { move: false, message: "canonical checkout has changes; worktree left intact" }
+  if (!checks.clean) return { move: false, message: checks.cleanMessage ?? "canonical checkout has changes; worktree left intact" }
   return { move: true }
 }
 
