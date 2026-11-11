@@ -61,6 +61,21 @@ export const baseCheckoutDecision = (checks: { differentTree: boolean; onBaseBra
   return { move: true }
 }
 
+/** Git status flag for cleanliness checks. Canonical gates use tracked-only
+ * so untracked plan files, `.opencode/`, and nested `.worktrees/` do not veto
+ * a safe `switch`/`ff-only`; the doomed worktree keeps the strict check so no
+ * untracked work is lost on removal. */
+export const untrackedFilesArg = (trackedOnly?: boolean): "--untracked-files=no" | "--untracked-files=all" =>
+  trackedOnly ? "--untracked-files=no" : "--untracked-files=all"
+
+/** Porcelain is clean when it has no rows. Callers treat command failure as
+ * dirty (fail-closed); this helper only classifies captured output. */
+export const isCleanStatus = (output: string): boolean => !output.trim()
+
+/** Fail-closed mapping for the canonical clean RPC: a missing/failed check
+ * never counts as clean. */
+export const cleanFromCheck = (check: { clean: boolean } | undefined): boolean => check?.clean === true
+
 export const fastForwardDecision = (checks: {
   enabled: boolean
   merged: boolean

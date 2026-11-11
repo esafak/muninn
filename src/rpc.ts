@@ -142,9 +142,9 @@ export const Muninn = Rpc.define({
         alreadyHandled: z.boolean().optional(),
       }),
     },
-    /** Check the exact local tree and head before a worktree can be removed. */
+    /** Check the exact local tree and head before a worktree can be removed. trackedOnly gives the canonical caller tracked-only cleanliness (branch/head-SHA validation unchanged); the removal caller omits it and keeps the strict all-files check. */
     checkLocalWorktree: {
-      input: z.object({ directory: z.string(), branch: z.string(), expectedHeadSha: z.string() }),
+      input: z.object({ directory: z.string(), branch: z.string(), expectedHeadSha: z.string(), trackedOnly: z.boolean().optional() }),
       output: z.object({ eligible: z.boolean(), message: z.string().optional() }),
     },
     /** Delete a local PR branch after a clean OpenCode worktree has been removed. force uses an atomic expected-SHA push-lease instead of -d, for a forge-confirmed merge whose squash/rebase tip is not a local ancestor; the lease rejects a concurrently advanced tip and refuses a checked-out branch, and head-SHA identity still applies first. */
@@ -156,6 +156,11 @@ export const Muninn = Rpc.define({
     checkoutBase: {
       input: z.object({ directory: z.string(), baseBranch: z.string() }),
       output: z.object({ switched: z.boolean(), previous: z.string().optional(), message: z.string().optional() }),
+    },
+    /** Tracked-only cleanliness of a canonical checkout for the worktree-flow gate. Untracked files never count; failure is fail-closed (clean false). */
+    checkClean: {
+      input: z.object({ directory: z.string() }),
+      output: z.object({ clean: z.boolean(), message: z.string().optional() }),
     },
     /** Fast-forward a clean local base checkout to its forge's base branch. */
     fastForwardBase: {

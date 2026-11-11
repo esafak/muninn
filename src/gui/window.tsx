@@ -7,7 +7,7 @@ import { deliberateRefs, messageBuckets, wireRefs } from "../extract"
 import type { ArmedEntry, Chain, Entity, PullEntity, RepoRef, RunEntity, RunStatus } from "../model"
 import { chainTone, armedTargets, staleHeadRetryEligible, staleHeadEvidenceUsable, sessionAttemptCurrent, targetRefreshConfirmed, pillPick, pillEligible, mergeReady, mergeWhy, pendingReviewNotice, latestRun, pullForRun, prConflicted, refKey, repoKey, entityKey } from "../model"
 import { githubLexicon } from "../providers/github/lexicon"
-import { baseCheckoutDecision, cleanupDecision, cleanupResultMessage, cleanupSessionMatches, locateCheckout, safeFastForward, sessionMoveConfirmed, shouldFastForwardBase, shouldRecordCleanupFailure, worktreeOccupancyDecision } from "../local-cleanup"
+import { baseCheckoutDecision, cleanFromCheck, cleanupDecision, cleanupResultMessage, cleanupSessionMatches, locateCheckout, safeFastForward, sessionMoveConfirmed, shouldFastForwardBase, shouldRecordCleanupFailure, worktreeOccupancyDecision } from "../local-cleanup"
 import type { CheckoutKind } from "../local-cleanup"
 import { Muninn } from "../rpc"
 import type { definition } from "./definition"
@@ -778,7 +778,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       const sessions = await sessionsAtWorktree(directory)
       const occupancy = worktreeOccupancyDecision(sessions, origin.sessionID, directory, false)
       if (!occupancy.safe) return fail(occupancy.message ?? "another session uses this checkout; local branch left intact")
-      const check = await client.rpc(Muninn).checkLocalWorktree({ directory, branch: pull.headBranch, expectedHeadSha: pull.headSha })
+      const check = await client.rpc(Muninn).checkLocalWorktree({ directory, branch: pull.headBranch, expectedHeadSha: pull.headSha, trackedOnly: true })
       const decision = cleanupDecision({
         enabled: true,
         merged: true,
@@ -851,11 +851,11 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
         })
         if (!decision.remove) return { deleted: false, attempted: branchDeleteAttempted, message: check.message ?? decision.message }
         const base = await client.vcs.get({ location: { directory: project.canonical } }).catch(() => undefined)
-        const baseStatus = await client.vcs.status({ location: { directory: project.canonical } }).catch(() => undefined)
+        const baseClean = await client.rpc(Muninn).checkClean({ directory: project.canonical }).catch(() => undefined)
         const baseDecision = baseCheckoutDecision({
           differentTree: project.canonical !== directory,
           onBaseBranch: base?.data.branch?.current === pull.baseBranch,
-          clean: !!baseStatus && baseStatus.data.length === 0,
+          clean: cleanFromCheck(baseClean),
         })
         if (!baseDecision.move) return { deleted: false, attempted: branchDeleteAttempted, message: baseDecision.message }
         if (!cleanupSessionMatches(origin.sessionID, session()?.id))
