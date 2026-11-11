@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { baseCheckoutDecision, cleanupDecision, cleanupResultMessage, cleanupSessionMatches, fastForwardDecision, isSameRepo, locateCheckout, safeFastForward, selectCanonicalRemote, selectDirectRemote, sessionMoveConfirmed, shouldFastForwardBase, shouldRecordCleanupFailure, worktreeOccupancyDecision } from "./local-cleanup"
+import { baseCheckoutDecision, cleanFromCheck, cleanupDecision, cleanupResultMessage, cleanupSessionMatches, fastForwardDecision, isCleanStatus, isSameRepo, locateCheckout, safeFastForward, selectCanonicalRemote, selectDirectRemote, sessionMoveConfirmed, shouldFastForwardBase, shouldRecordCleanupFailure, untrackedFilesArg, worktreeOccupancyDecision } from "./local-cleanup"
 
 describe("cleanupSessionMatches", () => {
   test("does not redirect an in-flight merge cleanup after switching sessions", () => {
@@ -15,6 +15,48 @@ describe("baseCheckoutDecision", () => {
     expect(baseCheckoutDecision({ ...ready, differentTree: false }).move).toBe(false)
     expect(baseCheckoutDecision({ ...ready, onBaseBranch: false }).move).toBe(false)
     expect(baseCheckoutDecision({ ...ready, clean: false }).move).toBe(false)
+  })
+})
+
+describe("canonical tracked-only cleanliness", () => {
+  test("selects the tracked-only flag for canonical gates and strict for removal", () => {
+    expect(untrackedFilesArg(true)).toBe("--untracked-files=no")
+    expect(untrackedFilesArg()).toBe("--untracked-files=all")
+    expect(untrackedFilesArg(false)).toBe("--untracked-files=all")
+  })
+
+  test("classifies empty output as clean and any rows as dirty", () => {
+    expect(isCleanStatus("")).toBe(true)
+    expect(isCleanStatus(" M src/index.ts\n")).toBe(false)
+    expect(isCleanStatus("?? .worktrees/feature/dependency-check-mode/\n")).toBe(false)
+  })
+
+  test("canonical gate moves on tracked-only clean and vetoes tracked dirt", () => {
+    // Tracked-only `git status --untracked-files=no` suppresses `??` rows, so
+    // the canonical gate sees "" while the strict removal gate would see the
+    // untracked rows.
+    const trackedOnlyClean = isCleanStatus("")
+    expect(baseCheckoutDecision({ differentTree: true, onBaseBranch: true, clean: trackedOnlyClean })).toEqual({ move: true })
+    const trackedDirty = isCleanStatus(" M src/index.ts\n")
+    expect(baseCheckoutDecision({ differentTree: true, onBaseBranch: true, clean: trackedDirty })).toEqual({
+      move: false,
+      message: "canonical checkout has changes; worktree left intact",
+    })
+  })
+
+  test("removal gate stays strict: untracked rows still veto", () => {
+    const strictSeesUntracked = isCleanStatus("?? plan.md\n")
+    expect(strictSeesUntracked).toBe(false)
+    expect(
+      cleanupDecision({ enabled: true, merged: true, sameRepo: true, managedWorktree: true, branchMatches: true, headMatches: true, clean: strictSeesUntracked }),
+    ).toEqual({ remove: false, message: "local worktree has changes; left it intact" })
+  })
+
+  test("missing checkClean result is fail-closed", () => {
+    expect(cleanFromCheck(undefined)).toBe(false)
+    expect(cleanFromCheck({ clean: true })).toBe(true)
+    expect(cleanFromCheck({ clean: false })).toBe(false)
+    expect(baseCheckoutDecision({ differentTree: true, onBaseBranch: true, clean: cleanFromCheck(undefined) }).move).toBe(false)
   })
 })
 

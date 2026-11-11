@@ -12,7 +12,7 @@ import { jsonReady } from "./model"
 import type { SourceProvider } from "./providers/types"
 import { parseRemoteUrl, readRemote } from "./remote"
 import { Muninn } from "./rpc"
-import { fastForwardDecision, selectCanonicalRemote, selectDirectRemote } from "./local-cleanup"
+import { fastForwardDecision, isCleanStatus, selectCanonicalRemote, selectDirectRemote, untrackedFilesArg } from "./local-cleanup"
 import { execFile } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { promisify } from "node:util"
@@ -20,15 +20,15 @@ import { coordinateMerge } from "./merge-coordinator"
 
 const exec = promisify(execFile)
 const safeBranch = (branch: string): boolean => Boolean(branch) && !branch.startsWith("-") && !branch.includes("..")
-const checkLocalWorktree = async (directory: string, branch: string, expectedHeadSha: string) => {
+const checkLocalWorktree = async (directory: string, branch: string, expectedHeadSha: string, trackedOnly = false) => {
   if (!safeBranch(branch)) return { eligible: false, message: "local branch name is not safe to remove" }
   try {
     const current = (await exec("git", ["-C", directory, "branch", "--show-current"], { timeout: 5_000 })).stdout.trim()
     if (current !== branch) return { eligible: false, message: "local worktree is not on the PR branch; left it intact" }
     const head = (await exec("git", ["-C", directory, "rev-parse", `refs/heads/${branch}`], { timeout: 5_000 })).stdout.trim()
     if (head !== expectedHeadSha) return { eligible: false, message: "local branch differs from the merged PR head; left it intact" }
-    const status = (await exec("git", ["-C", directory, "status", "--porcelain", "--untracked-files=all"], { timeout: 5_000 })).stdout
-    if (status.trim()) return { eligible: false, message: "local worktree has changes; left it intact" }
+    const status = (await exec("git", ["-C", directory, "status", "--porcelain", untrackedFilesArg(trackedOnly)], { timeout: 5_000 })).stdout
+    if (!isCleanStatus(status)) return { eligible: false, message: "local worktree has changes; left it intact" }
     return { eligible: true }
   } catch (error) {
     return { eligible: false, message: error instanceof Error ? error.message : String(error) }
@@ -71,15 +71,17 @@ const deleteLocalBranch = async (directory: string, branch: string, expectedHead
   }
 }
 /** Switch a canonical checkout to its base branch after a merge. The caller
- * verifies PR ownership and head identity; this re-checks cleanliness at the
- * environment boundary so no uncommitted work is carried across branches. */
+ * verifies PR ownership and head identity; this re-checks tracked dirt at the
+ * environment boundary so no staged/tracked work is carried across branches.
+ * Untracked files intentionally ride along (same as fast-forward): `switch`
+ * either preserves them or fails safely on overwrite, which we report intact. */
 const switchToBase = async (directory: string, branch: string) => {
   if (!safeBranch(branch)) return { switched: false, message: "base branch name is invalid" }
   try {
     const current = (await exec("git", ["-C", directory, "branch", "--show-current"], { timeout: 5_000 })).stdout.trim()
     if (current === branch) return { switched: false, previous: current }
-    const status = (await exec("git", ["-C", directory, "status", "--porcelain", "--untracked-files=all"], { timeout: 5_000 })).stdout
-    if (status.trim()) return { switched: false, previous: current, message: "local checkout has changes; left it intact" }
+    const status = (await exec("git", ["-C", directory, "status", "--porcelain", untrackedFilesArg(true)], { timeout: 5_000 })).stdout
+    if (!isCleanStatus(status)) return { switched: false, previous: current, message: "local checkout has changes; left it intact" }
     // Branch-only semantics: unlike `checkout`, `switch` never detaches HEAD
     // onto a same-named tag. Verify the landing spot regardless.
     await exec("git", ["-C", directory, "switch", branch], { timeout: 5_000 })
@@ -88,6 +90,18 @@ const switchToBase = async (directory: string, branch: string) => {
     return { switched: true, previous: current }
   } catch (error) {
     return { switched: false, message: error instanceof Error ? error.message : String(error) }
+  }
+}
+/** Tracked-only cleanliness for the worktree-flow canonical gate. Untracked
+ * files never count; any command failure is fail-closed (clean false) so a
+ * missing checkout cannot pass the gate. */
+const checkClean = async (directory: string) => {
+  try {
+    const status = (await exec("git", ["-C", directory, "status", "--porcelain", untrackedFilesArg(true)], { timeout: 5_000 })).stdout
+    if (!isCleanStatus(status)) return { clean: false, message: "canonical checkout has changes; worktree left intact" }
+    return { clean: true }
+  } catch (error) {
+    return { clean: false, message: error instanceof Error ? error.message : String(error) }
   }
 }
 const fastForwardBase = async (
@@ -256,9 +270,10 @@ export default Plugin.define({
           source.merge(repo, input.number, input.method, input.expectedHeadSha, () => source.auth(ctx)),
         )
       },
-      checkLocalWorktree: async (input) => checkLocalWorktree(input.directory, input.branch, input.expectedHeadSha),
+      checkLocalWorktree: async (input) => checkLocalWorktree(input.directory, input.branch, input.expectedHeadSha, input.trackedOnly ?? false),
       deleteLocalBranch: async (input) => deleteLocalBranch(input.directory, input.branch, input.expectedHeadSha, input.force ?? false),
       checkoutBase: async (input) => switchToBase(input.directory, input.baseBranch),
+      checkClean: async (input) => checkClean(input.directory),
       fastForwardBase: async (input) => {
         const source = sourceFor(input.repo.host)
         const auth = () => source!.auth(ctx)
