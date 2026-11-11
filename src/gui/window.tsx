@@ -936,7 +936,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
                       ? `Muninn is driving the merge (${lead().pull.autoMerge ? "also armed on the forge" : "armed locally"}); ${mergeReady(lead().chain, lead().pull, waitForAllStatusChecks()) ? "merging on the next check (within ~30s)" : `waiting: ${mergeWhy(lead().chain, lead().pull, waitForAllStatusChecks())}`} — click to cancel`
                       : mergeReady(lead().chain, lead().pull, waitForAllStatusChecks())
                         ? "green now — Muninn merges on its next check (within ~30s)"
-                        : `Muninn merges when checks pass and reviews approve — now blocked: ${mergeWhy(lead().chain, lead().pull, waitForAllStatusChecks())}`
+                        : `Muninn merges once checks pass and merge requirements are satisfied — now blocked: ${mergeWhy(lead().chain, lead().pull, waitForAllStatusChecks())}`
                   }
                 >
                   <input
