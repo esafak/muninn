@@ -492,7 +492,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       const reviewNotice = pendingReviewNotice(pull)
       const ok = await ctx.dialogs.confirm({
         title: `Merge PR #${pull.number} when ready?`,
-        description: `Muninn watches "${pull.title}" and merges into ${pull.baseBranch} with ${method} as soon as checks pass and reviews approve.${fastForward ? ` It will also fast-forward the local ${pull.baseBranch} when safe.` : ""}${deleteBranch ? ` It will delete the clean local tree and branch ${pull.headBranch} when possible.` : ""}${reviewNotice ? ` ${reviewNotice[0]!.toUpperCase()}${reviewNotice.slice(1)} — arming proceeds without an approval.` : ""} You can cancel any time.`,
+        description: `Muninn watches "${pull.title}" and merges into ${pull.baseBranch} with ${method} once checks pass and merge requirements are satisfied.${fastForward ? ` It will also fast-forward the local ${pull.baseBranch} when safe.` : ""}${deleteBranch ? ` It will delete the clean local tree and branch ${pull.headBranch} when possible.` : ""}${reviewNotice ? ` ${reviewNotice[0]!.toUpperCase()}${reviewNotice.slice(1)} — arming proceeds without an approval.` : ""} You can cancel any time.`,
         confirm: "Merge when ready",
       })
       if (!ok) return
@@ -826,7 +826,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       return {
         icon: circle,
         label: lead
-          ? `${pending ? `${SPIN_FRAMES[spin()]} ` : ""}#${lead.number} ${short(lead.title)}${lead.state === "merged" ? " · merged" : ""} ▾`
+          ? `${pending ? `${SPIN_FRAMES[spin()]} ` : ""}#${lead.number} ${short(lead.title)}${lead.state === "merged" ? ` · ${ctx.t("state.merged")}` : ""} ▾`
           : `run #${run!.id}${run!.status === "succeeded" ? "" : ` · ${ctx.t(`state.${run!.status}`)}`} ▾`,
         tone,
         title: lead
