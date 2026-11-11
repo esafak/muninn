@@ -39,8 +39,8 @@ interface PullJson {
   updated_at: string
   head: { sha: string; ref: string }
   base: { ref: string }
-  mergeable: boolean | null
-  mergeable_state: "clean" | "blocked" | "unstable" | "dirty" | "draft" | "has_hooks" | "unknown" | string
+  mergeable?: boolean | null
+  mergeable_state?: "clean" | "blocked" | "unstable" | "dirty" | "draft" | "has_hooks" | "unknown" | string | null
   auto_merge: { merge_method: "merge" | "squash" | "rebase" } | null
 }
 
@@ -260,6 +260,13 @@ const loadPages = async <T>(path: string, field: "statuses" | "check_runs", auth
 
 /** Whether this PR state can be merged and therefore needs current checks. */
 export const shouldLoadStatusChecks = (pull: Pick<PullEntity, "state">): boolean => pull.state === "open"
+
+/** Keep detail-endpoint evidence when branch discovery also found this PR. */
+export const branchPullSnapshot = (
+  listed: PullEntity,
+  detailed: PullEntity | undefined,
+  fallbackChecks: PullEntity["statusChecks"],
+): PullEntity => detailed ?? (fallbackChecks ? { ...listed, statusChecks: fallbackChecks } : listed)
 
 /** Opaque, auth-scoped status cache identity. Never stores or logs the raw token. */
 export const statusCheckCacheKey = (repo: RepoRef, headSha: string, token: string | undefined): string => {
@@ -663,9 +670,20 @@ export const github: SourceProvider = {
       // Branch runs are push-triggered: their pull_requests array comes back empty,
       // so query the branch's open PRs and let the GUI associate by head SHA.
       const pulls = await pullsForBranch(repo, branch, auth).catch(() => [] as PullEntity[])
-      const prs = await Promise.all(pulls.map(async (pull) =>
-        shouldLoadStatusChecks(pull) ? { ...pull, statusChecks: await loadStatusChecks(repo, pull.headSha, auth) } : pull,
-      ))
+      const prs = await Promise.all(pulls.map(async (pull) => {
+        if (!shouldLoadStatusChecks(pull)) return branchPullSnapshot(pull, undefined, undefined)
+        // The pulls list endpoint is association-only and omits mergeability and
+        // review details. Prefer the cached `/pulls/{number}` entity so this
+        // branch-run result cannot overwrite richer hydration in the GUI.
+        const detailed = await cached(
+          `${repositoryCacheKey(repo)}#pr${pull.number}`,
+          repo,
+          () => hydratePull(repo, pull.number, auth),
+        ).catch(() => undefined)
+        const detailedPull = detailed?.kind === "pr" ? detailed : undefined
+        const fallbackChecks = detailedPull ? undefined : await loadStatusChecks(repo, pull.headSha, auth)
+        return branchPullSnapshot(pull, detailedPull, fallbackChecks)
+      }))
       if (epoch !== repositoryEpoch(repo))
         return retries > 0 ? load(retries - 1) : { runs: [], prs: [] }
       return { runs: runEntities, prs }
