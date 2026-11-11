@@ -454,9 +454,11 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
         const update = await fastForwardLocalBase(origin, pull)
         description += ` · ${update.message ?? (update.fastForwarded ? "local base fast-forwarded" : "local base unchanged")}`
       }
-      const cleanup = kind === "canonical"
-        ? await cleanupCanonicalBranch(origin, pull)
+      const raw = kind === "canonical"
+        ? await cleanupCanonicalBranch(origin, pull, fastForward)
         : await cleanupTreeAndBranch(origin, pull)
+      // Normalise: only the canonical path reports the base-update attempt.
+      const cleanup = { ...raw, fastForwardAttempted: "fastForwardAttempted" in raw ? raw.fastForwardAttempted : false }
       if (cleanup.deleted) {
         record(pull, "branch-deleted", via, method)
         description += ` · ${cleanup.message}`
@@ -464,6 +466,13 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
         if (shouldRecordCleanupFailure(cleanup.attempted, cleanup.deleted))
           record(pull, "branch-delete-failed", via, method, cleanup.message)
         description += ` · ${cleanup.message}`
+      }
+      // A canonical bail before switching (already on base, dirty tree, not
+      // on the PR branch) skips the in-flow update: fall back to the
+      // standalone fast-forward unless one already ran.
+      if (kind === "canonical" && fastForward && !cleanup.fastForwardAttempted) {
+        const update = await fastForwardLocalBase(origin, pull)
+        description += ` · ${update.message ?? (update.fastForwarded ? "local base fast-forwarded" : "local base unchanged")}`
       }
     } else if (fastForward) {
       const update = await fastForwardLocalBase(origin, pull)
@@ -746,24 +755,29 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
   /** Post-merge cleanup for a canonical checkout: the session stays put, so
    * switch it to the base branch, fast-forward when enabled, and delete the
    * merged branch. Force-deletion is safe here: the PR merged on the forge,
-   * the local tip equals the merged head, and the tree is clean. */
+   * the local tip equals the merged head, and the tree is clean. Reports
+   * whether the base update ran so the caller can fall back to a standalone
+   * fast-forward when cleanup bails first. */
   const cleanupCanonicalBranch = async (
     origin: { sessionID: string; directory: string; repo: RepoRef | null | undefined },
     pull: PullEntity,
+    fastForward: boolean,
   ) => {
     const client = ctx.client
     let branchDeleteAttempted = false
+    let fastForwardAttempted = false
+    const parts: string[] = []
+    const fail = (message: string) => ({ deleted: false, attempted: branchDeleteAttempted, fastForwardAttempted, message: [...parts, message].join(" · ") })
     try {
       if (!cleanupSessionMatches(origin.sessionID, session()?.id))
-        return { deleted: false, attempted: branchDeleteAttempted, message: "active session changed during merge; local checkout left intact" }
+        return fail("active session changed during merge; local checkout left intact")
       const directory = origin.directory
       const sameRepo = !!origin.repo && repoKey(origin.repo) === repoKey(pull.repo)
       if (!sameRepo)
-        return { deleted: false, attempted: branchDeleteAttempted, message: cleanupDecision({ enabled: true, merged: true, sameRepo, managedWorktree: false, branchMatches: false, headMatches: false, clean: false }).message }
+        return fail(cleanupDecision({ enabled: true, merged: true, sameRepo, managedWorktree: false, branchMatches: false, headMatches: false, clean: false }).message ?? "PR belongs to another repository; local checkout left intact")
       const sessions = await sessionsAtWorktree(directory)
       const occupancy = worktreeOccupancyDecision(sessions, origin.sessionID, directory, false)
-      if (!occupancy.safe)
-        return { deleted: false, attempted: branchDeleteAttempted, message: "another session uses this checkout; local branch left intact" }
+      if (!occupancy.safe) return fail(occupancy.message ?? "another session uses this checkout; local branch left intact")
       const check = await client.rpc(Muninn).checkLocalWorktree({ directory, branch: pull.headBranch, expectedHeadSha: pull.headSha })
       const decision = cleanupDecision({
         enabled: true,
@@ -774,25 +788,33 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
         headMatches: check.eligible,
         clean: check.eligible,
       })
-      if (!decision.remove) return { deleted: false, attempted: branchDeleteAttempted, message: check.message ?? decision.message }
+      if (!decision.remove) return fail(check.message ?? decision.message ?? "local checkout is not ready; left it intact")
       if (!cleanupSessionMatches(origin.sessionID, session()?.id))
-        return { deleted: false, attempted: branchDeleteAttempted, message: "active session changed during cleanup; checkout left intact" }
+        return fail("active session changed during cleanup; checkout left intact")
       const switched = await client.rpc(Muninn).checkoutBase({ directory, baseBranch: pull.baseBranch })
       if (!switched.switched && switched.previous !== pull.baseBranch)
-        return { deleted: false, attempted: branchDeleteAttempted, message: switched.message ?? `could not switch to ${pull.baseBranch}; checkout left intact` }
-      const parts = [`switched to ${pull.baseBranch}`]
-      if (shouldFastForwardBase(ctx.stores.settings.value.fastForwardBase ?? false, true)) {
+        return fail(switched.message ?? `could not switch to ${pull.baseBranch}; checkout left intact`)
+      parts.push(switched.switched ? `switched to ${pull.baseBranch}` : `already on ${pull.baseBranch}`)
+      if (fastForward) {
+        fastForwardAttempted = true
         const update = await fastForwardLocalBase(origin, pull)
         parts.push(update.message ?? (update.fastForwarded ? "local base fast-forwarded" : "local base unchanged"))
       }
       branchDeleteAttempted = true
       const result = await client.rpc(Muninn).deleteLocalBranch({ directory, branch: pull.headBranch, expectedHeadSha: pull.headSha, force: true })
-      return result.deleted
-        ? { deleted: true, attempted: branchDeleteAttempted, message: [...parts, `local branch ${pull.headBranch} deleted`].join(" · ") }
-        : { deleted: false, attempted: branchDeleteAttempted, message: [...parts, result.message ?? "local branch could not be safely deleted"].join(" · ") }
+      if (result.deleted)
+        return { deleted: true, attempted: branchDeleteAttempted, fastForwardAttempted, message: [...parts, `local branch ${pull.headBranch} deleted`].join(" · ") }
+      return fail(result.message ?? "local branch could not be safely deleted")
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error)
-      return { deleted: false, attempted: branchDeleteAttempted, message: `local cleanup failed; checkout and branch left intact: ${detail}` }
+      return {
+        deleted: false,
+        attempted: branchDeleteAttempted,
+        fastForwardAttempted,
+        message: parts.length > 0
+          ? [...parts, `local cleanup failed: ${detail}`].join(" · ")
+          : `local cleanup failed; checkout and branch left intact: ${detail}`,
+      }
     }
   }
 
