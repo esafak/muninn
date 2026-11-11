@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { mergeResponse, staleHeadConflict, toPullEntity, runEntity, toIssueEntity, checkStatus, statusCheckSnapshot, combineStatusCheckResults, decodeStatusPage, collectStatusPages, cachedPromise, statusCheckCacheKey, shouldLoadStatusChecks, branchPullSnapshot, invalidatePullCacheEntries } from "./github"
+import { mergeResponse, staleHeadConflict, toPullEntity, runEntity, toIssueEntity, checkStatus, statusCheckSnapshot, combineStatusCheckResults, decodeStatusPage, collectStatusPages, cachedPromise, statusCheckCacheKey, shouldLoadStatusChecks, branchPullSnapshot, invalidatePullCacheEntries, repoFromUrl, repoFromFullName } from "./github"
 import { PullEntity, RunEntity as RunEntitySchema } from "../rpc"
 
 describe("mergeResponse", () => {
@@ -398,5 +398,42 @@ describe("checkStatus", () => {
   test("treats skipped jobs as succeeded and cancelled jobs as cancelled", () => {
     expect(checkStatus({ status: "completed", conclusion: "skipped" })).toBe("succeeded")
     expect(checkStatus({ status: "completed", conclusion: "cancelled" })).toBe("cancelled")
+  })
+})
+
+describe("repo canonicalization (renames)", () => {
+  const stale = { host: "github.com", owner: "esafak", repo: "kotlinx-serialization-typescript-generator" }
+
+  test("html_url wins over a stale request repo", () => {
+    const pull = toPullEntity(stale, {
+      node_id: "n1",
+      number: 99,
+      title: "T",
+      state: "open",
+      draft: false,
+      merged_at: null,
+      body: null,
+      html_url: "https://github.com/esafak/kotlin-tsgen/pull/99",
+      head: { sha: "abc", ref: "feat/branded-types" },
+      base: { ref: "main" },
+      updated_at: "2026-11-10T00:00:00Z",
+      auto_merge: null,
+    })
+    expect(pull.repo).toEqual({ host: "github.com", owner: "esafak", repo: "kotlin-tsgen" })
+  })
+
+  test("full_name wins over a stale remote", () => {
+    expect(repoFromFullName("esafak/kotlin-tsgen", stale)).toEqual({
+      host: "github.com",
+      owner: "esafak",
+      repo: "kotlin-tsgen",
+    })
+    expect(repoFromFullName(undefined, stale)).toEqual(stale)
+    expect(repoFromFullName("bogus", stale)).toEqual(stale)
+  })
+
+  test("malformed urls fall back to the request repo", () => {
+    expect(repoFromUrl(undefined, stale)).toEqual(stale)
+    expect(repoFromUrl("not a url", stale)).toEqual(stale)
   })
 })

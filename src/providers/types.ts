@@ -41,6 +41,8 @@ export interface SourceProvider {
   auth: (ctx: unknown) => Promise<string | undefined>
   /** The repo's merge policy; undefined when unknown or unsupported. */
   mergeSettings: (repo: RepoRef, auth: Auth) => Promise<MergeSettings | undefined>
+  /** Canonical owner/repo following renames; undefined when unknown. Defaults to the input. */
+  canonicalRepo?: (repo: RepoRef, auth: Auth) => Promise<RepoRef | undefined>
   /** Hydrates references into entities; everything not hydrated is reported unresolved. */
   hydrate: (refs: readonly (Ref & { repo: RepoRef })[], sessionRepo: RepoRef | undefined, auth: Auth) => Promise<Hydration>
   /** Recent runs of one branch plus the branch's open PRs, for GUI-side association. */

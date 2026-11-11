@@ -96,6 +96,8 @@ export const Muninn = Rpc.define({
         repo: RepoRef.nullable(),
         /** Whether a write/read credential is available (authenticated requests, private repos). */
         authenticated: z.boolean(),
+        /** Local HEAD SHA of the session directory, when it is a git checkout. */
+        headSha: z.string().nullable(),
         /** The repo's merge policy; null when the provider is unknown or unsupported. */
         merge: z
           .object({

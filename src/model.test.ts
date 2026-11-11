@@ -562,7 +562,7 @@ describe("pillEligible", () => {
   const elsewhere = "fix/other-session"
   const branched = (headBranch: string, over: Partial<PullEntity> = {}): Chain =>
     chain({ prs: [pull({ headBranch, ...over })] })
-  const ctx = (over: { sessionBranch?: string; sessionRepo?: RepoRef; armed?: { repo: RepoRef; number: number }[] } = {}) => ({
+  const ctx = (over: { sessionBranch?: string; sessionRepo?: RepoRef; sessionHeadSha?: string; armed?: { repo: RepoRef; number: number }[] } = {}) => ({
     sessionBranch: own,
     sessionRepo: repo,
     ...over,
@@ -628,6 +628,16 @@ describe("pillEligible", () => {
   test("issue-only chains and settled run-only chains stay in the sidebar", () => {
     expect(pillEligible(chain({ prs: [], runs: [], issues: [issue("open")] }), ctx())).toBe(false)
     expect(pillEligible(chain({ prs: [], runs: [run("succeeded")] }), ctx())).toBe(false)
+  })
+
+  test("a push from any local branch counts as own work via HEAD-SHA match", () => {
+    const pushed = chain({ prs: [pull({ headBranch: elsewhere, headSha: "dd18b294" })] })
+    expect(pillEligible(pushed, ctx({ sessionHeadSha: "dd18b294" }))).toBe(true)
+    expect(pillEligible(pushed, ctx({ sessionHeadSha: "other-sha" }))).toBe(false)
+    // Closed-without-merge still drops out, and the match stays repo-scoped.
+    expect(pillEligible(chain({ prs: [pull({ headBranch: elsewhere, headSha: "dd18b294", state: "closed" })] }), ctx({ sessionHeadSha: "dd18b294" }))).toBe(false)
+    const foreign = { host: "github.com", owner: "other", repo: "repo" }
+    expect(pillEligible(chain({ prs: [pull({ headBranch: elsewhere, headSha: "dd18b294", repo: foreign })] }), ctx({ sessionHeadSha: "dd18b294" }))).toBe(false)
   })
 
   test("without a session branch, only the attention rules apply", () => {

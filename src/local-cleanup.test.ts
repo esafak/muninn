@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { baseCheckoutDecision, cleanupDecision, cleanupResultMessage, cleanupSessionMatches, fastForwardDecision, safeFastForward, sessionMoveConfirmed, shouldFastForwardBase, shouldRecordCleanupFailure, worktreeOccupancyDecision } from "./local-cleanup"
+import { baseCheckoutDecision, cleanupDecision, cleanupResultMessage, cleanupSessionMatches, fastForwardDecision, isSameRepo, safeFastForward, selectCanonicalRemote, selectDirectRemote, sessionMoveConfirmed, shouldFastForwardBase, shouldRecordCleanupFailure, worktreeOccupancyDecision } from "./local-cleanup"
 
 describe("cleanupSessionMatches", () => {
   test("does not redirect an in-flight merge cleanup after switching sessions", () => {
@@ -205,5 +205,35 @@ describe("cleanupResultMessage", () => {
     expect(cleanupResultMessage(false, false, "worktree was dirty")).toBe("worktree was dirty")
     expect(cleanupResultMessage(true, true, undefined, true)).toBe("session switched to the base checkout; local tree and branch deleted")
     expect(cleanupResultMessage(false, false, "removal failed", true)).toBe("session switched to the base checkout; old worktree left intact: removal failed")
+  })
+})
+
+describe("remote selection (renames)", () => {
+  const expected = { host: "github.com", owner: "esafak", repo: "kotlin-tsgen" }
+  const stale = { host: "github.com", owner: "esafak", repo: "kotlinx-serialization-typescript-generator" }
+
+  test("direct match is case-insensitive and first wins", () => {
+    expect(selectDirectRemote([{ name: "origin", remote: expected }], expected)).toBe("origin")
+    expect(selectDirectRemote([{ name: "origin", remote: { ...expected, owner: "ESafak", repo: "Kotlin-Tsgen" } }], expected)).toBe("origin")
+    expect(selectDirectRemote([{ name: "unrelated", remote: { host: "github.com", owner: "other", repo: "repo" } }], expected)).toBeUndefined()
+    expect(selectDirectRemote([{ name: "broken", remote: undefined }], expected)).toBeUndefined()
+  })
+
+  test("canonical match tolerates a stale alias without blocking later candidates", () => {
+    const candidates = [
+      { name: "upstream", remote: { host: "github.com", owner: "other", repo: "repo" } },
+      { name: "origin", remote: stale },
+      { name: "backup", remote: stale },
+    ]
+    expect(selectCanonicalRemote(candidates, expected, new Map())).toBeUndefined()
+    expect(selectCanonicalRemote(candidates, expected, new Map([["origin", undefined], ["backup", expected]]))).toBe("backup")
+    expect(selectCanonicalRemote(candidates, expected, new Map([["origin", expected]]))).toBe("origin")
+  })
+
+  test("canonical match stays same-host and case-insensitive", () => {
+    const otherHost = [{ name: "origin", remote: stale }]
+    expect(selectCanonicalRemote(otherHost, { ...expected, host: "ghe.example" }, new Map([["origin", expected]]))).toBeUndefined()
+    expect(isSameRepo({ ...expected, repo: "KOTLIN-TSGEN" }, expected)).toBe(true)
+    expect(isSameRepo(stale, expected)).toBe(false)
   })
 })
