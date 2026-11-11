@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { mergeResponse, staleHeadConflict, toPullEntity, runEntity, toIssueEntity, statusCheckSnapshot, combineStatusCheckResults, decodeStatusPage, collectStatusPages, cachedPromise, statusCheckCacheKey, shouldLoadStatusChecks, branchPullSnapshot, invalidatePullCacheEntries } from "./github"
+import { mergeResponse, staleHeadConflict, toPullEntity, runEntity, toIssueEntity, checkStatus, statusCheckSnapshot, combineStatusCheckResults, decodeStatusPage, collectStatusPages, cachedPromise, statusCheckCacheKey, shouldLoadStatusChecks, branchPullSnapshot, invalidatePullCacheEntries } from "./github"
 import { PullEntity, RunEntity as RunEntitySchema } from "../rpc"
 
 describe("mergeResponse", () => {
@@ -368,5 +368,18 @@ describe("strict JSON boundary", () => {
       updated_at: "2026-11-10T00:00:00Z",
     })
     expect(jsonIssues(issue)).toEqual([])
+  })
+
+  test("treats skipped workflow runs and jobs as successful, not merge-blocking cancellation", async () => {
+    const skippedRun = await runEntity(repo, {
+      id: 3, workflow_id: 777, name: "optional", display_title: "optional", status: "completed",
+      conclusion: "skipped", head_branch: "main", head_sha: "abc",
+      html_url: "https://github.com/octo/repo/actions/runs/3", updated_at: "2026-11-10T00:00:00Z",
+      pull_requests: [],
+    }, async () => undefined, false)
+    expect(skippedRun.status).toBe("succeeded")
+    expect(skippedRun.checks).toEqual([])
+    expect(checkStatus({ status: "completed", conclusion: "skipped" })).toBe("succeeded")
+    expect(checkStatus({ status: "completed", conclusion: "cancelled" })).toBe("cancelled")
   })
 })

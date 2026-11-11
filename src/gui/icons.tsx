@@ -108,7 +108,7 @@ export const CancelledGlyph = (): JSX.Element =>
   svg(
     <g fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
       <circle cx="8" cy="8" r="6" />
-      <path d="m5 5 6 6" />
+      <path d="m5 11 6-6" />
     </g>,
   )
 
