@@ -112,6 +112,12 @@ export const mergeResponse = (body: unknown): { merged: boolean; message?: strin
 export const staleHeadConflict = (status: number, expectedHeadSha: string, currentHeadSha: string | undefined): boolean =>
   status === 409 && currentHeadSha !== undefined && currentHeadSha !== expectedHeadSha
 
+/** A failed merge PUT that actually confirms an already-merged PR: a post-grace
+ * retry reaching the forge after dedupe expiry. Only a truthy `merged_at`
+ * counts — a closed-unmerged or open PR keeps the original failure. */
+export const mergeAlreadyHandled = (status: number, latest: { merged_at: string | null } | undefined): boolean =>
+  status === 405 && !!latest?.merged_at
+
 const request = async <T>(path: string, auth: Auth): Promise<T | undefined> => {
   const token = await auth()
   const response = await fetch(`${API}${path}`, {
@@ -756,11 +762,15 @@ export const github: SourceProvider = {
     })
     if (!merge.ok) {
       const detail = await merge.json().catch(() => ({ message: merge.statusText }))
-      const latest = merge.status === 409
+      const latest = merge.status === 409 || merge.status === 405
         ? await request<PullJson>(`/repos/${repo.owner}/${repo.repo}/pulls/${number}`, auth).catch(() => undefined)
         : undefined
       const headChanged = staleHeadConflict(merge.status, expectedHeadSha, latest?.head.sha)
       if (headChanged && latest) invalidatePullCaches(repo, number)
+      if (mergeAlreadyHandled(merge.status, latest)) {
+        invalidatePullCaches(repo, number)
+        return { merged: false, alreadyHandled: true }
+      }
       return {
         merged: false,
         message: `GitHub ${merge.status}: ${(detail as { message?: string }).message ?? merge.statusText}`,

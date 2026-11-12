@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { mergeResponse, staleHeadConflict, toPullEntity, runEntity, toIssueEntity, checkStatus, statusCheckSnapshot, combineStatusCheckResults, decodeStatusPage, collectStatusPages, cachedPromise, statusCheckCacheKey, shouldLoadStatusChecks, branchPullSnapshot, invalidatePullCacheEntries, repoFromUrl, repoFromFullName } from "./github"
+import { mergeResponse, staleHeadConflict, mergeAlreadyHandled, toPullEntity, runEntity, toIssueEntity, checkStatus, statusCheckSnapshot, combineStatusCheckResults, decodeStatusPage, collectStatusPages, cachedPromise, statusCheckCacheKey, shouldLoadStatusChecks, branchPullSnapshot, invalidatePullCacheEntries, repoFromUrl, repoFromFullName } from "./github"
 import { PullEntity, RunEntity as RunEntitySchema } from "../rpc"
 
 describe("mergeResponse", () => {
@@ -45,6 +45,23 @@ describe("staleHeadConflict", () => {
     expect(staleHeadConflict(409, "head", "head")).toBe(false)
     expect(staleHeadConflict(409, "head", undefined)).toBe(false)
     expect(staleHeadConflict(422, "old-head", "new-head")).toBe(false)
+  })
+})
+
+describe("mergeAlreadyHandled", () => {
+  test("a 405 against a merged PR is already handled", () => {
+    expect(mergeAlreadyHandled(405, { merged_at: "2026-11-10T00:33:47Z" })).toBe(true)
+  })
+
+  test("closed-unmerged, open, and absent PRs keep the original 405 failure", () => {
+    expect(mergeAlreadyHandled(405, { merged_at: null })).toBe(false)
+    expect(mergeAlreadyHandled(405, undefined)).toBe(false)
+  })
+
+  test("other statuses never count, even with a merge timestamp", () => {
+    expect(mergeAlreadyHandled(409, { merged_at: "2026-11-10T00:33:47Z" })).toBe(false)
+    expect(mergeAlreadyHandled(422, { merged_at: "2026-11-10T00:33:47Z" })).toBe(false)
+    expect(mergeAlreadyHandled(200, { merged_at: "2026-11-10T00:33:47Z" })).toBe(false)
   })
 })
 
