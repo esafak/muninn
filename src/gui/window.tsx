@@ -10,7 +10,7 @@ import { bareKindKept, bareSurvives } from "../candidates/filtering"
 import { defaultModelFor, validateModelSyntax } from "../candidates/model-id"
 import { isDecisionBackend } from "../candidates/types"
 import type { ArmedEntry, Chain, Entity, Pin, PullEntity, RepoRef, RunEntity, RunStatus } from "../model"
-import { chainTone, armedTargets, staleHeadRetryEligible, staleHeadEvidenceUsable, sessionAttemptCurrent, targetRefreshConfirmed, pillPick, pillEligible, pinnedChain, pinForChain, isFreshBaseSession, mergeReady, mergeWhy, pendingReviewNotice, latestRun, pullForRun, prConflicted, refKey, repoKey, entityKey } from "../model"
+import { chainTone, armedTargets, staleHeadRetryEligible, staleHeadEvidenceUsable, sessionAttemptCurrent, targetRefreshConfirmed, pillPick, pillEligible, pinnedChain, pinForChain, isFreshBaseSession, mergeReady, mergeWhy, pendingReviewNotice, latestRun, pullForRun, prConflicted, refKey, repoKey, entityKey, menuChains } from "../model"
 import { githubLexicon } from "../providers/github/lexicon"
 import { baseCheckoutDecision, cleanFromCheck, cleanupDecision, cleanupResultMessage, cleanupSessionMatches, locateCheckout, safeFastForward, sessionMoveConfirmed, shouldFastForwardBase, shouldRecordCleanupFailure, worktreeOccupancyDecision } from "../local-cleanup"
 import type { CheckoutKind } from "../local-cleanup"
@@ -1323,11 +1323,12 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       // The icon shape encodes the provider merge state; pill tone still encodes
       // overall chain health. The label stays `#number title ⌄`. An armed lead PR
       // puts a ticking braille spinner in front: a merge is pending. A pinned
-      // override shows no mark: the pill looks the same either way.
+      // override is marked in the tooltip, not the label.
       const mergeStatus = lead?.state === "open" ? lead.mergeState : undefined
       const circle = pillStatusIcon(lead?.state, mergeStatus, tone, pillIcon(meta.provider))
       const pending = lead?.state === "open" ? isArmed(lead) : false
       const short = (title: string): string => (title.length > 24 ? `${title.slice(0, 24)}…` : title)
+      const pinnedSuffix = picked.reason === "pinned" ? ` · ${ctx.t("pill.pinned")}` : ""
 
       return {
         icon: circle,
@@ -1340,8 +1341,8 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
             ? ` · merged${lead.mergedAt === undefined ? "" : ` · ${new Date(lead.mergedAt).toLocaleString()}`}`
             : lead.state === "open"
               ? ` · merge ${mergeStatus ?? "unknown"}${lead.reviewState ? ` · reviews ${lead.reviewState}` : ""}`
-              : ""}`
-          : ctx.t("pill.title"),
+              : ""}${pinnedSuffix}`
+          : `${ctx.t("pill.title")}${pinnedSuffix}`,
       }
     },
     // The pill's dropdown: the full chain picture with the merge controls the
@@ -1352,7 +1353,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       // toggle binds to it. Reactive — the popover updates while it's open.
       return (
       <div class="mn-pop">
-        <For each={pillState().eligible.slice(0, 3)}>
+        <For each={menuChains(pillState().picked, pillState().eligible)}>
           {(chain) => (
             <div class="mn-pop-chain" data-tone={chainTone(chain, waitForAllStatusChecks())}>
               <For each={chain.prs}>

@@ -397,6 +397,20 @@ export const pillPick = (
   return undefined
 }
 
+/**
+ * The pill dropdown lists pinned-first: a pinned chain leads even when it is
+ * ineligible or ranked past the eligible cap, with eligible chains filling the
+ * remaining slots (capped at three rows total, deduplicated by chain key).
+ */
+export const menuChains = (
+  picked: { chain: Chain; reason: string } | undefined,
+  eligible: readonly Chain[],
+): readonly Chain[] => {
+  const pinned = picked?.reason === "pinned" ? picked.chain : undefined
+  if (!pinned) return eligible.slice(0, 3)
+  return [pinned, ...eligible.filter((chain) => chain.key !== pinned.key).slice(0, 2)]
+}
+
 /** A pull request Muninn is driving to merge: armed locally by the user, merged
  * by Muninn's refresh cycle — never delegated to the forge's own auto-merge. */
 export interface ArmedEntry {
