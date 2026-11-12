@@ -42,7 +42,6 @@ export type DecisionModelCheck =
  * public lists ignore it. */
 export interface DecisionKeyOptions {
   zenApiKey?: string
-  apiKey?: string
   openrouterApiKey?: string
   openaiApiKey?: string
 }
