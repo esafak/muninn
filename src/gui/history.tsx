@@ -381,8 +381,9 @@ const RunRow = (props: {
 }): JSX.Element => {
   const key = () => `${props.chainKey}#${props.run.id}`
   // Test workflows often report an empty workflow name: fall back to the run
-  // id so the row is never unlabeled.
+  // id so the row is never unlabeled. The tooltip keeps both halves.
   const displayName = (): string => props.run.name || `run #${props.run.id}`
+  const fullTitle = (): string => props.run.name ? `${props.run.name} (run #${props.run.id})` : `run #${props.run.id}`
 
   return (
     <>
@@ -390,7 +391,7 @@ const RunRow = (props: {
         <span class="mn-state" data-status={props.run.status} title={props.label(`state.${props.run.status}`)}>
           <StatusGlyph status={props.run.status} />
         </span>
-        <span class="mn-title" title={displayName()}>
+        <span class="mn-title" title={fullTitle()}>
           {displayName()}
         </span>
         <span class="mn-meta">{time(props.run.updatedAt)}</span>

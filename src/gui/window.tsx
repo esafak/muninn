@@ -1731,17 +1731,21 @@ const STYLES = `
 .mn-chain[data-stale="true"] { opacity: .55; }
 .mn-title { flex: 1; min-width: 0; font-size: 12px; color: var(--v2-text-text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mn-pin {
-  flex: none; display: none; align-items: center; justify-content: center;
-  width: 22px; height: 22px; margin: -4px 0; border: 0; border-radius: 6px; padding: 0;
+  flex: none; display: inline-flex; align-items: center; justify-content: center;
+  width: 0; height: 22px; min-width: 0; margin: -4px -8px -4px 0; border: 0; border-radius: 6px; padding: 0;
+  overflow: hidden; opacity: 0; pointer-events: none;
   background: transparent; color: var(--v2-text-text-faint); cursor: pointer;
 }
-/* No reserved slot: the pin takes no space until its row is hovered or
- * focused, shifting the row's tail left at that moment. A pinned chain keeps
- * its highlighted pin (and slot) always so the override stays discoverable. */
-.mn-row:hover .mn-pin { display: inline-flex; }
+/* Collapsed to zero width (the -8px right margin cancels its flex gap) until
+ * the row is hovered or the pin itself is focused: rendered-but-invisible
+ * stays keyboard-focusable, unlike display: none — and still reserves no
+ * space either way. */
+.mn-row:hover .mn-pin, .mn-pin:focus-visible, .mn-pin[data-pinned="true"] {
+  width: 22px; margin: -4px 0; opacity: 1; pointer-events: auto;
+}
 .mn-pin:hover { background: var(--v2-overlay-simple-overlay-hover); color: var(--v2-text-text-base); }
-.mn-pin:focus-visible { display: inline-flex; outline: 1px solid var(--v2-state-fg-warning, #9a6700); }
-.mn-pin[data-pinned="true"] { display: inline-flex; color: var(--v2-text-text-accent, #0969da); }
+.mn-pin:focus-visible { outline: 1px solid var(--v2-state-fg-warning, #9a6700); }
+.mn-pin[data-pinned="true"] { color: var(--v2-text-text-accent, #0969da); }
 .mn-meta { flex: none; font-size: 10.5px; color: var(--v2-text-text-faint); font-family: var(--v2-font-family-code); }
 .mn-state { display: inline-flex; align-items: center; gap: 4px; flex: none; font-size: 10.5px; font-family: var(--v2-font-family-code); }
 .mn-state[data-state="open"], .mn-state[data-status="succeeded"] { color: var(--v2-state-fg-success); }
