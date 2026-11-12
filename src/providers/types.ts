@@ -38,12 +38,19 @@ export type DecisionModelCheck =
   | { outcome: "not-found" }
   | { outcome: "unreachable" }
 
-/** Uniform live check every decision backend implements. `key` is the
- * backend's credential (undefined when none is configured); backends with
- * public lists ignore it. Total: network failures report `unreachable`,
- * never throw. */
+/** Credential bag each decision backend picks its key from. Backends with
+ * public lists ignore it. */
+export interface DecisionKeyOptions {
+  zenApiKey?: string
+  apiKey?: string
+  openrouterApiKey?: string
+  openaiApiKey?: string
+}
+
+/** Uniform live check every decision backend implements. Total: network,
+ * key, and payload failures report `unreachable`, never throw. */
 export type CheckDecisionModel = (
-  key: string | undefined,
+  opts: DecisionKeyOptions,
   modelId: string,
   fetchFn?: typeof fetch,
   signal?: AbortSignal,

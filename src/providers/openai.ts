@@ -18,14 +18,15 @@ export const resolveOpenAIKey = (opts: { openaiApiKey?: string }): string | unde
   return typeof key === "string" && key.trim() ? key.trim() : undefined
 }
 
-/** Live check against OpenAI's models endpoint (requires a key). Total:
- * missing key, unreachable endpoint, and unusable payloads report
+/** Live check against OpenAI's models endpoint. Resolves its own key from
+ * opts; missing key, unreachable endpoint, and unusable payloads report
  * `unreachable` — callers fall back to the known set. Presence confirms
  * the ID is real, not that it speaks the decisions contract. */
-export const checkOpenAIModel: CheckDecisionModel = async (key, modelId, fetchFn = fetch, signal) => {
+export const checkOpenAIModel: CheckDecisionModel = async (opts, modelId, fetchFn = fetch, signal) => {
   const wanted = modelId.trim()
   if (!wanted) return { outcome: "not-found" }
-  if (typeof key !== "string" || !key.trim()) return { outcome: "unreachable" }
+  const key = resolveOpenAIKey(opts)
+  if (!key) return { outcome: "unreachable" }
   try {
     const response = await fetchFn(OPENAI_MODELS_URL, {
       headers: { Authorization: `Bearer ${key.trim()}`, Accept: "application/json" },

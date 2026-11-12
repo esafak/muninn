@@ -36,11 +36,13 @@ export const validateModelSyntax = (model: string): { ok: true } | { ok: false; 
 }
 
 /** The model an empty field resolves to, per backend. */
-export const defaultModelFor = (provider: DecisionBackend): string => {
-  if (provider === "openai") return OPENAI_DECISIONS_MODEL
-  if (provider === "openrouter") return OPENROUTER_DEFAULT_MODEL
-  return ZEN_MODEL
+const providerDefaults: Record<DecisionBackend, string> = {
+  zen: ZEN_MODEL,
+  openrouter: OPENROUTER_DEFAULT_MODEL,
+  openai: OPENAI_DECISIONS_MODEL,
 }
+
+export const defaultModelFor = (provider: DecisionBackend): string => providerDefaults[provider]
 
 /** IDs from an OpenAI-compatible `/models` list payload (`{data:[{id}]}`). */
 export const parseOpenAICompatibleModelList = (payload: unknown): string[] => {

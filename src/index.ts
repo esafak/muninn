@@ -24,9 +24,9 @@ import { randomUUID } from "node:crypto"
 import { promisify } from "node:util"
 import { coordinateMerge } from "./merge-coordinator"
 import { checkOpenRouterModel } from "./providers/openrouter"
-import { checkOpenAIModel, resolveOpenAIKey } from "./providers/openai"
+import { checkOpenAIModel } from "./providers/openai"
 import type { CheckDecisionModel } from "./providers/types"
-import { checkZenModel, resolveZenKey } from "./providers/zen"
+import { checkZenModel } from "./providers/zen"
 import type { DecisionBackend } from "./candidates/types"
 
 const exec = promisify(execFile)
@@ -237,6 +237,14 @@ const decisionBackendLabels: Record<DecisionBackend, string> = {
   openai: "OpenAI",
 }
 
+/** Message when a reachable authoritative list misses. Zen never reports
+ * invalid (its lists are never authoritative), so its entry is unreachable. */
+const invalidListMessages: Record<DecisionBackend, string> = {
+  zen: "Not in the visible Zen list.",
+  openrouter: "Not in the OpenRouter decisions catalog.",
+  openai: "Not in your OpenAI model list.",
+}
+
 export default Plugin.define({
   id: "muninn",
   async setup(ctx) {
@@ -368,16 +376,10 @@ export default Plugin.define({
         const syntax = validateModelSyntax(raw)
         if (!syntax.ok) return { status: "invalid" as const, message: syntax.reason }
         const label = decisionBackendLabels[input.provider]
-        const key =
-          input.provider === "zen"
-            ? resolveZenKey({ zenApiKey: options.zenApiKey, apiKey: options.apiKey })
-            : input.provider === "openai"
-              ? resolveOpenAIKey({ openaiApiKey: options.openaiApiKey })
-              : undefined
         const controller = new AbortController()
         const timer = setTimeout(() => controller.abort(), 8_000)
         try {
-          const result = await decisionModelChecks[input.provider](key, raw, fetch, controller.signal)
+          const result = await decisionModelChecks[input.provider](options, raw, fetch, controller.signal)
           if (result.outcome === "found") {
             if (result.contextLength !== undefined)
               capsCache.set(capsKey(input.provider, raw), {
@@ -398,10 +400,7 @@ export default Plugin.define({
             if ((knownDecisionModels[input.provider] as readonly string[]).includes(raw))
               return { status: "known" as const, canonical: raw, message: `${raw} is a known ${label} decision model.` }
             if (authoritativeModelLists[input.provider])
-              return {
-                status: "invalid" as const,
-                message: input.provider === "openrouter" ? "Not in the OpenRouter decisions catalog." : `Not in your ${label} model list.`,
-              }
+              return { status: "invalid" as const, message: invalidListMessages[input.provider] }
             return {
               status: "unverified" as const,
               canonical: raw,

@@ -36,7 +36,7 @@ export const resolveOpenRouterCaps = async (
   now = Date.now(),
   signal?: AbortSignal,
 ): Promise<ModelCaps | undefined> => {
-  const found = await checkOpenRouterModel(undefined, modelId, fetchFn, signal)
+  const found = await checkOpenRouterModel({}, modelId, fetchFn, signal)
   if (found.outcome !== "found" || found.contextLength === undefined) return undefined
   return { contextLength: found.contextLength, build: found.canonical, resolvedAt: now, source: "live" }
 }
@@ -45,7 +45,7 @@ export const resolveOpenRouterCaps = async (
  * not-found (reachable catalog without the ID), or unreachable (network,
  * non-OK, or malformed payload — never evidence of absence). The catalog
  * is public, so the key is ignored. */
-export const checkOpenRouterModel: CheckDecisionModel = async (_key, modelId, fetchFn = fetch, signal) => {
+export const checkOpenRouterModel: CheckDecisionModel = async (_opts, modelId, fetchFn = fetch, signal) => {
   const wanted = modelId.trim()
   if (!wanted) return { outcome: "not-found" }
   try {
