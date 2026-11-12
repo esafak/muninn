@@ -701,3 +701,53 @@ describe("jsonReady", () => {
     expect(jsonReady(null)).toBe(null)
   })
 })
+
+describe("pinnedChain", () => {
+  test("resolves pull identity across lead changes and chain keys for groups", async () => {
+    const mod = await import("./model")
+    const repoA = { host: "github.com", owner: "sst", repo: "opencode" }
+    const mkChain = (n: number, state: "open" | "merged" = "open"): import("./model").Chain => ({
+      key: `github.com/sst/opencode#pr${n}`,
+      prs: [pull({ repo: repoA, number: n, state })],
+      issues: [],
+      runs: [],
+      updatedAt: n,
+    })
+    const chains = [mkChain(1), mkChain(2)]
+    expect(mod.pinnedChain(chains, { repo: repoA, number: 2 })?.key).toBe(chains[1]!.key)
+    expect(mod.pinnedChain(chains, { key: chains[0]!.key })?.key).toBe(chains[0]!.key)
+    expect(mod.pinnedChain(chains, {})).toBeUndefined()
+    expect(mod.pinnedChain(chains, { repo: repoA, number: 9 })).toBeUndefined()
+    expect(mod.samePin({ repo: repoA, number: 2 }, { repo: repoA, number: 2 })).toBe(true)
+    expect(mod.samePin(mod.pinForChain(chains[0]!), { repo: repoA, number: 1 })).toBe(true)
+  })
+
+  test("issue and run pins resolve by member identity, kinds never collide", async () => {
+    const mod = await import("./model")
+    const repoA = { host: "github.com", owner: "sst", repo: "opencode" }
+    const issueChain: import("./model").Chain = {
+      key: "github.com/sst/opencode#issue42",
+      prs: [],
+      issues: [{ kind: "issue", provider: "github", repo: repoA, number: 42, title: "t", state: "open", url: "u", updatedAt: 1 }],
+      runs: [],
+      updatedAt: 1,
+    }
+    const runChain: import("./model").Chain = {
+      key: JSON.stringify(["run-series", "github.com/sst/opencode", "abc", "ci"]),
+      prs: [],
+      issues: [],
+      runs: [{ kind: "run", provider: "github", repo: repoA, id: 42, name: "ci", headBranch: "b", headSha: "abc", series: { key: "ci", sequence: 1 }, status: "failed", checks: [], pullRequests: [], url: "u", updatedAt: 2 }],
+      updatedAt: 2,
+    }
+    const chains = [issueChain, runChain]
+    expect(mod.pinForChain(issueChain)).toEqual({ repo: repoA, number: 42, kind: "issue" })
+    expect(mod.pinForChain(runChain)).toEqual({ repo: repoA, number: 42, kind: "run" })
+    // Same number, different kinds: never the same pin.
+    expect(mod.samePin({ repo: repoA, number: 42, kind: "issue" }, { repo: repoA, number: 42, kind: "run" })).toBe(false)
+    expect(mod.samePin({ repo: repoA, number: 42 }, { repo: repoA, number: 42, kind: "pr" })).toBe(true)
+    expect(mod.pinnedChain(chains, { repo: repoA, number: 42, kind: "issue" })?.key).toBe(issueChain.key)
+    expect(mod.pinnedChain(chains, { repo: repoA, number: 42, kind: "run" })?.key).toBe(runChain.key)
+    expect(mod.pinnedChain(chains, { repo: repoA, number: 42 })?.key).toBeUndefined()
+    expect(mod.pinnedChain(chains, { repo: repoA, number: 42, kind: "issue", owner: "other-session" })?.key).toBe(issueChain.key)
+  })
+})

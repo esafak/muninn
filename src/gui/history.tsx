@@ -29,6 +29,10 @@ export interface HistoryProps {
   onArm: (pull: PullEntity, enable: boolean) => Promise<void>
   /** Whether the PR is armed — locally by Muninn, or already on the forge. */
   isArmed: (pull: PullEntity) => boolean
+  /** Whether this chain is the pill override. */
+  isPinned: (chain: Chain) => boolean
+  /** Toggles the pill override for a chain (single pin; re-pin moves it). */
+  onPin: (chain: Chain) => void
   waitForAllStatusChecks: Accessor<boolean>
 }
 
@@ -217,6 +221,19 @@ export const History = (props: HistoryProps) => {
                 <div class="mn-day">{dayLabel(chain.updatedAt)}</div>
               </Show>
               <div class="mn-chain" data-tone={chainTone(chain, props.waitForAllStatusChecks())}>
+                <button
+                  class="mn-pin"
+                  type="button"
+                  title={ctx.t(props.isPinned(chain) ? "chain.unpin" : "chain.pin")}
+                  aria-label={ctx.t(props.isPinned(chain) ? "chain.unpin" : "chain.pin")}
+                  aria-pressed={props.isPinned(chain)}
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    props.onPin(chain)
+                  }}
+                >
+                  {props.isPinned(chain) ? "★" : "☆"}
+                </button>
                 <For each={chain.prs}>
                   {(pull, prIndex) => (
                     <div

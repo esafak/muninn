@@ -167,6 +167,39 @@ export const Muninn = Rpc.define({
       input: z.object({ directory: z.string(), repo: RepoRef, baseBranch: z.string() }),
       output: z.object({ fastForwarded: z.boolean(), message: z.string().optional() }),
     },
+    /** One-shot decision-model judge over enriched candidates. Heuristic survivors
+     * in, per-ref keep/drop verdicts out. Failures fall back to keep-all. */
+    judge: {
+      input: z.object({
+        directory: z.string(),
+        // Decision backends judge relevance; forge SourceProviders hydrate.
+        // Canonical list: DECISION_BACKENDS in src/candidates/types.ts.
+        provider: z.enum(["zen", "openrouter", "openai"]),
+        model: z.string().optional(),
+        candidates: z.array(
+          z.object({
+            number: z.number().int().positive(),
+            kind: z.enum(["issue", "pr", "run"]).optional(),
+            repo: RepoRef.optional(),
+            tier: z.enum(["user", "command", "prose", "output"]),
+            snippet: z.string(),
+            command: z.string().optional(),
+            title: z.string().optional(),
+            state: z.string().optional(),
+          }),
+        ).max(64),
+      }),
+      output: z.object({
+        verdicts: z.array(
+          z.object({
+            key: z.string(),
+            keep: z.boolean(),
+            reason: z.string().optional(),
+            confidence: z.number().optional(),
+          }),
+        ),
+      }),
+    },
     /** Arms (enable) or disarms auto-merge: merge when checks pass and required reviews approve. */
     autoMerge: {
       input: z.object({
