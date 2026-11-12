@@ -1,0 +1,16 @@
+src/merge-coordinator.test.ts
+  h_ea91e2db23540f 71-72,76-120
+src/merge-coordinator.ts
+  h_ea91e2db23540f 15-17,22,24,26,28,51-53
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f8ccf29c24310715ed15146a987d8ccc0b049c93",
+  "prompts": {},
+  "humans": {
+    "h_ea91e2db23540f": {
+      "author": "Emre Şafak <3928300+esafak@users.noreply.github.com>"
+    }
+  }
+}
