@@ -1,6 +1,10 @@
 import type { MergeResult } from "./providers/types"
 
-const RESULT_TTL_MS = 10 * 60_000
+/** Cross-window dedupe grace: long enough to collapse double-clicks and two
+ * windows firing together, short enough that an open-after-merged
+ * (forge reported merged but hydration still sees open via eventual
+ * consistency) retries without a server restart. */
+export const RESULT_TTL_MS = 60_000
 const RESULT_MAX_ENTRIES = 1024
 const active = new Set<string>()
 const completed = new Map<string, { headSha: string; at: number }>()
@@ -8,17 +12,20 @@ const rejected = new Map<string, { at: number }>()
 const rejectionKey = (key: string, headSha: string): string => `${key}\u0000${headSha}`
 
 /** Serializes merge attempts per PR for this server lifetime and deduplicates
- * confirmed outcomes across GUI windows. This is intentionally process-local. */
+ * confirmed outcomes across GUI windows. This is intentionally process-local.
+ * The clock is sampled at completion when storing results, so a slow forge
+ * call still yields the full dedupe grace afterwards. */
 export const coordinateMerge = async (
   key: string,
   expectedHeadSha: string,
   merge: () => Promise<MergeResult>,
-  now = Date.now(),
+  clock: () => number = Date.now,
 ): Promise<MergeResult> => {
+  const start = clock()
   for (const [candidate, result] of completed)
-    if (now - result.at >= RESULT_TTL_MS) completed.delete(candidate)
+    if (start - result.at >= RESULT_TTL_MS) completed.delete(candidate)
   for (const [candidate, result] of rejected)
-    if (now - result.at >= RESULT_TTL_MS) rejected.delete(candidate)
+    if (start - result.at >= RESULT_TTL_MS) rejected.delete(candidate)
 
   while (completed.size > RESULT_MAX_ENTRIES) {
     const oldest = [...completed].toSorted((left, right) => left[1].at - right[1].at)[0]
@@ -41,8 +48,9 @@ export const coordinateMerge = async (
   active.add(key)
   try {
     const result = await merge()
-    if (!result.merged && result.headChanged) rejected.set(staleKey, { at: Date.now() })
-    if (result.merged) completed.set(key, { headSha: expectedHeadSha, at: Date.now() })
+    const doneAt = clock()
+    if (!result.merged && result.headChanged) rejected.set(staleKey, { at: doneAt })
+    if (result.merged) completed.set(key, { headSha: expectedHeadSha, at: doneAt })
     return result
   } finally {
     active.delete(key)

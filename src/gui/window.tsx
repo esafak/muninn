@@ -20,6 +20,11 @@ import { pillPullDiagnostics } from "./pill-diagnostics"
 const POLL_MS = 30_000
 /** Debounce for scan → hydrate while a message streams in. */
 const HYDRATE_DEBOUNCE_MS = 600
+/** How long a forge-reported merge blocks retries while hydration catches up.
+ * Matches the server dedupe TTL: long enough to collapse double-fires across
+ * windows, short enough that an open-after-merged (eventual consistency)
+ * retries without a restart. */
+const MERGE_CONFIRM_GRACE_MS = 60_000
 
 export const setup: Plugin.Setup<typeof definition> = (ctx) => {
   injectStyles()
@@ -75,7 +80,18 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
   const mergeInFlight = new Set<string>()
   const serverBusyUntil = new Map<string, number>()
   const rejectedHeadByPR = new Map<string, string>()
-  const mergedAwaitingRefresh = new Set<string>()
+  const mergedAwaitingRefresh = new Map<string, number>()
+  /** Still inside the post-merge confirm window; expired entries are dropped so
+   * an open-after-merged retries instead of wedging until restart. */
+  const mergeAwaiting = (key: string, now = Date.now()): boolean => {
+    const at = mergedAwaitingRefresh.get(key)
+    if (at === undefined) return false
+    if (now - at >= MERGE_CONFIRM_GRACE_MS) {
+      mergedAwaitingRefresh.delete(key)
+      return false
+    }
+    return true
+  }
   const refreshedPullByPR = new Map<string, PullEntity>()
   let refreshGeneration = 0
   const mergeKey = (repo: RepoRef, number: number): string => `${repoKey(repo)}#${number}`
@@ -264,8 +280,14 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
           entity.kind === "pr" && repoKey(entity.repo) === repoKey(repo),
         )
         for (const pull of knownPulls) {
-          if (pull.state === "open") continue
           const key = mergeKey(pull.repo, pull.number)
+          if (pull.state === "open") {
+            // Forge said merged but hydration still sees open: keep blocking
+            // only inside the confirm grace, then release so a retry (manual
+            // or armed) fires without a restart.
+            mergeAwaiting(key)
+            continue
+          }
           removeArmsForPR(pull.repo, pull.number)
           rejectedHeadByPR.delete(key)
           mergedAwaitingRefresh.delete(key)
@@ -442,7 +464,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       ctx.toast.show({ title: `PR #${pull.number} merge failed`, description: result.message, variant: "error" })
       return "failed"
     }
-    mergedAwaitingRefresh.add(mergeKey(pull.repo, pull.number))
+    mergedAwaitingRefresh.set(mergeKey(pull.repo, pull.number), Date.now())
     record(pull, "merged", via, method)
     let description = `${method} into ${pull.baseBranch}`
     const fastForward = shouldFastForwardBase(ctx.stores.settings.value.fastForwardBase ?? false, result.merged)
@@ -562,7 +584,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       const key = mergeKey(pull.repo, pull.number)
       if (
         mergeInFlight.has(key) ||
-        mergedAwaitingRefresh.has(key) ||
+        mergeAwaiting(key) ||
         (serverBusyUntil.get(key) ?? 0) > Date.now()
       ) continue
       const entry = ctx.stores.armed.value.entries.find(
