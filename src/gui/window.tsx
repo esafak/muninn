@@ -1927,6 +1927,7 @@ const MuninnSettings = (): JSX.Element => {
             <ui.TextInput
               value={modelDraft()}
               label={ctx.t("settings.candidateModel")}
+              placeholder={defaultModelForProvider(validatedProviderID()) ?? ""}
               invalid={modelCheck().status === "invalid"}
               onInput={(value) => {
                 setModelDraft(value)
@@ -1939,13 +1940,15 @@ const MuninnSettings = (): JSX.Element => {
                 }, 500)
               }}
             />
-            <span
-              class="mn-note"
-              style={{ padding: "0 4px" }}
-              data-warn={modelCheck().status === "invalid" || modelCheck().status === "unverified" ? "" : undefined}
-            >
-              {modelStatusLine()}
-            </span>
+            {modelCheck().status !== "default" && (
+              <span
+                class="mn-note"
+                style={{ padding: "0 4px" }}
+                data-warn={modelCheck().status === "invalid" || modelCheck().status === "unverified" ? "" : undefined}
+              >
+                {modelStatusLine()}
+              </span>
+            )}
           </div>
         </ui.SettingsRow>
       </ui.SettingsSection>
