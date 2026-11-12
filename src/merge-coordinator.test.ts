@@ -68,12 +68,56 @@ describe("coordinateMerge", () => {
       calls += 1
       return { merged: true as const }
     }
-    expect(await coordinateMerge("repo#6", "sha", merge, t0)).toEqual({ merged: true })
-    expect(await coordinateMerge("repo#6", "sha", merge, t0 + RESULT_TTL_MS - 1)).toEqual({
+    expect(await coordinateMerge("repo#6", "sha", merge, () => t0)).toEqual({ merged: true })
+    expect(await coordinateMerge("repo#6", "sha", merge, () => t0 + RESULT_TTL_MS - 1)).toEqual({
       merged: false,
       alreadyHandled: true,
     })
-    expect(await coordinateMerge("repo#6", "sha", merge, t0 + RESULT_TTL_MS + 1)).toEqual({ merged: true })
+    expect(await coordinateMerge("repo#6", "sha", merge, () => t0 + RESULT_TTL_MS + 1)).toEqual({ merged: true })
+    expect(calls).toBe(2)
+  })
+
+  test("stamps the dedupe grace at completion, not request start", async () => {
+    const t0 = Date.now()
+    let now = t0
+    const clock = (): number => now
+    const slowMerge = async () => {
+      now += 50_000
+      return { merged: true as const }
+    }
+    expect(await coordinateMerge("repo#7", "sha", slowMerge, clock)).toEqual({ merged: true })
+    // Completion was at t0+50s, so the grace runs to t0+110s, not t0+60s.
+    now = t0 + RESULT_TTL_MS + 10_000
+    let calls = 0
+    expect(await coordinateMerge("repo#7", "sha", async () => {
+      calls += 1
+      return { merged: true as const }
+    }, clock)).toEqual({ merged: false, alreadyHandled: true })
+    expect(calls).toBe(0)
+    now = t0 + 50_000 + RESULT_TTL_MS + 1
+    expect(await coordinateMerge("repo#7", "sha", async () => {
+      calls += 1
+      return { merged: true as const }
+    }, clock)).toEqual({ merged: true })
+    expect(calls).toBe(1)
+  })
+
+  test("lets a rejected head retry after the dedupe grace", async () => {
+    const t0 = Date.now()
+    let calls = 0
+    const stale = async () => {
+      calls += 1
+      return { merged: false as const, headChanged: true }
+    }
+    expect(await coordinateMerge("repo#8", "old", stale, () => t0)).toMatchObject({ headChanged: true })
+    expect(await coordinateMerge("repo#8", "old", stale, () => t0 + RESULT_TTL_MS - 1)).toEqual({
+      merged: false,
+      headChanged: true,
+      message: "This head was already rejected as stale",
+    })
+    expect(await coordinateMerge("repo#8", "old", stale, () => t0 + RESULT_TTL_MS + 1)).toMatchObject({
+      headChanged: true,
+    })
     expect(calls).toBe(2)
   })
 })
