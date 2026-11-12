@@ -1,0 +1,18 @@
+src/gui/audit-title.ts
+  h_ea91e2db23540f 1-35
+src/gui/history.test.ts
+  h_ea91e2db23540f 1-64
+src/gui/history.tsx
+  h_ea91e2db23540f 5,9,207-214,230,235-238,262-263
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4d55d1bd5171e0fa48af7271ef4abfad96dbccae",
+  "prompts": {},
+  "humans": {
+    "h_ea91e2db23540f": {
+      "author": "Emre Şafak <3928300+esafak@users.noreply.github.com>"
+    }
+  }
+}
