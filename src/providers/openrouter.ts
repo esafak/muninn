@@ -6,7 +6,6 @@
  * contract only on OpenAI's own endpoint (see `../openai/decisions`).
  */
 
-import type { ModelCaps } from "../candidates/model-caps"
 import type { CheckDecisionModel } from "./types"
 
 export const OPENROUTER_DECISIONS_ENDPOINT = "https://openrouter.ai/api/v1/systemone"
@@ -23,22 +22,6 @@ interface CatalogModel {
 export const resolveOpenRouterKey = (opts: { openrouterApiKey?: string }): string | undefined => {
   const key = opts.openrouterApiKey ?? process.env.OPENROUTER_API_KEY
   return typeof key === "string" && key.trim() ? key.trim() : undefined
-}
-
-/**
- * Live resolve + canonicalize: a floating ID or alias follows to its current
- * dated build, and callers send and cache on the build — never the alias.
- * No hardcoded fallback: undefined when unreachable.
- */
-export const resolveOpenRouterCaps = async (
-  modelId: string,
-  fetchFn: typeof fetch = fetch,
-  now = Date.now(),
-  signal?: AbortSignal,
-): Promise<ModelCaps | undefined> => {
-  const found = await checkOpenRouterModel({}, modelId, fetchFn, signal)
-  if (found.outcome !== "found" || found.contextLength === undefined) return undefined
-  return { contextLength: found.contextLength, build: found.canonical, resolvedAt: now, source: "live" }
 }
 
 /** Catalog check: found (with caps when the entry reports a usable window),
