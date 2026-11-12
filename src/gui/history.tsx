@@ -5,7 +5,7 @@ import type { Chain, PullEntity, RepoRef, RunEntity, RunStatus } from "../model"
 import { chainTone, mergeReady, mergeWhy, prConflicted, repoKey } from "../model"
 import type { definition } from "./definition"
 import { Mark } from "./marks"
-import { CancelledGlyph, CheckGlyph, CrossGlyph, IssueGlyph, MergeGlyph, MergedGlyph, PullConflictGlyph, PullGlyph, QueuedGlyph, UnknownGlyph } from "./icons"
+import { CancelledGlyph, CheckGlyph, CrossGlyph, IssueGlyph, MergeGlyph, MergedGlyph, PinGlyph, PullConflictGlyph, PullGlyph, QueuedGlyph, UnknownGlyph } from "./icons"
 
 const DAY_MS = 24 * 60 * 60 * 1000
 
@@ -138,6 +138,30 @@ const AuditLine = (props: { chain: Chain }): JSX.Element => {
   )
 }
 
+/**
+ * The chain pin: the pin octicon riding at the far right of the chain's title
+ * row. The row title truncates (ellipsis) to clear room for it. Unpinned pins
+ * take no space until their row is hovered or focused, shifting the tail left
+ * at that moment; the pinned one keeps its highlighted pin and slot so the
+ * override stays discoverable.
+ */
+const PinButton = (props: { pinned: boolean; title: string; label: string; onPin: () => void }): JSX.Element => (
+  <button
+    class="mn-pin"
+    type="button"
+    data-pinned={props.pinned ? "true" : "false"}
+    title={props.title}
+    aria-label={props.label}
+    aria-pressed={props.pinned}
+    onClick={(event) => {
+      event.stopPropagation()
+      props.onPin()
+    }}
+  >
+    <PinGlyph solid={props.pinned} />
+  </button>
+)
+
 const dayLabel = (epoch: number): string => new Date(epoch).toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" })
 const time = (epoch: number): string =>
   new Date(epoch).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hourCycle: "h23" })
@@ -221,19 +245,6 @@ export const History = (props: HistoryProps) => {
                 <div class="mn-day">{dayLabel(chain.updatedAt)}</div>
               </Show>
               <div class="mn-chain" data-tone={chainTone(chain, props.waitForAllStatusChecks())}>
-                <button
-                  class="mn-pin"
-                  type="button"
-                  title={ctx.t(props.isPinned(chain) ? "chain.unpin" : "chain.pin")}
-                  aria-label={ctx.t(props.isPinned(chain) ? "chain.unpin" : "chain.pin")}
-                  aria-pressed={props.isPinned(chain)}
-                  onClick={(event) => {
-                    event.stopPropagation()
-                    props.onPin(chain)
-                  }}
-                >
-                  {props.isPinned(chain) ? "★" : "☆"}
-                </button>
                 <For each={chain.prs}>
                   {(pull, prIndex) => (
                     <div
@@ -269,14 +280,22 @@ export const History = (props: HistoryProps) => {
                       >
                         {copied() === `p${chain.key}${pull.number}` ? "✓" : `#${pull.number}`}
                       </span>
-                      <span class="mn-title">{pull.title}</span>
+                      <span class="mn-title" title={pull.title || `#${pull.number}`}>{pull.title || `#${pull.number}`}</span>
                       <MergeButton chain={chain} pull={pull} isArmed={props.isArmed} waitForAllStatusChecks={props.waitForAllStatusChecks} onMerge={props.onMerge} onArm={props.onArm} />
+                      <Show when={prIndex() === 0}>
+                        <PinButton
+                          pinned={props.isPinned(chain)}
+                          title={ctx.t(props.isPinned(chain) ? "chain.unpin" : "chain.pin")}
+                          label={ctx.t(props.isPinned(chain) ? "chain.unpin" : "chain.pin")}
+                          onPin={() => props.onPin(chain)}
+                        />
+                      </Show>
                     </div>
                   )}
                 </For>
 
                 <For each={chain.issues}>
-                  {(issue) => (
+                  {(issue, issueIndex) => (
                     <div class="mn-row sub" onClick={() => props.onOpen(issue.url)}>
                       <span class="mn-mark">
                         <Mark provider={issue.provider} />
@@ -292,14 +311,33 @@ export const History = (props: HistoryProps) => {
                       >
                         {copied() === `i${chain.key}${issue.number}` ? "✓" : `#${issue.number}`}
                       </span>
-                      <span class="mn-title">{issue.title}</span>
+                      <span class="mn-title" title={issue.title || `#${issue.number}`}>{issue.title || `#${issue.number}`}</span>
+                      <Show when={chain.prs.length === 0 && issueIndex() === 0}>
+                        <PinButton
+                          pinned={props.isPinned(chain)}
+                          title={ctx.t(props.isPinned(chain) ? "chain.unpin" : "chain.pin")}
+                          label={ctx.t(props.isPinned(chain) ? "chain.unpin" : "chain.pin")}
+                          onPin={() => props.onPin(chain)}
+                        />
+                      </Show>
                     </div>
                   )}
                 </For>
 
                 <For each={chain.runs}>
-                  {(run) => (
-                    <RunRow run={run} chainKey={chain.key} expanded={expanded} onToggle={toggle} onOpen={props.onOpen} label={ctx.t} />
+                  {(run, runIndex) => (
+                    <RunRow
+                      run={run}
+                      chainKey={chain.key}
+                      expanded={expanded}
+                      onToggle={toggle}
+                      onOpen={props.onOpen}
+                      label={ctx.t}
+                      showPin={chain.prs.length === 0 && chain.issues.length === 0 && runIndex() === 0}
+                      pinned={props.isPinned(chain)}
+                      pinTitle={ctx.t(props.isPinned(chain) ? "chain.unpin" : "chain.pin")}
+                      onPin={() => props.onPin(chain)}
+                    />
                   )}
                 </For>
 
@@ -336,8 +374,15 @@ const RunRow = (props: {
   onToggle: (key: string) => void
   onOpen: (url: string) => void
   label: (key: string) => string
+  showPin: boolean
+  pinned: boolean
+  pinTitle: string
+  onPin: () => void
 }): JSX.Element => {
   const key = () => `${props.chainKey}#${props.run.id}`
+  // Test workflows often report an empty workflow name: fall back to the run
+  // id so the row is never unlabeled.
+  const displayName = (): string => props.run.name || `run #${props.run.id}`
 
   return (
     <>
@@ -345,8 +390,8 @@ const RunRow = (props: {
         <span class="mn-state" data-status={props.run.status} title={props.label(`state.${props.run.status}`)}>
           <StatusGlyph status={props.run.status} />
         </span>
-        <span class="mn-title" title={`run ${props.run.id}`}>
-          {props.run.name}
+        <span class="mn-title" title={displayName()}>
+          {displayName()}
         </span>
         <span class="mn-meta">{time(props.run.updatedAt)}</span>
         <span
@@ -359,6 +404,9 @@ const RunRow = (props: {
         >
           ↗
         </span>
+        <Show when={props.showPin}>
+          <PinButton pinned={props.pinned} title={props.pinTitle} label={props.pinTitle} onPin={props.onPin} />
+        </Show>
       </div>
       <div class="mn-checks" classList={{ show: props.expanded().has(key()) }}>
         <For each={props.run.checks}>
@@ -367,7 +415,7 @@ const RunRow = (props: {
               <span data-status={check.status} title={props.label(`state.${check.status}`)}>
                 <StatusGlyph status={check.status} />
               </span>
-              <span class="mn-check-name">{check.name}</span>
+              <span class="mn-check-name" title={check.name}>{check.name}</span>
             </div>
           )}
         </For>

@@ -692,7 +692,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
   const isPinned = (chain: Chain): boolean => {
     const pin = ctx.stores.pinned.value
     // Membership, not lead identity: the pill resolves the same way, so the
-    // star can never disagree with it after a lead change.
+    // pin can never disagree with it after a lead change.
     if (pin.number !== undefined && pin.repo) return pinnedChain([chain], pin) !== undefined
     if (pin.key !== undefined) return chain.key === pin.key
     return false
@@ -1314,11 +1314,11 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       // The icon shape encodes the provider merge state; pill tone still encodes
       // overall chain health. The label stays `#number title ⌄`. An armed lead PR
       // puts a ticking braille spinner in front: a merge is pending. A pinned
-      // chain pins the label with ★ so the override is visible.
+      // chain pins the label with a pushpin so the override is visible.
       const mergeStatus = lead?.state === "open" ? lead.mergeState : undefined
       const circle = pillStatusIcon(lead?.state, mergeStatus, tone, pillIcon(meta.provider))
       const pending = lead?.state === "open" ? isArmed(lead) : false
-      const pinnedMark = picked.reason === "pinned" ? "★ " : ""
+      const pinnedMark = picked.reason === "pinned" ? "📌 " : ""
       const short = (title: string): string => (title.length > 24 ? `${title.slice(0, 24)}…` : title)
 
       return {
@@ -1730,6 +1730,18 @@ const STYLES = `
 .mn-id.copied { color: var(--v2-state-fg-success); }
 .mn-chain[data-stale="true"] { opacity: .55; }
 .mn-title { flex: 1; min-width: 0; font-size: 12px; color: var(--v2-text-text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mn-pin {
+  flex: none; display: none; align-items: center; justify-content: center;
+  width: 22px; height: 22px; margin: -4px 0; border: 0; border-radius: 6px; padding: 0;
+  background: transparent; color: var(--v2-text-text-faint); cursor: pointer;
+}
+/* No reserved slot: the pin takes no space until its row is hovered or
+ * focused, shifting the row's tail left at that moment. A pinned chain keeps
+ * its highlighted pin (and slot) always so the override stays discoverable. */
+.mn-row:hover .mn-pin { display: inline-flex; }
+.mn-pin:hover { background: var(--v2-overlay-simple-overlay-hover); color: var(--v2-text-text-base); }
+.mn-pin:focus-visible { display: inline-flex; outline: 1px solid var(--v2-state-fg-warning, #9a6700); }
+.mn-pin[data-pinned="true"] { display: inline-flex; color: var(--v2-text-text-accent, #0969da); }
 .mn-meta { flex: none; font-size: 10.5px; color: var(--v2-text-text-faint); font-family: var(--v2-font-family-code); }
 .mn-state { display: inline-flex; align-items: center; gap: 4px; flex: none; font-size: 10.5px; font-family: var(--v2-font-family-code); }
 .mn-state[data-state="open"], .mn-state[data-status="succeeded"] { color: var(--v2-state-fg-success); }
