@@ -9,7 +9,7 @@ import { heuristicExtract } from "../candidates/heuristic"
 import { bareKindKept, bareSurvives } from "../candidates/filtering"
 import { isDecisionBackend } from "../candidates/types"
 import type { ArmedEntry, Chain, Entity, Pin, PullEntity, RepoRef, RunEntity, RunStatus } from "../model"
-import { chainTone, armedTargets, staleHeadRetryEligible, staleHeadEvidenceUsable, sessionAttemptCurrent, targetRefreshConfirmed, pillPick, pillEligible, pinnedChain, pinForChain, samePin, mergeReady, mergeWhy, pendingReviewNotice, latestRun, pullForRun, prConflicted, refKey, repoKey, entityKey } from "../model"
+import { chainTone, armedTargets, staleHeadRetryEligible, staleHeadEvidenceUsable, sessionAttemptCurrent, targetRefreshConfirmed, pillPick, pillEligible, pinnedChain, pinForChain, mergeReady, mergeWhy, pendingReviewNotice, latestRun, pullForRun, prConflicted, refKey, repoKey, entityKey } from "../model"
 import { githubLexicon } from "../providers/github/lexicon"
 import { baseCheckoutDecision, cleanFromCheck, cleanupDecision, cleanupResultMessage, cleanupSessionMatches, locateCheckout, safeFastForward, sessionMoveConfirmed, shouldFastForwardBase, shouldRecordCleanupFailure, worktreeOccupancyDecision } from "../local-cleanup"
 import type { CheckoutKind } from "../local-cleanup"
@@ -614,33 +614,38 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
 
   const isPinned = (chain: Chain): boolean => {
     const pin = ctx.stores.pinned.value
-    if (pin.number !== undefined && pin.repo) return samePin(pinForChain(chain), pin)
+    // Membership, not lead identity: the pill resolves the same way, so the
+    // star can never disagree with it after a lead change.
+    if (pin.number !== undefined && pin.repo) return pinnedChain([chain], pin) !== undefined
     if (pin.key !== undefined) return chain.key === pin.key
     return false
   }
   const togglePin = (chain: Chain): void => {
-    const next = pinForChain(chain)
-    const owner = session()?.id
-    ctx.stores.pinned.update((draft) => {
-      const current = draft as Pin
-      if (samePin(current, next)) {
+    if (isPinned(chain)) {
+      ctx.stores.pinned.update((draft) => {
+        const current = draft as Pin
         delete current.repo
         delete current.number
         delete current.kind
         delete current.key
         delete current.owner
-      } else {
-        if (next.repo) current.repo = next.repo
-        else delete current.repo
-        if (next.number !== undefined) current.number = next.number
-        else delete current.number
-        if (next.kind !== undefined) current.kind = next.kind
-        else delete current.kind
-        if (next.key !== undefined) current.key = next.key
-        else delete current.key
-        if (owner !== undefined) current.owner = owner
-        else delete current.owner
-      }
+      })
+      return
+    }
+    const next = pinForChain(chain)
+    const owner = session()?.id
+    ctx.stores.pinned.update((draft) => {
+      const current = draft as Pin
+      if (next.repo) current.repo = next.repo
+      else delete current.repo
+      if (next.number !== undefined) current.number = next.number
+      else delete current.number
+      if (next.kind !== undefined) current.kind = next.kind
+      else delete current.kind
+      if (next.key !== undefined) current.key = next.key
+      else delete current.key
+      if (owner !== undefined) current.owner = owner
+      else delete current.owner
     })
   }
 
@@ -1499,6 +1504,16 @@ const MuninnSettings = (): JSX.Element => {
     const current = ctx.stores.settings.value.candidateProvider ?? "heuristic"
     if (isDecisionBackend(providerDraft()) && providerDraft() !== current) setProviderDraft(current)
   })
+  // Model IDs are free text: commit trailing-edge debounced so typing never
+  // wipes verdicts or re-arms the judge per keystroke. The timer is local to
+  // this component and cleared on unmount.
+  const [modelDraft, setModelDraft] = createSignal<string>(ctx.stores.settings.value.candidateModel ?? "")
+  let modelCommit: ReturnType<typeof setTimeout> | undefined
+  onCleanup(() => clearTimeout(modelCommit))
+  createEffect(() => {
+    const current = ctx.stores.settings.value.candidateModel ?? ""
+    if (modelCommit === undefined && current !== modelDraft()) setModelDraft(current)
+  })
 
   return (
     <ui.SettingsLayout title={ctx.t("settings.title")} description={ctx.t("settings.description")}>
@@ -1545,11 +1560,16 @@ const MuninnSettings = (): JSX.Element => {
           description={ctx.t("settings.candidateModel.description")}
         >
           <ui.TextInput
-            value={ctx.stores.settings.value.candidateModel ?? ""}
+            value={modelDraft()}
             label={ctx.t("settings.candidateModel")}
             onInput={(value) => {
-              const v = value.trim()
-              ctx.stores.settings.update((draft) => { (draft as { candidateModel?: string }).candidateModel = v || undefined })
+              setModelDraft(value)
+              clearTimeout(modelCommit)
+              modelCommit = setTimeout(() => {
+                modelCommit = undefined
+                const v = value.trim()
+                ctx.stores.settings.update((draft) => { draft.candidateModel = v || undefined })
+              }, 500)
             }}
           />
         </ui.SettingsRow>

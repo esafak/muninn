@@ -13,7 +13,7 @@ const JevResponse = z.object({
 const stateFor = (inputs: readonly JudgeInput[]) => ({
   task: "Decide which session references merit tracking in pill and sidebar. Mentioned or encountered is not enough.",
   candidates: inputs.map((input) => ({
-    key: input.ref,
+    key: refKey(input.ref),
     kind: input.ref.kind ?? "unknown",
     number: input.ref.number,
     tier: input.ref.tier,

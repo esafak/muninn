@@ -191,12 +191,20 @@ export const createDecisionModel = (opts: DecisionModelOptions): CandidateJudge 
             body: JSON.stringify(body),
             signal: controller.signal,
           })
+          // Consume the body on every path before branching: an unconsumed
+          // body keeps the socket allocated, which matters here because
+          // overflow slices immediately re-issue on the same host.
+          let text: string
+          try {
+            text = await response.text()
+          } catch {
+            continue
+          }
           if (!response.ok && response.status === 413 && slice.length > 1) {
             const half = Math.ceil(slice.length / 2)
             queue.unshift(slice.slice(half), slice.slice(0, half))
             continue
           }
-          const text = await response.text()
           if (!response.ok) continue
           let payload: unknown
           try {
