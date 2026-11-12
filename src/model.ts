@@ -307,6 +307,16 @@ export const pillEligible = (
   return false
 }
 
+/** Fresh worktree gate: a new session still on its base branch with zero
+ * deliberate transcript refs shows an empty sidebar and no pill. v1 base names
+ * are hardcoded `main`/`master` (case-sensitive); detached HEAD (`""`) stays
+ * non-fresh — it is already empty via the existing no-branch path. */
+export const isFreshBaseSession = (
+  sessionBranch: string,
+  deliberateRefCount: number,
+  baseNames: readonly string[] = ["main", "master"],
+): boolean => deliberateRefCount === 0 && baseNames.includes(sessionBranch)
+
 /** The pill's lead chain, among the eligible pool: the worst-toned PR chain
  * outranks recency (failing checks, conflicts, blocked merges, or a requested
  * review beat a calm newer one); otherwise the most recently updated open/draft PR chain; then

@@ -5,7 +5,7 @@ import { ComposerPill, MenuItem, Panel, SettingsPage, createKeyed, usePlugin, ty
 import { associate } from "../associate"
 import { deliberateRefs, messageBuckets, wireRefs } from "../extract"
 import type { ArmedEntry, Chain, Entity, PullEntity, RepoRef, RunEntity, RunStatus } from "../model"
-import { chainTone, armedTargets, staleHeadRetryEligible, staleHeadEvidenceUsable, sessionAttemptCurrent, targetRefreshConfirmed, pillPick, pillEligible, mergeReady, mergeWhy, pendingReviewNotice, latestRun, pullForRun, prConflicted, refKey, repoKey, entityKey } from "../model"
+import { chainTone, armedTargets, staleHeadRetryEligible, staleHeadEvidenceUsable, sessionAttemptCurrent, targetRefreshConfirmed, pillPick, pillEligible, isFreshBaseSession, mergeReady, mergeWhy, pendingReviewNotice, latestRun, pullForRun, prConflicted, refKey, repoKey, entityKey } from "../model"
 import { githubLexicon } from "../providers/github/lexicon"
 import { baseCheckoutDecision, cleanFromCheck, cleanupDecision, cleanupResultMessage, cleanupSessionMatches, locateCheckout, safeFastForward, sessionMoveConfirmed, shouldFastForwardBase, shouldRecordCleanupFailure, worktreeOccupancyDecision } from "../local-cleanup"
 import type { CheckoutKind } from "../local-cleanup"
@@ -94,6 +94,9 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
   }
   const refreshedPullByPR = new Map<string, PullEntity>()
   let refreshGeneration = 0
+  let branchRunsBranch: string | undefined
+  let resumePendingBranch: string | undefined
+  let resumeInFlightBranch: string | undefined
   const mergeKey = (repo: RepoRef, number: number): string => `${repoKey(repo)}#${number}`
   const sameArm = (candidate: ArmedEntry, original: ArmedEntry): boolean =>
     mergeKey(candidate.repo, candidate.number) === mergeKey(original.repo, original.number) &&
@@ -121,6 +124,8 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
   const buckets = createMemo(() => messageBuckets(messageList()))
 
   const refs = createMemo(() => deliberateRefs(buckets(), meta.repo ?? undefined, [githubLexicon]))
+
+  const fresh = createMemo(() => isFreshBaseSession(meta.branch, refs().length))
 
   const rechain = () => {
     const repo = meta.repo
@@ -154,7 +159,8 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
           related.push(candidate)
       }
     }
-    setChains(associate([...relevant, ...related], repo ? (runs[repoKey(repo)] ?? []) : []))
+    const computed = associate([...relevant, ...related], repo ? (runs[repoKey(repo)] ?? []) : [])
+    setChains(isFreshBaseSession(meta.branch, refs().length) ? [] : computed)
   }
 
   const open = (url: string) => ctx.system.openExternal(url)
@@ -236,7 +242,10 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
         if (requested.length > 0) {
           const wire = wireRefs(requested)
           const result = await stage("hydrate", () => client.rpc(Muninn).hydrate({ directory: current.directory, refs: wire.refs }))
-          if (!currentRefresh()) return false
+          if (!currentRefresh()) {
+            resumeInFlightBranch = undefined
+            return false
+          }
           merge(result.entities)
           for (const pull of result.entities.filter((entity): entity is PullEntity => entity.kind === "pr")) {
             const key = mergeKey(pull.repo, pull.number)
@@ -257,10 +266,15 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
           const unresolved = result.unresolved.length > 0 ? ` · ${result.unresolved.length} unresolved (${unresolvedLabel(result.unresolved, repo)})` : ` · ${result.unresolved.length} unresolved`
           setMeta("stats", `${sent} refs → ${result.entities.length} hydrated (${breakdown})${unresolved}${dropped}`)
         }
-        if (branch) {
+        if (branch && !isFreshBaseSession(branch ?? "", found.length)) {
           const { runs: branchRuns, prs } = await stage("branch-runs", () => client.rpc(Muninn).branchRuns({ directory: current.directory, branch }))
-          if (!currentRefresh()) return false
+          if (!currentRefresh()) {
+            resumeInFlightBranch = undefined
+            return false
+          }
           setRuns(repoKey(repo), branchRuns)
+          branchRunsBranch = branch
+          if (resumeInFlightBranch === branch) resumeInFlightBranch = undefined
           merge(prs)
           for (const pull of prs) {
             const key = mergeKey(pull.repo, pull.number)
@@ -272,10 +286,14 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
             targetUnresolved = false
           }
         }
-        if (!currentRefresh()) return false
+        if (!currentRefresh()) {
+          resumeInFlightBranch = undefined
+          return false
+        }
         for (const [key, pull] of recoveredPulls) refreshedPullByPR.set(key, pull)
         setMeta("error", null)
         rechain()
+        if (isFreshBaseSession(branch ?? "", found.length) && resumeInFlightBranch === branch) resumeInFlightBranch = undefined
         const knownPulls = Object.values(entities).filter((entity): entity is PullEntity =>
           entity.kind === "pr" && repoKey(entity.repo) === repoKey(repo),
         )
@@ -300,6 +318,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
           targetUnresolved,
         })
       } catch (error) {
+        resumeInFlightBranch = undefined
         setMeta("error", error instanceof Error ? error.message : String(error))
         return false
       }
@@ -321,6 +340,9 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       setRuns({})
       setChains([])
       setSessionReady(false)
+      branchRunsBranch = undefined
+      resumePendingBranch = undefined
+      resumeInFlightBranch = undefined
       void refresh()
     },
   )
@@ -329,9 +351,47 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
   let timer: ReturnType<typeof setTimeout> | undefined
   createEffect(() => {
     const found = refs()
-    if (!meta.repo || found.length === 0) return
+    const isFresh = fresh()
+    const hadTimer = timer !== undefined
     clearTimeout(timer)
+    timer = undefined
+    if (hadTimer && resumePendingBranch !== undefined) resumePendingBranch = undefined
+    if (isFresh) {
+      refreshGeneration++
+      resumePendingBranch = undefined
+      resumeInFlightBranch = undefined
+      rechain()
+      return
+    }
+    if (!meta.repo || found.length === 0) return
+    if (found.length > 0 && isFreshBaseSession(meta.branch, 0) && branchRunsBranch !== meta.branch && resumePendingBranch !== meta.branch && resumeInFlightBranch !== meta.branch) {
+      const generationAtSchedule = refreshGeneration
+      resumePendingBranch = meta.branch
+      timer = setTimeout(() => {
+        timer = undefined
+        if (generationAtSchedule !== refreshGeneration) {
+          resumePendingBranch = undefined
+          return
+        }
+        if (isFreshBaseSession(meta.branch, refs().length)) {
+          resumePendingBranch = undefined
+          return
+        }
+        if (branchRunsBranch === meta.branch) {
+          resumePendingBranch = undefined
+          return
+        }
+        resumePendingBranch = undefined
+        resumeInFlightBranch = meta.branch
+        void refresh()
+      }, HYDRATE_DEBOUNCE_MS)
+      return
+    }
+    const generationAtSchedule = refreshGeneration
     timer = setTimeout(() => {
+      timer = undefined
+      if (generationAtSchedule !== refreshGeneration) return
+      if (isFreshBaseSession(meta.branch, refs().length)) return
       const current = session()
       if (!current) return
       const wire = wireRefs(found)
@@ -339,6 +399,8 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
         .rpc(Muninn)
         .hydrate({ directory: current.directory, refs: wire.refs })
         .then(({ entities: hydrated, unresolved }) => {
+          if (generationAtSchedule !== refreshGeneration) return
+          if (isFreshBaseSession(meta.branch, refs().length)) return
           merge(hydrated)
           setMeta("unresolved", unresolved.length)
           rechain()
@@ -348,8 +410,20 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
   })
 
   // CI state changes upstream: poll while this session has anything to show.
+  // Branch moves off base must also leave the fresh state without restart.
   const poll = setInterval(() => {
-    if (chains().length > 0) void refresh()
+    const current = session()
+    if (!current) return
+    void ctx.client.vcs
+      .get({ location: { directory: current.directory } })
+      .then((vcs) => {
+        const branch = vcs?.data?.branch?.current ?? ""
+        if (branch !== meta.branch) void refresh()
+        else if (chains().length > 0) void refresh()
+      })
+      .catch(() => {
+        if (chains().length > 0) void refresh()
+      })
   }, POLL_MS)
   onCleanup(() => {
     clearInterval(poll)
@@ -367,6 +441,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
   // work stay in the sidebar; settled history never pills.
   const waitForAllStatusChecks = () => ctx.stores.settings.value.waitForAllStatusChecks !== false
   const pillState = createMemo(() => {
+    if (fresh()) return { eligible: [], picked: undefined }
     const eligible = chains().filter((chain) =>
       pillEligible(chain, {
         sessionBranch: meta.branch || undefined,

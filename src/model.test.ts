@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import type { Chain, IssueEntity, PullEntity, RepoRef, RunEntity } from "./model"
-import { chainTone, mergeReady, mergeWhy, pendingReviewNotice, armedTargets, staleHeadRetryEligible, staleHeadEvidenceUsable, sessionAttemptCurrent, targetRefreshConfirmed, pillPick, type ArmedEntry, pillEligible, pullForRun, pullsForRun, jsonReady, prConflicted } from "./model"
+import { chainTone, mergeReady, mergeWhy, pendingReviewNotice, armedTargets, staleHeadRetryEligible, staleHeadEvidenceUsable, sessionAttemptCurrent, targetRefreshConfirmed, pillPick, type ArmedEntry, pillEligible, pullForRun, pullsForRun, jsonReady, prConflicted, isFreshBaseSession } from "./model"
 import { associate } from "./associate"
 
 const repo = { host: "github.com", owner: "sst", repo: "opencode" }
@@ -670,6 +670,17 @@ describe("pillEligible", () => {
       pillEligible(candidate, { sessionBranch: own, sessionRepo: repo, armed: [] }),
     )
     expect(eligible).toEqual([])
+  })
+})
+
+describe("isFreshBaseSession", () => {
+  test("fresh on base with zero refs, not fresh otherwise", () => {
+    expect(isFreshBaseSession("main", 0)).toBe(true)
+    expect(isFreshBaseSession("master", 0)).toBe(true)
+    expect(isFreshBaseSession("main", 1)).toBe(false)
+    expect(isFreshBaseSession("feat/thing", 0)).toBe(false)
+    expect(isFreshBaseSession("", 0)).toBe(false)
+    expect(isFreshBaseSession("Main", 0)).toBe(false)
   })
 })
 
