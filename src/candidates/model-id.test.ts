@@ -5,7 +5,7 @@ describe("validateModelSyntax", () => {
   test("accepts bare slugs, namespaced IDs, and one variant suffix", () => {
     expect(validateModelSyntax("jev-1.13")).toEqual({ ok: true })
     expect(validateModelSyntax("typesafe/jev-1.13")).toEqual({ ok: true })
-    expect(validateModelSyntax("gpt-6-luna")).toEqual({ ok: true })
+    expect(validateModelSyntax("gpt-6-luna-decision")).toEqual({ ok: true })
     expect(validateModelSyntax("openai/gpt-6-luna-decisions")).toEqual({ ok: true })
     expect(validateModelSyntax("  jev-1.13  ")).toEqual({ ok: true })
     expect(validateModelSyntax("model:free")).toEqual({ ok: true })
@@ -42,15 +42,15 @@ describe("defaultModelFor", () => {
   test("returns each backend's pinned default", () => {
     expect(defaultModelFor("zen")).toBe("jev-1.13")
     expect(defaultModelFor("openrouter")).toBe("typesafe/jev-1.13")
-    expect(defaultModelFor("openai")).toBe("gpt-6-luna")
+    expect(defaultModelFor("openai")).toBe("gpt-6-luna-decision")
   })
 })
 
 describe("parseOpenAICompatibleModelList", () => {
   test("extracts trimmed IDs and skips unusable entries", () => {
-    expect(parseOpenAICompatibleModelList({ object: "list", data: [{ id: "jev-1.13" }, { id: " gpt-6-luna " }] })).toEqual([
+    expect(parseOpenAICompatibleModelList({ object: "list", data: [{ id: "jev-1.13" }, { id: " gpt-6-luna-decision " }] })).toEqual([
       "jev-1.13",
-      "gpt-6-luna",
+      "gpt-6-luna-decision",
     ])
     expect(parseOpenAICompatibleModelList({ data: [{ id: 42 }, { name: "no-id" }, null, { id: "  " }] })).toEqual([])
   })
