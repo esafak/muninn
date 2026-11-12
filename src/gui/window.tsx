@@ -1557,7 +1557,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     ),
   })
 
-  // ── Settings: cache lifecycle, in the app's Settings › Extensions area ──
+  // ── Settings (app's Settings › Extensions area): caching, merging, decision models ──
   ctx.add(SettingsPage, {
     id: "settings",
     icon: "settings-gear",
@@ -1571,6 +1571,30 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
           title: ctx.t("settings.retention"),
           description: ctx.t("settings.retention.description"),
           keywords: "cache retention days history keep sidebar",
+        },
+        {
+          id: "merge-method",
+          title: ctx.t("settings.mergeMethod"),
+          description: ctx.t("settings.mergeMethod.description"),
+          keywords: "merge method squash rebase merge-commit how",
+        },
+        {
+          id: "delete-branch",
+          title: ctx.t("settings.deleteBranch"),
+          description: ctx.t("settings.deleteBranch.description"),
+          keywords: "merge delete branch tree worktree cleanup",
+        },
+        {
+          id: "fast-forward-base",
+          title: ctx.t("settings.fastForwardBase"),
+          description: ctx.t("settings.fastForwardBase.description"),
+          keywords: "merge fast-forward base checkout clean",
+        },
+        {
+          id: "wait-for-all-status-checks",
+          title: ctx.t("settings.waitForAllStatusChecks"),
+          description: ctx.t("settings.waitForAllStatusChecks.description"),
+          keywords: "merge checks status ci ready",
         },
         {
           id: "decision-models-enabled",
@@ -1589,12 +1613,6 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
           title: ctx.t("settings.candidateModel"),
           description: ctx.t("settings.candidateModel.description"),
           keywords: "decision model id pinned jev luna validate",
-        },
-        {
-          id: "wait-for-all-status-checks",
-          title: ctx.t("settings.waitForAllStatusChecks"),
-          description: ctx.t("settings.waitForAllStatusChecks.description"),
-          keywords: "merge checks status ci ready",
         },
       ]
     },
@@ -1720,6 +1738,63 @@ const MuninnSettings = (): JSX.Element => {
       </ui.SettingsSection>
       <ui.SettingsSection title={ctx.t("settings.section.merging")}>
         <ui.SettingsRow
+          id="merge-method"
+          title={ctx.t("settings.mergeMethod")}
+          description={ctx.t("settings.mergeMethod.description")}
+        >
+          <ui.Select
+            label={ctx.t("settings.mergeMethod")}
+            options={[
+              { value: "squash", label: "squash" },
+              { value: "merge", label: "merge commit" },
+              { value: "rebase", label: "rebase" },
+            ]}
+            value={ctx.stores.settings.value.mergeMethod}
+            onChange={(value) => {
+              if (value === "squash" || value === "merge" || value === "rebase")
+                ctx.stores.settings.update((draft) => { draft.mergeMethod = value })
+            }}
+          />
+        </ui.SettingsRow>
+        <ui.SettingsRow
+          id="delete-branch"
+          title={ctx.t("settings.deleteBranch")}
+          description={ctx.t("settings.deleteBranch.description")}
+        >
+          <ui.Switch
+            checked={ctx.stores.settings.value.deleteBranch}
+            label={ctx.t("settings.deleteBranch")}
+            hideLabel
+            onChange={(checked) => ctx.stores.settings.update((draft) => { draft.deleteBranch = checked })}
+          />
+        </ui.SettingsRow>
+        <ui.SettingsRow
+          id="fast-forward-base"
+          title={ctx.t("settings.fastForwardBase")}
+          description={ctx.t("settings.fastForwardBase.description")}
+        >
+          <ui.Switch
+            checked={ctx.stores.settings.value.fastForwardBase === true}
+            label={ctx.t("settings.fastForwardBase")}
+            hideLabel
+            onChange={(checked) => ctx.stores.settings.update((draft) => { draft.fastForwardBase = checked })}
+          />
+        </ui.SettingsRow>
+        <ui.SettingsRow
+          id="wait-for-all-status-checks"
+          title={ctx.t("settings.waitForAllStatusChecks")}
+          description={ctx.t("settings.waitForAllStatusChecks.description")}
+        >
+          <ui.Switch
+            checked={ctx.stores.settings.value.waitForAllStatusChecks !== false}
+            label={ctx.t("settings.waitForAllStatusChecks")}
+            hideLabel
+            onChange={(checked) => ctx.stores.settings.update((draft) => { draft.waitForAllStatusChecks = checked })}
+          />
+        </ui.SettingsRow>
+      </ui.SettingsSection>
+      <ui.SettingsSection title={ctx.t("settings.section.decisionModels")}>
+        <ui.SettingsRow
           id="decision-models-enabled"
           title={ctx.t("settings.decisionModelsEnabled")}
           description={ctx.t("settings.decisionModelsEnabled.description")}
@@ -1776,18 +1851,6 @@ const MuninnSettings = (): JSX.Element => {
               {modelStatusLine()}
             </span>
           </div>
-        </ui.SettingsRow>
-        <ui.SettingsRow
-          id="wait-for-all-status-checks"
-          title={ctx.t("settings.waitForAllStatusChecks")}
-          description={ctx.t("settings.waitForAllStatusChecks.description")}
-        >
-          <ui.Switch
-            checked={ctx.stores.settings.value.waitForAllStatusChecks !== false}
-            label={ctx.t("settings.waitForAllStatusChecks")}
-            hideLabel
-            onChange={(checked) => ctx.stores.settings.update((draft) => { draft.waitForAllStatusChecks = checked })}
-          />
         </ui.SettingsRow>
       </ui.SettingsSection>
     </ui.SettingsLayout>
@@ -1877,12 +1940,6 @@ const STYLES = `
   display: flex; align-items: center; gap: 8px; padding: 5px 12px 6px;
   border-top: 1px solid var(--v2-border-border-muted); margin-top: 3px;
   font-size: 10.5px; color: var(--v2-text-text-faint);
-}
-.mn-audit {
-  display: flex; align-items: center; gap: 8px; padding: 5px 12px 6px;
-  border-top: 1px solid var(--v2-border-border-muted); margin-top: 3px;
-  font-size: 10.5px; font-family: var(--v2-font-family-code);
-  color: var(--v2-state-fg-success, #1a7f37);
 }
 .mn-foot-ago { margin-left: auto; }
 .mn-empty { color: var(--v2-text-text-faint); font-size: 11px; padding: 6px 4px; }
