@@ -65,6 +65,10 @@ const catalog: Record<string, DecisionProviderEntry> = {
   },
 }
 
+/** Blank/unset provider default. The single home for this literal — all
+ * fallbacks (GUI, validation, store initial) reference it. */
+export const DEFAULT_DECISION_PROVIDER_ID = "opencode"
+
 /** Provider IDs with a decision entry, for settings pickers. */
 export const decisionProviderIds = (): string[] => Object.keys(catalog)
 

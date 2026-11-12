@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import {
   decisionProviderIds,
+  DEFAULT_DECISION_PROVIDER_ID,
   defaultModelForProvider,
   isAuthoritativeProvider,
   knownModelsForProvider,
@@ -48,5 +49,12 @@ describe("decision catalog", () => {
 
   test("registry IDs cover every catalogued provider", () => {
     expect(decisionProviderIds().sort()).toEqual(["google", "openai", "opencode", "openrouter"])
+  })
+
+  test("default provider is catalogued and has a default model", () => {
+    expect(decisionProviderIds()).toContain(DEFAULT_DECISION_PROVIDER_ID)
+    const model = defaultModelForProvider(DEFAULT_DECISION_PROVIDER_ID)
+    expect(typeof model).toBe("string")
+    expect(model!.length).toBeGreaterThan(0)
   })
 })

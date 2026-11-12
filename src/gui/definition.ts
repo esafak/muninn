@@ -1,5 +1,6 @@
 import { Schema } from "effect"
 import { Plugin, Store } from "@opencode/plugin/gui"
+import { DEFAULT_DECISION_PROVIDER_ID } from "../providers/decision-catalog"
 
 // The store decodes with Effect Schema while the RPC validates with zod — an SDK
 // split (stores are Effect, Rpc is zod), so these shapes mirror src/rpc.ts. Keep
@@ -100,7 +101,7 @@ export const definition = Plugin.define({
         /** Pinned model ID for the judge (per-provider default when blank). */
         candidateModel: Schema.optional(Schema.String),
       }),
-      { retentionDays: 30, debugMode: true, mergeMethod: "squash", deleteBranch: true, fastForwardBase: false, waitForAllStatusChecks: true, decisionModelsEnabled: false, candidateProviderID: "opencode" as const },
+      { retentionDays: 30, debugMode: true, mergeMethod: "squash", deleteBranch: true, fastForwardBase: false, waitForAllStatusChecks: true, decisionModelsEnabled: false, candidateProviderID: DEFAULT_DECISION_PROVIDER_ID },
     ),
     /** Pull requests Muninn is driving to merge ("merge when ready"): armed
      * locally, fired by Muninn's refresh cycle once checks and reviews are green. */

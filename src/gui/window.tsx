@@ -7,7 +7,12 @@ import { messageBuckets, wireRefs } from "../extract"
 import type { TieredRef } from "../extract"
 import { heuristicExtract } from "../candidates/heuristic"
 import { bareKindKept, bareSurvives } from "../candidates/filtering"
-import { defaultModelForProvider, decisionProviderIds, decisionProviderLabel } from "../providers/decision-catalog"
+import {
+  decisionProviderIds,
+  decisionProviderLabel,
+  DEFAULT_DECISION_PROVIDER_ID,
+  defaultModelForProvider,
+} from "../providers/decision-catalog"
 import { CUSTOM_PROVIDER, mergeProviderOptions, resolveCustomCommit } from "./provider-options"
 import { validateModelSyntax } from "../candidates/model-id"
 import type { ArmedEntry, Chain, Entity, Pin, PullEntity, RepoRef, RunEntity, RunStatus } from "../model"
@@ -139,7 +144,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
    * footer warning and fail-open judging. */
   const candidateProviderID = () => {
     const stored = ctx.stores.settings.value.candidateProviderID as string | undefined
-    return stored?.trim() || "opencode"
+    return stored?.trim() || DEFAULT_DECISION_PROVIDER_ID
   }
   const candidateModel = () => ctx.stores.settings.value.candidateModel
 
@@ -1654,7 +1659,7 @@ const MuninnSettings = (): JSX.Element => {
       catalogIds: decisionProviderIds(),
       discoveredIds: connectedProviders()?.ids ?? [],
       stored: (ctx.stores.settings.value.candidateProviderID ?? "").trim(),
-      fallback: "opencode",
+      fallback: DEFAULT_DECISION_PROVIDER_ID,
       labels: providerLabel,
     })
   const selectedProviderID = (): string => {
@@ -1664,7 +1669,7 @@ const MuninnSettings = (): JSX.Element => {
   const showCustomInput = (): boolean => customForced() || picker().showCustomInput
   /** Raw provider for validation: the stored value verbatim, defaulted only
    * when blank. Never the "__custom" Select placeholder. */
-  const validatedProviderID = (): string => (ctx.stores.settings.value.candidateProviderID ?? "").trim() || "opencode"
+  const validatedProviderID = (): string => (ctx.stores.settings.value.candidateProviderID ?? "").trim() || DEFAULT_DECISION_PROVIDER_ID
   // Model IDs are free text: commit trailing-edge debounced so typing never
   // wipes verdicts or re-arms the judge per keystroke. The timer is local to
   // this component and cleared on unmount.
