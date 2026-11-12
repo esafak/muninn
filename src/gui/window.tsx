@@ -10,7 +10,7 @@ import { bareKindKept, bareSurvives } from "../candidates/filtering"
 import { defaultModelFor, validateModelSyntax } from "../candidates/model-id"
 import { isDecisionBackend } from "../candidates/types"
 import type { ArmedEntry, Chain, Entity, Pin, PullEntity, RepoRef, RunEntity, RunStatus } from "../model"
-import { chainTone, armedTargets, staleHeadRetryEligible, staleHeadEvidenceUsable, sessionAttemptCurrent, targetRefreshConfirmed, pillPick, pillEligible, pinnedChain, pinForChain, isFreshBaseSession, mergeReady, mergeWhy, pendingReviewNotice, latestRun, pullForRun, prConflicted, refKey, repoKey, entityKey } from "../model"
+import { chainTone, armedTargets, staleHeadRetryEligible, staleHeadEvidenceUsable, sessionAttemptCurrent, targetRefreshConfirmed, pillPick, pillEligible, pinnedChain, pinForChain, isFreshBaseSession, mergeReady, mergeWhy, pendingReviewNotice, latestRun, pullForRun, prConflicted, refKey, repoKey, entityKey, menuChains } from "../model"
 import { githubLexicon } from "../providers/github/lexicon"
 import { baseCheckoutDecision, cleanFromCheck, cleanupDecision, cleanupResultMessage, cleanupSessionMatches, locateCheckout, safeFastForward, sessionMoveConfirmed, shouldFastForwardBase, shouldRecordCleanupFailure, worktreeOccupancyDecision } from "../local-cleanup"
 import type { CheckoutKind } from "../local-cleanup"
@@ -671,10 +671,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
   // One eligibility policy, one memo, three consumers (`show`, `menu`,
   // `debugLine`) — the same values everywhere, with no per-consumer filter for
   // the footer's census to drift away from (the failure mode the old
-  // `live()`-counts-vs-`pillChains()`-pick split already produced). The menu
-  // alone takes one explicit-pin exception (see `menuChains`): a pinned chain
-  // outside `eligible` still gets a row, so the popover never omits the pill's
-  // pick. State-driven
+  // `live()`-counts-vs-`pillChains()`-pick split already produced). State-driven
   // via `pillEligible`: the session's own PR (still shown after it merges — the
   // pill is the session's work, and a newer PR outranks it through `pillPick`),
   // CI needing attention, an armed merge pending. Mentions of other branches'
@@ -735,16 +732,8 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       else delete current.owner
     })
   }
-  // The menu's rows: the eligible chains, with the picked pin prepended when
-  // it isn't eligible — otherwise a pin-only pill would open an empty popover.
-  // (Reference equality holds: both are drawn from the same `chains()` array.)
   // The menu's merge-when-ready toggle binds to the first open PR across
   // eligible chains (pinned first when it has one open). Reactive.
-  const menuChains = createMemo(() => {
-    const { eligible, picked } = pillState()
-    if (picked?.reason === "pinned" && !eligible.includes(picked.chain)) return [picked.chain, ...eligible]
-    return eligible
-  })
   const menuLead = createMemo(() => {
     const pinned = pillState().picked?.reason === "pinned" ? pillState().picked!.chain : undefined
     const pinnedOpen = pinned?.prs.filter((pull) => pull.state === "open").map((pull) => ({ chain: pinned, pull }))[0]
@@ -1334,11 +1323,12 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       // The icon shape encodes the provider merge state; pill tone still encodes
       // overall chain health. The label stays `#number title ⌄`. An armed lead PR
       // puts a ticking braille spinner in front: a merge is pending. A pinned
-      // override shows no mark: the pill looks the same either way.
+      // override is marked in the tooltip, not the label.
       const mergeStatus = lead?.state === "open" ? lead.mergeState : undefined
       const circle = pillStatusIcon(lead?.state, mergeStatus, tone, pillIcon(meta.provider))
       const pending = lead?.state === "open" ? isArmed(lead) : false
       const short = (title: string): string => (title.length > 24 ? `${title.slice(0, 24)}…` : title)
+      const pinnedSuffix = picked.reason === "pinned" ? ` · ${ctx.t("pill.pinned")}` : ""
 
       return {
         icon: circle,
@@ -1351,8 +1341,8 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
             ? ` · merged${lead.mergedAt === undefined ? "" : ` · ${new Date(lead.mergedAt).toLocaleString()}`}`
             : lead.state === "open"
               ? ` · merge ${mergeStatus ?? "unknown"}${lead.reviewState ? ` · reviews ${lead.reviewState}` : ""}`
-              : ""}`
-          : ctx.t("pill.title"),
+              : ""}${pinnedSuffix}`
+          : `${ctx.t("pill.title")}${pinnedSuffix}`,
       }
     },
     // The pill's dropdown: the full chain picture with the merge controls the
@@ -1363,7 +1353,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       // toggle binds to it. Reactive — the popover updates while it's open.
       return (
       <div class="mn-pop">
-        <For each={menuChains().slice(0, 3)}>
+        <For each={menuChains(pillState().picked, pillState().eligible)}>
           {(chain) => (
             <div class="mn-pop-chain" data-tone={chainTone(chain, waitForAllStatusChecks())}>
               <For each={chain.prs}>
@@ -1568,7 +1558,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     ),
   })
 
-  // ── Settings: cache lifecycle, in the app's Settings › Extensions area ──
+  // ── Settings (app's Settings › Extensions area): caching, merging, decision models ──
   ctx.add(SettingsPage, {
     id: "settings",
     icon: "settings-gear",
@@ -1582,6 +1572,30 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
           title: ctx.t("settings.retention"),
           description: ctx.t("settings.retention.description"),
           keywords: "cache retention days history keep sidebar",
+        },
+        {
+          id: "merge-method",
+          title: ctx.t("settings.mergeMethod"),
+          description: ctx.t("settings.mergeMethod.description"),
+          keywords: "merge method squash rebase merge-commit how",
+        },
+        {
+          id: "delete-branch",
+          title: ctx.t("settings.deleteBranch"),
+          description: ctx.t("settings.deleteBranch.description"),
+          keywords: "merge delete branch tree worktree cleanup",
+        },
+        {
+          id: "fast-forward-base",
+          title: ctx.t("settings.fastForwardBase"),
+          description: ctx.t("settings.fastForwardBase.description"),
+          keywords: "merge fast-forward base checkout clean",
+        },
+        {
+          id: "wait-for-all-status-checks",
+          title: ctx.t("settings.waitForAllStatusChecks"),
+          description: ctx.t("settings.waitForAllStatusChecks.description"),
+          keywords: "merge checks status ci ready",
         },
         {
           id: "decision-models-enabled",
@@ -1600,12 +1614,6 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
           title: ctx.t("settings.candidateModel"),
           description: ctx.t("settings.candidateModel.description"),
           keywords: "decision model id pinned jev luna validate",
-        },
-        {
-          id: "wait-for-all-status-checks",
-          title: ctx.t("settings.waitForAllStatusChecks"),
-          description: ctx.t("settings.waitForAllStatusChecks.description"),
-          keywords: "merge checks status ci ready",
         },
       ]
     },
@@ -1731,6 +1739,63 @@ const MuninnSettings = (): JSX.Element => {
       </ui.SettingsSection>
       <ui.SettingsSection title={ctx.t("settings.section.merging")}>
         <ui.SettingsRow
+          id="merge-method"
+          title={ctx.t("settings.mergeMethod")}
+          description={ctx.t("settings.mergeMethod.description")}
+        >
+          <ui.Select
+            label={ctx.t("settings.mergeMethod")}
+            options={[
+              { value: "squash", label: "squash" },
+              { value: "merge", label: "merge commit" },
+              { value: "rebase", label: "rebase" },
+            ]}
+            value={ctx.stores.settings.value.mergeMethod}
+            onChange={(value) => {
+              if (value === "squash" || value === "merge" || value === "rebase")
+                ctx.stores.settings.update((draft) => { draft.mergeMethod = value })
+            }}
+          />
+        </ui.SettingsRow>
+        <ui.SettingsRow
+          id="delete-branch"
+          title={ctx.t("settings.deleteBranch")}
+          description={ctx.t("settings.deleteBranch.description")}
+        >
+          <ui.Switch
+            checked={ctx.stores.settings.value.deleteBranch}
+            label={ctx.t("settings.deleteBranch")}
+            hideLabel
+            onChange={(checked) => ctx.stores.settings.update((draft) => { draft.deleteBranch = checked })}
+          />
+        </ui.SettingsRow>
+        <ui.SettingsRow
+          id="fast-forward-base"
+          title={ctx.t("settings.fastForwardBase")}
+          description={ctx.t("settings.fastForwardBase.description")}
+        >
+          <ui.Switch
+            checked={ctx.stores.settings.value.fastForwardBase === true}
+            label={ctx.t("settings.fastForwardBase")}
+            hideLabel
+            onChange={(checked) => ctx.stores.settings.update((draft) => { draft.fastForwardBase = checked })}
+          />
+        </ui.SettingsRow>
+        <ui.SettingsRow
+          id="wait-for-all-status-checks"
+          title={ctx.t("settings.waitForAllStatusChecks")}
+          description={ctx.t("settings.waitForAllStatusChecks.description")}
+        >
+          <ui.Switch
+            checked={ctx.stores.settings.value.waitForAllStatusChecks !== false}
+            label={ctx.t("settings.waitForAllStatusChecks")}
+            hideLabel
+            onChange={(checked) => ctx.stores.settings.update((draft) => { draft.waitForAllStatusChecks = checked })}
+          />
+        </ui.SettingsRow>
+      </ui.SettingsSection>
+      <ui.SettingsSection title={ctx.t("settings.section.decisionModels")}>
+        <ui.SettingsRow
           id="decision-models-enabled"
           title={ctx.t("settings.decisionModelsEnabled")}
           description={ctx.t("settings.decisionModelsEnabled.description")}
@@ -1787,18 +1852,6 @@ const MuninnSettings = (): JSX.Element => {
               {modelStatusLine()}
             </span>
           </div>
-        </ui.SettingsRow>
-        <ui.SettingsRow
-          id="wait-for-all-status-checks"
-          title={ctx.t("settings.waitForAllStatusChecks")}
-          description={ctx.t("settings.waitForAllStatusChecks.description")}
-        >
-          <ui.Switch
-            checked={ctx.stores.settings.value.waitForAllStatusChecks !== false}
-            label={ctx.t("settings.waitForAllStatusChecks")}
-            hideLabel
-            onChange={(checked) => ctx.stores.settings.update((draft) => { draft.waitForAllStatusChecks = checked })}
-          />
         </ui.SettingsRow>
       </ui.SettingsSection>
     </ui.SettingsLayout>
@@ -1889,12 +1942,6 @@ const STYLES = `
   border-top: 1px solid var(--v2-border-border-muted); margin-top: 3px;
   font-size: 10.5px; color: var(--v2-text-text-faint);
 }
-.mn-audit {
-  display: flex; align-items: center; gap: 8px; padding: 5px 12px 6px;
-  border-top: 1px solid var(--v2-border-border-muted); margin-top: 3px;
-  font-size: 10.5px; font-family: var(--v2-font-family-code);
-  color: var(--v2-state-fg-success, #1a7f37);
-}
 .mn-foot-ago { margin-left: auto; }
 .mn-empty { color: var(--v2-text-text-faint); font-size: 11px; padding: 6px 4px; }
 .mn-debug {
@@ -1971,6 +2018,8 @@ const STYLES = `
 .mn-merge.armed:hover { background: var(--v2-overlay-simple-overlay-hover); filter: none; }
 /* The pending-merge spinner rides inside the Armed button, tinted by it. */
 .mn-merge.armed .mn-spin {
+  background: none; color: var(--v2-state-fg-warning, #9a6700);
+  box-shadow: inset 0 0 0 .5px var(--v2-state-border-warning, #9a6700);
   width: 9px; height: 9px; border: 1px solid transparent;
   border-top-color: currentColor; border-left-color: currentColor;
   animation-duration: 1.1s;

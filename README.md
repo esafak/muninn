@@ -6,13 +6,15 @@ Tracks what an OpenCode session ships: pull requests, issues, and CI runs —
 extracted from the conversation, hydrated from the forge, and shown live in
 OpenCode Desktop.
 
-Two components, one data model:
+## What it looks like
 
-- **Composer pills** — one pair per work chain (`#4821 ✓ ready ⇢ #1043 +1` + a
-  Merge pill). Appears only when the session touches sources; floats over the
-  timeline, so it never resizes the composer.
-- **Muninn side panel** — chains as triplet cards (issue → PR → runs),
-  chronologically by last activity, grouped by day.
+![Closed pill above the composer](docs/screenshots/pill-closed.png)
+
+![Composer pill dropdown](docs/screenshots/pill.png)
+
+![Muninn side panel](docs/screenshots/sidebar.png)
+
+![Muninn settings](docs/screenshots/settings.png)
 
 ## Add the plugin
 
@@ -23,6 +25,14 @@ manager. OpenCode documents the `github:owner/repo` form for `plugin add` in its
 ```sh
 opencode plugin add github:esafak/muninn
 ```
+
+To test a pull request before it merges, install its branch the same way:
+
+```sh
+opencode plugin add github:esafak/muninn#docs/readme-screenshots-settings-audit
+```
+
+Branches, tags, and full commit hashes all work.
 
 OpenCode watches configuration directories and may load the plugin automatically;
 if it does not appear, restart OpenCode Desktop. See the [plugin reload

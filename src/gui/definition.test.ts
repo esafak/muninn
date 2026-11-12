@@ -82,4 +82,12 @@ describe("i18n catalog", () => {
     expect(en["auth.unresolved.one"]).toContain("{{count}}")
     expect(en["auth.unresolved.other"]).toContain("{{count}}")
   })
+
+  test("every settings row and section has a title and description", () => {
+    expect(en["settings.section.decisionModels"]).toBe("Decision models")
+    for (const id of ["mergeMethod", "deleteBranch", "fastForwardBase"] as const) {
+      expect(en[`settings.${id}`]!.length).toBeGreaterThan(0)
+      expect(en[`settings.${id}.description`]!.length).toBeGreaterThan(0)
+    }
+  })
 })
