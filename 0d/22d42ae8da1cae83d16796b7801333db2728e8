@@ -1,0 +1,19 @@
+src/model.ts
+  s_05af17943ad879::t_59308f9851e782 310-319
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0d22d42ae8da1cae83d16796b7801333db2728e8",
+  "prompts": {},
+  "sessions": {
+    "s_05af17943ad879": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_e34d87859ffe6JkScZvFYm9A96",
+        "model": "unknown"
+      },
+      "human_author": "Emre Şafak <3928300+esafak@users.noreply.github.com>"
+    }
+  }
+}
