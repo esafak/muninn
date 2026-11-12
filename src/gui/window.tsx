@@ -2112,10 +2112,9 @@ const STYLES = `
 }
 .mn-merge:hover { filter: brightness(1.1); }
 .mn-merge.failed:disabled { opacity: .65; cursor: not-allowed; filter: none; pointer-events: none; }
-.mn-merge.failed:disabled:hover { filter: none; }
-/* The disabled red button is click-through so its titled wrapper is the real
- * pointer target (tooltip + row-click suppression work on every engine). */
-.mn-wrap-fail { display: inline-flex; flex: none; }
+/* Wrapper is the real pointer target: the disabled button is click-through,
+ * so tooltip, row-click suppression, and cursor all live here. */
+.mn-wrap-fail { display: inline-flex; flex: none; cursor: not-allowed; }
 .mn-merge.pending {
   background: #9a6700;
   color: #fff;
