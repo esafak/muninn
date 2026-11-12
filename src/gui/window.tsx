@@ -97,6 +97,9 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
   let branchRunsBranch: string | undefined
   let resumePendingBranch: string | undefined
   let resumeInFlightBranch: string | undefined
+  /** Whether refresh completed a vcs branch read: distinguishes a completed
+   * detached-HEAD (""/detached) from not-yet-loaded or mid-refresh (""). */
+  let branchLoaded = false
   const mergeKey = (repo: RepoRef, number: number): string => `${repoKey(repo)}#${number}`
   const sameArm = (candidate: ArmedEntry, original: ArmedEntry): boolean =>
     mergeKey(candidate.repo, candidate.number) === mergeKey(original.repo, original.number) &&
@@ -196,6 +199,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     if (targetKey) refreshedPullByPR.delete(targetKey)
     setSessionReady(true)
     // Gate pills on this session before any network: identity is known up front.
+    branchLoaded = false
     setMeta((previous) => ({ ...previous, sessionID: current.id, repo: null, provider: null, branch: "", headSha: null }))
     const client = ctx.client
 
@@ -220,6 +224,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
         const vcs = await client.vcs.get({ location: { directory: current.directory } }).catch(() => undefined)
         const branch = vcs?.data?.branch?.current
         setMeta("branch", branch ?? "")
+        branchLoaded = true
 
         const found = refs()
         const recoveryTargets = target
@@ -325,8 +330,8 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     })()
 
     const dbg = await client.rpc(Muninn).debug({}).catch(() => null)
-    if (!currentRefresh()) return false
     setMeta("debug", dbg ? `srv ${dbg.server}` : "srv ?")
+    if (!currentRefresh()) return false
     return refreshed
   }
 
@@ -343,6 +348,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       branchRunsBranch = undefined
       resumePendingBranch = undefined
       resumeInFlightBranch = undefined
+      branchLoaded = false
       void refresh()
     },
   )
@@ -418,7 +424,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       .get({ location: { directory: current.directory } })
       .then((vcs) => {
         const branch = vcs?.data?.branch?.current ?? ""
-        if (branch !== meta.branch) void refresh()
+        if (branch !== meta.branch && (meta.branch !== "" || branchLoaded)) void refresh()
         else if (chains().length > 0) void refresh()
       })
       .catch(() => {
