@@ -307,6 +307,16 @@ export const pillEligible = (
   return false
 }
 
+/** Fresh worktree gate: a new session still on its base branch with zero
+ * deliberate transcript refs shows an empty sidebar and no pill. v1 base names
+ * are hardcoded `main`/`master` (case-sensitive); detached HEAD (`""`) stays
+ * non-fresh — it is already empty via the existing no-branch path. */
+export const isFreshBaseSession = (
+  sessionBranch: string,
+  deliberateRefCount: number,
+  baseNames: readonly string[] = ["main", "master"],
+): boolean => deliberateRefCount === 0 && baseNames.includes(sessionBranch)
+
 /** Sidebar pin: member identity survives lead changes. PR pins carry
  * `{repo, number}` (kind `pr` implied); issue/run-only groups pin their lead
  * member (`kind` explicit, since `#42` alone is ambiguous); anything else

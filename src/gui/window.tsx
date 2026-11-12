@@ -9,7 +9,7 @@ import { heuristicExtract } from "../candidates/heuristic"
 import { bareKindKept, bareSurvives } from "../candidates/filtering"
 import { isDecisionBackend } from "../candidates/types"
 import type { ArmedEntry, Chain, Entity, Pin, PullEntity, RepoRef, RunEntity, RunStatus } from "../model"
-import { chainTone, armedTargets, staleHeadRetryEligible, staleHeadEvidenceUsable, sessionAttemptCurrent, targetRefreshConfirmed, pillPick, pillEligible, pinnedChain, pinForChain, mergeReady, mergeWhy, pendingReviewNotice, latestRun, pullForRun, prConflicted, refKey, repoKey, entityKey } from "../model"
+import { chainTone, armedTargets, staleHeadRetryEligible, staleHeadEvidenceUsable, sessionAttemptCurrent, targetRefreshConfirmed, pillPick, pillEligible, pinnedChain, pinForChain, isFreshBaseSession, mergeReady, mergeWhy, pendingReviewNotice, latestRun, pullForRun, prConflicted, refKey, repoKey, entityKey } from "../model"
 import { githubLexicon } from "../providers/github/lexicon"
 import { baseCheckoutDecision, cleanFromCheck, cleanupDecision, cleanupResultMessage, cleanupSessionMatches, locateCheckout, safeFastForward, sessionMoveConfirmed, shouldFastForwardBase, shouldRecordCleanupFailure, worktreeOccupancyDecision } from "../local-cleanup"
 import type { CheckoutKind } from "../local-cleanup"
@@ -98,6 +98,12 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
   }
   const refreshedPullByPR = new Map<string, PullEntity>()
   let refreshGeneration = 0
+  let branchRunsBranch: string | undefined
+  let resumePendingBranch: string | undefined
+  let resumeInFlightBranch: string | undefined
+  /** Whether refresh completed a vcs branch read: distinguishes a completed
+   * detached-HEAD (""/detached) from not-yet-loaded or mid-refresh (""). */
+  let branchLoaded = false
   const mergeKey = (repo: RepoRef, number: number): string => `${repoKey(repo)}#${number}`
   const sameArm = (candidate: ArmedEntry, original: ArmedEntry): boolean =>
     mergeKey(candidate.repo, candidate.number) === mergeKey(original.repo, original.number) &&
@@ -198,6 +204,8 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     })
   })
 
+  const fresh = createMemo(() => isFreshBaseSession(meta.branch, refs().length))
+
   const rechain = () => {
     const repo = meta.repo
     // Chains are session-associated: only entities this session's transcript
@@ -252,6 +260,10 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
         if (candidate.headSha === entity.headSha && !relevant.includes(candidate) && !related.includes(candidate))
           related.push(candidate)
       }
+    }
+    if (isFreshBaseSession(meta.branch, refs().length)) {
+      setChains([])
+      return
     }
     setChains(associate([...relevant, ...related], repo ? (runs[repoKey(repo)] ?? []) : []))
     // Expiry: a pin whose chain is gone unpins so a stale override can't stick
@@ -390,6 +402,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     if (targetKey) refreshedPullByPR.delete(targetKey)
     setSessionReady(true)
     // Gate pills on this session before any network: identity is known up front.
+    branchLoaded = false
     setMeta((previous) => ({ ...previous, sessionID: current.id, repo: null, provider: null, branch: "", headSha: null }))
     const client = ctx.client
 
@@ -414,6 +427,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
         const vcs = await client.vcs.get({ location: { directory: current.directory } }).catch(() => undefined)
         const branch = vcs?.data?.branch?.current
         setMeta("branch", branch ?? "")
+        branchLoaded = true
 
         const found = refs()
         const recoveryTargets = target
@@ -436,7 +450,10 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
         if (requested.length > 0) {
           const wire = wireRefs(requested)
           const result = await stage("hydrate", () => client.rpc(Muninn).hydrate({ directory: current.directory, refs: wire.refs }))
-          if (!currentRefresh()) return false
+          if (!currentRefresh()) {
+            resumeInFlightBranch = undefined
+            return false
+          }
           merge(result.entities)
           for (const pull of result.entities.filter((entity): entity is PullEntity => entity.kind === "pr")) {
             const key = mergeKey(pull.repo, pull.number)
@@ -457,10 +474,15 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
           const unresolved = result.unresolved.length > 0 ? ` · ${result.unresolved.length} unresolved (${unresolvedLabel(result.unresolved, repo)})` : ` · ${result.unresolved.length} unresolved`
           setMeta("stats", `${sent} refs → ${result.entities.length} hydrated (${breakdown})${unresolved}${dropped}`)
         }
-        if (branch) {
+        if (branch && !isFreshBaseSession(branch ?? "", found.length)) {
           const { runs: branchRuns, prs } = await stage("branch-runs", () => client.rpc(Muninn).branchRuns({ directory: current.directory, branch }))
-          if (!currentRefresh()) return false
+          if (!currentRefresh()) {
+            resumeInFlightBranch = undefined
+            return false
+          }
           setRuns(repoKey(repo), branchRuns)
+          branchRunsBranch = branch
+          if (resumeInFlightBranch === branch) resumeInFlightBranch = undefined
           merge(prs)
           for (const pull of prs) {
             const key = mergeKey(pull.repo, pull.number)
@@ -472,11 +494,15 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
             targetUnresolved = false
           }
         }
-        if (!currentRefresh()) return false
+        if (!currentRefresh()) {
+          resumeInFlightBranch = undefined
+          return false
+        }
         for (const [key, pull] of recoveredPulls) refreshedPullByPR.set(key, pull)
         setMeta("error", null)
         await judgeFound(current.id, current.directory, found, epoch)
         rechain()
+        if (isFreshBaseSession(branch ?? "", found.length) && resumeInFlightBranch === branch) resumeInFlightBranch = undefined
         const knownPulls = Object.values(entities).filter((entity): entity is PullEntity =>
           entity.kind === "pr" && repoKey(entity.repo) === repoKey(repo),
         )
@@ -501,14 +527,15 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
           targetUnresolved,
         })
       } catch (error) {
+        resumeInFlightBranch = undefined
         setMeta("error", error instanceof Error ? error.message : String(error))
         return false
       }
     })()
 
     const dbg = await client.rpc(Muninn).debug({}).catch(() => null)
-    if (!currentRefresh()) return false
     setMeta("debug", dbg ? `srv ${dbg.server}` : "srv ?")
+    if (!currentRefresh()) return false
     return refreshed
   }
 
@@ -524,6 +551,10 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       // Verdicts belong to the session that produced them; never carry over.
       setVerdicts(undefined)
       setSessionReady(false)
+      branchRunsBranch = undefined
+      resumePendingBranch = undefined
+      resumeInFlightBranch = undefined
+      branchLoaded = false
       void refresh()
     },
   )
@@ -538,9 +569,47 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     const model = candidateModel()
     void provider
     void model
-    if (!meta.repo || found.length === 0) return
+    const isFresh = fresh()
+    const hadTimer = timer !== undefined
     clearTimeout(timer)
+    timer = undefined
+    if (hadTimer && resumePendingBranch !== undefined) resumePendingBranch = undefined
+    if (isFresh) {
+      refreshGeneration++
+      resumePendingBranch = undefined
+      resumeInFlightBranch = undefined
+      rechain()
+      return
+    }
+    if (!meta.repo || found.length === 0) return
+    if (found.length > 0 && isFreshBaseSession(meta.branch, 0) && branchRunsBranch !== meta.branch && resumePendingBranch !== meta.branch && resumeInFlightBranch !== meta.branch) {
+      const generationAtSchedule = refreshGeneration
+      resumePendingBranch = meta.branch
+      timer = setTimeout(() => {
+        timer = undefined
+        if (generationAtSchedule !== refreshGeneration) {
+          resumePendingBranch = undefined
+          return
+        }
+        if (isFreshBaseSession(meta.branch, refs().length)) {
+          resumePendingBranch = undefined
+          return
+        }
+        if (branchRunsBranch === meta.branch) {
+          resumePendingBranch = undefined
+          return
+        }
+        resumePendingBranch = undefined
+        resumeInFlightBranch = meta.branch
+        void refresh()
+      }, HYDRATE_DEBOUNCE_MS)
+      return
+    }
+    const generationAtSchedule = refreshGeneration
     timer = setTimeout(() => {
+      timer = undefined
+      if (generationAtSchedule !== refreshGeneration) return
+      if (isFreshBaseSession(meta.branch, refs().length)) return
       const current = session()
       if (!current) return
       // Same shared epoch: a debounce that fires later wins over an older refresh.
@@ -550,9 +619,11 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
         .rpc(Muninn)
         .hydrate({ directory: current.directory, refs: wire.refs })
         .then(async ({ entities: hydrated, unresolved }) => {
+          if (generationAtSchedule !== refreshGeneration) return
           // Reject stale callbacks before touching shared state: a session that
           // moved directories must not merge the old directory's entities.
           if (!sessionAttemptCurrent(current, session())) return
+          if (isFreshBaseSession(meta.branch, refs().length)) return
           merge(hydrated)
           setMeta("unresolved", unresolved.length)
           // Same policy as refresh: judge before chaining, so the message
@@ -565,8 +636,20 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
   })
 
   // CI state changes upstream: poll while this session has anything to show.
+  // Branch moves off base must also leave the fresh state without restart.
   const poll = setInterval(() => {
-    if (chains().length > 0) void refresh()
+    const current = session()
+    if (!current) return
+    void ctx.client.vcs
+      .get({ location: { directory: current.directory } })
+      .then((vcs) => {
+        const branch = vcs?.data?.branch?.current ?? ""
+        if (branch !== meta.branch && (meta.branch !== "" || branchLoaded)) void refresh()
+        else if (chains().length > 0) void refresh()
+      })
+      .catch(() => {
+        if (chains().length > 0) void refresh()
+      })
   }, POLL_MS)
   onCleanup(() => {
     clearInterval(poll)
@@ -589,6 +672,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
 
   const waitForAllStatusChecks = () => ctx.stores.settings.value.waitForAllStatusChecks !== false
   const pillState = createMemo(() => {
+    if (fresh()) return { eligible: [], picked: undefined }
     const eligible = chains().filter((chain) =>
       pillEligible(chain, {
         sessionBranch: meta.branch || undefined,
@@ -603,13 +687,6 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     const pinned = pinnedChain(chains(), ctx.stores.pinned.value)
     if (pinned) return { eligible, picked: { chain: pinned, reason: "pinned" as const, considered: eligible.length + 1 } }
     return { eligible, picked: normal }
-  })
-  // The menu's merge-when-ready toggle binds to the first open PR across
-  // eligible chains (pinned first when it has one open). Reactive.
-  const menuLead = createMemo(() => {
-    const pinned = pillState().picked?.reason === "pinned" ? pillState().picked!.chain : undefined
-    const pinnedOpen = pinned?.prs.filter((pull) => pull.state === "open").map((pull) => ({ chain: pinned, pull }))[0]
-    return pinnedOpen ?? pillState().eligible.flatMap((chain) => chain.prs.filter((pull) => pull.state === "open").map((pull) => ({ chain, pull })))[0]
   })
 
   const isPinned = (chain: Chain): boolean => {
@@ -648,6 +725,13 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       else delete current.owner
     })
   }
+  // The menu's merge-when-ready toggle binds to the first open PR across
+  // eligible chains (pinned first when it has one open). Reactive.
+  const menuLead = createMemo(() => {
+    const pinned = pillState().picked?.reason === "pinned" ? pillState().picked!.chain : undefined
+    const pinnedOpen = pinned?.prs.filter((pull) => pull.state === "open").map((pull) => ({ chain: pinned, pull }))[0]
+    return pinnedOpen ?? pillState().eligible.flatMap((chain) => chain.prs.filter((pull) => pull.state === "open").map((pull) => ({ chain, pull })))[0]
+  })
 
   /** Whether a PR is armed for Muninn-driven merge-when-ready — ours, or already
    * armed on the forge's side (shown the same; cancel handles both). */
