@@ -1,0 +1,19 @@
+docs/design/mockup.html
+  s_9e8943db980262::t_8a387b2843080e 530,549,707
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "117fe10cdcc14008f6deb6dd856c0b0010ae097e",
+  "prompts": {},
+  "sessions": {
+    "s_9e8943db980262": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_e2f5557b1ffeBkjQXFQGyGogxR",
+        "model": "unknown"
+      },
+      "human_author": "Emre Şafak <3928300+esafak@users.noreply.github.com>"
+    }
+  }
+}
