@@ -1,0 +1,18 @@
+src/candidates/codecs/jev.ts
+  h_ea91e2db23540f 16
+src/candidates/decision-model.ts
+  h_ea91e2db23540f 194-202
+src/gui/window.tsx
+  h_ea91e2db23540f 12,617-619,624-626,632-648,1507-1516,1563,1566-1572
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3eb6fb206be35103d5eaf9ce9bd232b26f891e83",
+  "prompts": {},
+  "humans": {
+    "h_ea91e2db23540f": {
+      "author": "Emre Şafak <3928300+esafak@users.noreply.github.com>"
+    }
+  }
+}
