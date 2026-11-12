@@ -11,8 +11,8 @@ export const ZEN_DECISIONS_ENDPOINT = "https://opencode.ai/zen/v1/systemone"
 
 export const ZEN_MODELS_URL = "https://opencode.ai/zen/v1/models"
 
-export const resolveZenKey = (opts: { zenApiKey?: string; apiKey?: string }): string | undefined => {
-  const key = opts.zenApiKey ?? opts.apiKey ?? process.env.OPENCODE_API_KEY ?? process.env.OPENCODE_CONSOLE_API_KEY
+export const resolveZenKey = (opts: { zenApiKey?: string }): string | undefined => {
+  const key = opts.zenApiKey ?? process.env.OPENCODE_ZEN_API_KEY
   return typeof key === "string" && key.trim() ? key.trim() : undefined
 }
 

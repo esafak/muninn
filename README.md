@@ -8,13 +8,39 @@ OpenCode Desktop.
 
 ## What it looks like
 
+**Composer pill — closed**
+
 ![Closed pill above the composer](docs/screenshots/pill-closed.png)
+
+**Composer pill — open**
 
 ![Composer pill dropdown](docs/screenshots/pill.png)
 
+**Side panel**
+
 ![Muninn side panel](docs/screenshots/sidebar.png)
 
+**Settings**
+
 ![Muninn settings](docs/screenshots/settings.png)
+
+## Decision backend keys
+
+The decision backend needs its key, or judging falls back to heuristic keep-all. Set your backend's option in `opencode.json`, or provide the env var before OpenCode starts:
+
+| Backend | Plugin option | Env var |
+| --- | --- | --- |
+| Zen | `zenApiKey` | `OPENCODE_ZEN_API_KEY` |
+| OpenRouter | `openrouterApiKey` | `OPENROUTER_API_KEY` |
+| OpenAI | `openaiApiKey` | `OPENAI_API_KEY` |
+
+```jsonc
+{
+  "plugins": [{ "package": "muninn", "options": { "openaiApiKey": "sk-..." } }]
+}
+```
+
+Keys stay server-side; settings only hold provider and model.
 
 ## Add the plugin
 

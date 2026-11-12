@@ -1606,8 +1606,8 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
         {
           id: "candidate-provider",
           title: ctx.t("settings.candidateProvider"),
-          description: ctx.t("settings.candidateProvider.description"),
-          keywords: "decision backend provider zen openrouter openai judge",
+          description: `${ctx.t("settings.candidateProvider.hint.zen")} ${ctx.t("settings.candidateProvider.hint.openrouter")} ${ctx.t("settings.candidateProvider.hint.openai")}`,
+          keywords: "decision backend provider zen openrouter openai judge key apikey env",
         },
         {
           id: "candidate-model",
@@ -1810,7 +1810,13 @@ const MuninnSettings = (): JSX.Element => {
         <ui.SettingsRow
           id="candidate-provider"
           title={ctx.t("settings.candidateProvider")}
-          description={ctx.t("settings.candidateProvider.description")}
+          description={
+            selectedProvider() === "zen"
+              ? ctx.t("settings.candidateProvider.hint.zen")
+              : selectedProvider() === "openrouter"
+                ? ctx.t("settings.candidateProvider.hint.openrouter")
+                : ctx.t("settings.candidateProvider.hint.openai")
+          }
         >
           <ui.Select
             label={ctx.t("settings.candidateProvider")}
@@ -1832,6 +1838,7 @@ const MuninnSettings = (): JSX.Element => {
             <ui.TextInput
               value={modelDraft()}
               label={ctx.t("settings.candidateModel")}
+              placeholder={defaultModelFor(selectedProvider())}
               invalid={modelCheck().status === "invalid"}
               onInput={(value) => {
                 setModelDraft(value)
@@ -1844,13 +1851,15 @@ const MuninnSettings = (): JSX.Element => {
                 }, 500)
               }}
             />
-            <span
-              class="mn-note"
-              style={{ padding: "0 4px" }}
-              data-warn={modelCheck().status === "invalid" || modelCheck().status === "unverified" ? "" : undefined}
-            >
-              {modelStatusLine()}
-            </span>
+            {modelCheck().status !== "default" && (
+              <span
+                class="mn-note"
+                style={{ padding: "0 4px" }}
+                data-warn={modelCheck().status === "invalid" || modelCheck().status === "unverified" ? "" : undefined}
+              >
+                {modelStatusLine()}
+              </span>
+            )}
           </div>
         </ui.SettingsRow>
       </ui.SettingsSection>

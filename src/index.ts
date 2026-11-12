@@ -249,7 +249,6 @@ export default Plugin.define({
   id: "muninn",
   async setup(ctx) {
     const options = (ctx.options ?? {}) as {
-      apiKey?: string
       zenApiKey?: string
       openrouterApiKey?: string
       openaiApiKey?: string
@@ -358,7 +357,7 @@ export default Plugin.define({
         const model = createDecisionModel({
           provider: input.provider,
           ...(input.model ? { model: input.model } : {}),
-          zenApiKey: options.zenApiKey ?? options.apiKey,
+          zenApiKey: options.zenApiKey,
           openrouterApiKey: options.openrouterApiKey,
           openaiApiKey: options.openaiApiKey,
           cache: judgeCache,
