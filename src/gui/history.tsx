@@ -53,31 +53,36 @@ export const MergeButton = (props: {
   isArmed: (pull: PullEntity) => boolean
   onMerge: (pull: PullEntity) => Promise<void>
   onArm: (pull: PullEntity, enable: boolean) => Promise<void>
-}): JSX.Element => (
+}): JSX.Element => {
+  const wait = () => props.waitForAllStatusChecks()
+  /** Watching tints follow the live PR state; the node itself stays stable so
+   * refresh ticks never drop focus or restart the spinner. */
+  const watchedReady = () => mergeReady(props.chain, props.pull, wait())
+  const watchedFailed = () => !watchedReady() && mergeFailed(props.chain, props.pull, wait())
+  const watchedClass = () => `mn-merge armed${watchedReady() ? " ready" : ""}${watchedFailed() ? " failed" : ""}`
+  const watchedTitle = () => {
+    const forge = props.pull.autoMerge ? ` (also on the forge as ${props.pull.autoMerge})` : ""
+    const state = watchedReady()
+      ? "ready — merging on the next check (within ~30s)"
+      : `${mergeWhy(props.chain, props.pull, wait())} — will merge when green`
+    return `Merging when ready${forge}: ${state}. Click to stop.`
+  }
+  const failedTitle = () => `${mergeWhy(props.chain, props.pull, wait())} — fix this before it can merge`
+  return (
   <Show when={props.pull.state === "open"}>
     <Switch>
       <Match when={props.isArmed(props.pull)}>
-        {(() => {
-          const ready = mergeReady(props.chain, props.pull, props.waitForAllStatusChecks())
-          const failed = !ready && mergeFailed(props.chain, props.pull, props.waitForAllStatusChecks())
-          const state = ready
-            ? "ready — merging on the next check (within ~30s)"
-            : `${mergeWhy(props.chain, props.pull, props.waitForAllStatusChecks())} — will merge when green`
-          const forge = props.pull.autoMerge ? ` (also on the forge as ${props.pull.autoMerge})` : ""
-          return (
-            <button
-              class={`mn-merge armed${ready ? " ready" : ""}${failed ? " failed" : ""}`}
-              title={`Merging when ready${forge}: ${state}. Click to stop.`}
-              onClick={(event) => {
-                event.stopPropagation()
-                void props.onArm(props.pull, false)
-              }}
-            >
-              <span class="mn-spin" />
-              Merging when ready
-            </button>
-          )
-        })()}
+        <button
+          class={watchedClass()}
+          title={watchedTitle()}
+          onClick={(event) => {
+            event.stopPropagation()
+            void props.onArm(props.pull, false)
+          }}
+        >
+          <span class="mn-spin" />
+          Merging when ready
+        </button>
       </Match>
       <Match when={mergeReady(props.chain, props.pull, props.waitForAllStatusChecks())}>
         <button
@@ -92,14 +97,19 @@ export const MergeButton = (props: {
         </button>
       </Match>
       <Match when={props.pull.state === "open" && mergeFailed(props.chain, props.pull, props.waitForAllStatusChecks())}>
-        <button
-          class="mn-merge failed"
-          disabled
-          title={`${mergeWhy(props.chain, props.pull, props.waitForAllStatusChecks())} — fix this before it can merge`}
+        <span
+          class="mn-wrap-fail"
+          title={failedTitle()}
           onClick={(event) => event.stopPropagation()}
         >
-          Merge when ready
-        </button>
+          <button
+            class="mn-merge failed"
+            disabled
+            title={failedTitle()}
+          >
+            Merge when ready
+          </button>
+        </span>
       </Match>
       <Match when={props.pull.state === "open"}>
         <button
@@ -115,7 +125,8 @@ export const MergeButton = (props: {
       </Match>
     </Switch>
   </Show>
-)
+  )
+}
 
 /**
  * The chain pin: the pin octicon riding at the far right of the chain's title

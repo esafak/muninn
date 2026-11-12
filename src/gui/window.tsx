@@ -2105,13 +2105,17 @@ const STYLES = `
   background: #1f883d; border: none;
   outline: none; box-shadow: none;
 }
-.mn-merge:focus, .mn-merge:focus-visible { outline: none; box-shadow: none; }
+.mn-merge:focus { outline: none; box-shadow: none; }
+.mn-merge:focus-visible { outline: 1px solid var(--v2-state-fg-warning, #9a6700); outline-offset: 1px; box-shadow: none; }
 @media (prefers-color-scheme: dark) {
   .mn-merge { background: #238636; }
 }
 .mn-merge:hover { filter: brightness(1.1); }
-.mn-merge.failed:disabled { opacity: .65; cursor: not-allowed; filter: none; }
+.mn-merge.failed:disabled { opacity: .65; cursor: not-allowed; filter: none; pointer-events: none; }
 .mn-merge.failed:disabled:hover { filter: none; }
+/* The disabled red button is click-through so its titled wrapper is the real
+ * pointer target (tooltip + row-click suppression work on every engine). */
+.mn-wrap-fail { display: inline-flex; flex: none; }
 .mn-merge.pending {
   background: #9a6700;
   color: #fff;
