@@ -1,6 +1,10 @@
 import type { MergeResult } from "./providers/types"
 
-const RESULT_TTL_MS = 10 * 60_000
+/** Cross-window dedupe grace: long enough to collapse double-clicks and two
+ * windows firing together, short enough that an open-after-merged
+ * (forge reported merged but hydration still sees open via eventual
+ * consistency) retries without a server restart. */
+export const RESULT_TTL_MS = 60_000
 const RESULT_MAX_ENTRIES = 1024
 const active = new Set<string>()
 const completed = new Map<string, { headSha: string; at: number }>()
@@ -41,8 +45,8 @@ export const coordinateMerge = async (
   active.add(key)
   try {
     const result = await merge()
-    if (!result.merged && result.headChanged) rejected.set(staleKey, { at: Date.now() })
-    if (result.merged) completed.set(key, { headSha: expectedHeadSha, at: Date.now() })
+    if (!result.merged && result.headChanged) rejected.set(staleKey, { at: now })
+    if (result.merged) completed.set(key, { headSha: expectedHeadSha, at: now })
     return result
   } finally {
     active.delete(key)

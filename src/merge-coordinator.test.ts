@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { coordinateMerge } from "./merge-coordinator"
+import { RESULT_TTL_MS, coordinateMerge } from "./merge-coordinator"
 
 describe("coordinateMerge", () => {
   test("allows only one active merge for the same PR", async () => {
@@ -59,5 +59,21 @@ describe("coordinateMerge", () => {
     expect(await coordinateMerge("repo#4", "sha", async () => { throw new Error("offline") }).catch(() => "threw"))
       .toBe("threw")
     expect(await coordinateMerge("repo#4", "sha", async () => ({ merged: true }))).toEqual({ merged: true })
+  })
+
+  test("lets an open-after-merged retry after the dedupe grace", async () => {
+    const t0 = Date.now()
+    let calls = 0
+    const merge = async () => {
+      calls += 1
+      return { merged: true as const }
+    }
+    expect(await coordinateMerge("repo#6", "sha", merge, t0)).toEqual({ merged: true })
+    expect(await coordinateMerge("repo#6", "sha", merge, t0 + RESULT_TTL_MS - 1)).toEqual({
+      merged: false,
+      alreadyHandled: true,
+    })
+    expect(await coordinateMerge("repo#6", "sha", merge, t0 + RESULT_TTL_MS + 1)).toEqual({ merged: true })
+    expect(calls).toBe(2)
   })
 })
