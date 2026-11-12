@@ -671,7 +671,10 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
   // One eligibility policy, one memo, three consumers (`show`, `menu`,
   // `debugLine`) — the same values everywhere, with no per-consumer filter for
   // the footer's census to drift away from (the failure mode the old
-  // `live()`-counts-vs-`pillChains()`-pick split already produced). State-driven
+  // `live()`-counts-vs-`pillChains()`-pick split already produced). The menu
+  // alone takes one explicit-pin exception (see `menuChains`): a pinned chain
+  // outside `eligible` still gets a row, so the popover never omits the pill's
+  // pick. State-driven
   // via `pillEligible`: the session's own PR (still shown after it merges — the
   // pill is the session's work, and a newer PR outranks it through `pillPick`),
   // CI needing attention, an armed merge pending. Mentions of other branches'
@@ -732,8 +735,16 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       else delete current.owner
     })
   }
+  // The menu's rows: the eligible chains, with the picked pin prepended when
+  // it isn't eligible — otherwise a pin-only pill would open an empty popover.
+  // (Reference equality holds: both are drawn from the same `chains()` array.)
   // The menu's merge-when-ready toggle binds to the first open PR across
   // eligible chains (pinned first when it has one open). Reactive.
+  const menuChains = createMemo(() => {
+    const { eligible, picked } = pillState()
+    if (picked?.reason === "pinned" && !eligible.includes(picked.chain)) return [picked.chain, ...eligible]
+    return eligible
+  })
   const menuLead = createMemo(() => {
     const pinned = pillState().picked?.reason === "pinned" ? pillState().picked!.chain : undefined
     const pinnedOpen = pinned?.prs.filter((pull) => pull.state === "open").map((pull) => ({ chain: pinned, pull }))[0]
@@ -1303,8 +1314,10 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     order: 10,
     show: (input) => {
       if (!input.session || input.session.id !== meta.sessionID) return undefined
-      const { eligible: list, picked } = pillState()
-      if (list.length === 0 || !picked) return undefined
+      const { picked } = pillState()
+      // Pinned chains bypass eligibility, so the gate is the pick alone: an
+      // empty eligible list with a pin must still show the pill.
+      if (!picked) return undefined
 
       // PR chains are the primary work: the pill leads with the worst-toned PR
       // chain (failing/conflicted/review-blocked beats a calm newer one), else
@@ -1321,21 +1334,20 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       // The icon shape encodes the provider merge state; pill tone still encodes
       // overall chain health. The label stays `#number title ⌄`. An armed lead PR
       // puts a ticking braille spinner in front: a merge is pending. A pinned
-      // chain pins the label with a pushpin so the override is visible.
+      // override shows no mark: the pill looks the same either way.
       const mergeStatus = lead?.state === "open" ? lead.mergeState : undefined
       const circle = pillStatusIcon(lead?.state, mergeStatus, tone, pillIcon(meta.provider))
       const pending = lead?.state === "open" ? isArmed(lead) : false
-      const pinnedMark = picked.reason === "pinned" ? "📌 " : ""
       const short = (title: string): string => (title.length > 24 ? `${title.slice(0, 24)}…` : title)
 
       return {
         icon: circle,
         label: lead
-          ? `${pinnedMark}${pending ? `${SPIN_FRAMES[spin()]} ` : ""}#${lead.number} ${short(lead.title)}${lead.state === "merged" ? ` · ${ctx.t("state.merged")}` : ""} ▾`
-          : `${pinnedMark}run #${run!.id}${run!.status === "succeeded" ? "" : ` · ${ctx.t(`state.${run!.status}`)}`} ▾`,
+          ? `${pending ? `${SPIN_FRAMES[spin()]} ` : ""}#${lead.number} ${short(lead.title)}${lead.state === "merged" ? ` · ${ctx.t("state.merged")}` : ""} ▾`
+          : `run #${run!.id}${run!.status === "succeeded" ? "" : ` · ${ctx.t(`state.${run!.status}`)}`} ▾`,
         tone,
         title: lead
-          ? `${picked.reason === "pinned" ? `${ctx.t("pill.pinned")} · ` : ""}#${lead.number} ${lead.title}${lead.state === "merged"
+          ? `#${lead.number} ${lead.title}${lead.state === "merged"
             ? ` · merged${lead.mergedAt === undefined ? "" : ` · ${new Date(lead.mergedAt).toLocaleString()}`}`
             : lead.state === "open"
               ? ` · merge ${mergeStatus ?? "unknown"}${lead.reviewState ? ` · reviews ${lead.reviewState}` : ""}`
@@ -1351,7 +1363,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       // toggle binds to it. Reactive — the popover updates while it's open.
       return (
       <div class="mn-pop">
-        <For each={pillState().eligible.slice(0, 3)}>
+        <For each={menuChains().slice(0, 3)}>
           {(chain) => (
             <div class="mn-pop-chain" data-tone={chainTone(chain, waitForAllStatusChecks())}>
               <For each={chain.prs}>
@@ -1933,17 +1945,23 @@ const STYLES = `
 .mn-kind[data-state="merged"] { color: #8250df; }
 .mn-kind[data-state="closed"], .mn-kind[data-state="failed"], .mn-kind[data-state="cancelled"] { color: var(--v2-state-fg-danger); }
 
-/* Merge action: green when ready, amber while checks run, grey when blocked. */
+/* Merge action: green when ready, amber while checks run, grey when blocked.
+ * Both halves of each pair are owned here: the host's --v2-state-bg-success
+ * can be a light green without a matching on-color, which stranded white
+ * text on a light background. These stay legible in both schemes. */
 .mn-merge {
   flex: none; font-size: 10.5px; font-weight: 600; line-height: 1;
   padding: 4px 9px; border-radius: 6px; cursor: pointer;
-  color: var(--v2-state-fg-on-success, #fff);
-  background: var(--v2-state-bg-success, #1a7f37); border: none;
+  color: #fff;
+  background: #1f883d; border: none;
+}
+@media (prefers-color-scheme: dark) {
+  .mn-merge { background: #238636; }
 }
 .mn-merge:hover { filter: brightness(1.1); }
 .mn-merge.pending {
-  background: var(--v2-state-bg-warning, #9a6700);
-  color: var(--v2-text-text-base, #161616);
+  background: #9a6700;
+  color: #fff;
 }
 .mn-merge.armed {
   background: none; color: var(--v2-state-fg-warning, #9a6700);
