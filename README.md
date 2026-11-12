@@ -6,13 +6,41 @@ Tracks what an OpenCode session ships: pull requests, issues, and CI runs —
 extracted from the conversation, hydrated from the forge, and shown live in
 OpenCode Desktop.
 
-Two components, one data model:
+## What it looks like
 
-- **Composer pills** — one pair per work chain (`#4821 ✓ ready ⇢ #1043 +1` + a
-  Merge pill). Appears only when the session touches sources; floats over the
-  timeline, so it never resizes the composer.
-- **Muninn side panel** — chains as triplet cards (issue → PR → runs),
-  chronologically by last activity, grouped by day.
+Illustrations below are reconstructions rendered from the real component styles
+and markup with representative data — host chrome, icons, and theme values are
+approximated, not live captures.
+
+### Composer pill
+
+One pill per session, above the composer: `#4821 fix(tui): restore… ▾`.
+Its icon and tone encode chain health and merge state.
+
+![Closed pill above the composer](docs/screenshots/pill-closed.png)
+
+![Composer pill dropdown: PR, issue, and run rows with a Merge button and merge options](docs/screenshots/pill.png)
+
+Opening it shows the eligible chains with their PRs, issues, and runs. Each
+open PR row carries its own Merge button — green `Merge` when it can merge
+now, amber `Merge when ready` to arm Muninn's drive-by merge, a spinner while
+armed. The footer holds the merge-when-ready toggle, the merge method, and
+the cleanup toggles.
+
+### Side panel
+
+The `Muninn` tab lists the session's chains as triplet cards (issue → PR →
+runs), newest activity first, grouped by day. Run rows expand to their checks.
+
+![Muninn side panel with issue, PR, and run chains](docs/screenshots/sidebar.png)
+
+Everything opens on the forge on click. The pin on a chain overrides the pill.
+
+### Settings
+
+![Muninn settings: caching, merging, and decision models](docs/screenshots/settings.png)
+
+History retention and the debug footer, merge method / branch cleanup / status-check gating, and the decision-model judge (toggle, backend, model).
 
 ## Add the plugin
 

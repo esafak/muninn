@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Muninn — UI illustrations</title>
+<style>
+  *{box-sizing:border-box;margin:0}
+  body{font:13px/1.5 -apple-system,Inter,system-ui,sans-serif;background:#161616;color:#f2f2f2;padding:28px;display:flex;justify-content:center}
+  .page{width:min(980px,100%)}
+  h1{font-size:16px;margin-bottom:4px} .sub{color:#aeaeae;font-size:12px;margin-bottom:20px}
+  .card{background:#242424;border:1px solid rgba(255,255,255,.10);border-radius:12px;padding:18px;margin-bottom:16px}
+  .card h2{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:#808080;margin-bottom:4px}
+  .card p{font-size:12px;color:#aeaeae;margin-bottom:12px}
+  .card img{display:block;max-width:100%;border-radius:8px;outline:1px solid rgba(255,255,255,.10)}
+  .card.dark img{background:#000}
+  .two{display:grid;grid-template-columns:1fr;gap:16px}
+  @media(max-width:800px){.two{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="page">
+  <h1>Muninn — UI illustrations</h1>
+  <div class="sub">Reconstructions for README.md — real component styles and markup, representative data; host chrome, icons, and theme values approximated.</div>
+  <div class="card">
+    <h2>Composer pill — closed</h2>
+    <p>One pill per session above the composer. Icon and tone encode chain health and merge state.</p>
+    <img src="pill-closed.png" alt="Closed pill">
+  </div>
+  <div class="card">
+    <h2>Composer pill — open</h2>
+    <p>Opening it shows the chain: PR, issue, and run rows, each open PR with its Merge button, plus merge options below.</p>
+    <img src="pill.png" alt="Composer pill">
+  </div>
+  <div class="two">
+    <div class="card">
+      <h2>Side panel</h2>
+      <p>Muninn tab: triplet chains, newest first, grouped by day. Run rows expand to checks.</p>
+      <img src="sidebar.png" alt="Side panel">
+    </div>
+    <div class="card">
+      <h2>Settings</h2>
+      <p>Caching, merging, and the decision-model judge — all on the settings page now.</p>
+      <img src="settings.png" alt="Settings">
+    </div>
+  </div>
+</div>
+</body>
+</html>
