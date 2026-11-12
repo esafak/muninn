@@ -32,29 +32,6 @@ export type MergeResult =
   | { merged: true }
   | { merged: false; message?: string; headChanged?: boolean; inFlight?: boolean; alreadyHandled?: boolean }
 
-/** Result of checking one model ID against a decision backend's live list. */
-export type DecisionModelCheck =
-  | { outcome: "found"; canonical: string; contextLength?: number }
-  | { outcome: "not-found" }
-  | { outcome: "unreachable" }
-
-/** Credential bag each decision backend picks its key from. Backends with
- * public lists ignore it. */
-export interface DecisionKeyOptions {
-  zenApiKey?: string
-  openrouterApiKey?: string
-  openaiApiKey?: string
-}
-
-/** Uniform live check every decision backend implements. Total: network,
- * key, and payload failures report `unreachable`, never throw. */
-export type CheckDecisionModel = (
-  opts: DecisionKeyOptions,
-  modelId: string,
-  fetchFn?: typeof fetch,
-  signal?: AbortSignal,
-) => Promise<DecisionModelCheck>
-
 export interface SourceProvider {
   /** Registry id, e.g. "github". */
   id: string

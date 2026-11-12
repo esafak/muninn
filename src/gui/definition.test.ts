@@ -64,6 +64,20 @@ describe("settings schema", () => {
     } as const
     expect(decode(priorSettings)).toEqual(priorSettings)
   })
+
+  test("new provider key defaults to unset; legacy key is discarded, not migrated", () => {
+    const decode = Schema.decodeUnknownSync(definition.stores!.settings.schema)
+    const base = { retentionDays: 30, debugMode: true, mergeMethod: "squash", deleteBranch: true } as const
+    expect(decode(base).candidateProviderID).toBeUndefined()
+    const legacy = decode({ ...base, candidateProvider: "zen", candidateModel: "x" })
+    expect((legacy as unknown as Record<string, unknown>).candidateProvider).toBeUndefined()
+    expect(legacy.candidateProviderID).toBeUndefined()
+    expect(legacy.candidateModel).toBe("x")
+  })
+
+  test("fresh installs start at the opencode provider default", () => {
+    expect(definition.stores!.settings.initial.candidateProviderID).toBe("opencode")
+  })
 })
 
 describe("i18n catalog", () => {

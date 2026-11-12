@@ -2,13 +2,12 @@
  * Model-ID checks: pure and GUI-safe (no network, no Node).
  *
  * Syntax only: whether a string is shaped like a decision-model ID.
- * Existence is checked server-side (`resolveModel` RPC) against each
- * backend's live list. An unknown-but-well-formed ID stays usable —
- * judging fails open to heuristic keep-all, so validation warns,
- * never blocks.
+ * Existence is checked server-side (`resolveModel` RPC) against OpenCode's
+ * registry. An unknown-but-well-formed ID stays usable — judging fails
+ * open to heuristic keep-all, so validation warns, never blocks.
  */
 
-import { OPENAI_DECISIONS_MODEL, OPENROUTER_DEFAULT_MODEL, ZEN_MODEL } from "./constants"
+import { defaultModelForProvider } from "../providers/decision-catalog"
 import type { DecisionBackend } from "./types"
 
 export const MODEL_ID_MAX_LENGTH = 128
@@ -35,14 +34,17 @@ export const validateModelSyntax = (model: string): { ok: true } | { ok: false; 
   return { ok: true }
 }
 
-/** The model an empty field resolves to, per backend. */
-const providerDefaults: Record<DecisionBackend, string> = {
-  zen: ZEN_MODEL,
-  openrouter: OPENROUTER_DEFAULT_MODEL,
-  openai: OPENAI_DECISIONS_MODEL,
-}
+/** Blank-field default for a provider ID. `undefined` = no verified default:
+ * callers must require an explicit model instead of inventing one. */
+export { defaultModelForProvider } from "../providers/decision-catalog"
 
-export const defaultModelFor = (provider: DecisionBackend): string => providerDefaults[provider]
+/**
+ * @deprecated Use `defaultModelForProvider(providerID)` from the
+ * provider-layer catalog. Kept so the legacy `zen|openrouter|openai`
+ * backend enum keeps resolving during migration.
+ */
+export const defaultModelFor = (provider: DecisionBackend): string =>
+  defaultModelForProvider(provider) ?? "jev-1.13"
 
 /** IDs from an OpenAI-compatible `/models` list payload (`{data:[{id}]}`). */
 export const parseOpenAICompatibleModelList = (payload: unknown): string[] => {

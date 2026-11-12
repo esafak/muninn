@@ -1,7 +1,8 @@
 /**
- * Rule-11 module: every question, threshold, weight, provider and model ID
- * the DecisionModel uses lives here. Tune thresholds on labeled traffic;
- * re-fit after any model change. Code never hardcodes these elsewhere.
+ * Rule-11 module: every question, threshold, weight, and timeout the judge
+ * policy uses lives here. Tune thresholds on labeled traffic; re-fit after
+ * any model change. Provider/model IDs live in the provider-layer registry
+ * (`src/providers/decision-catalog.ts`) — never here.
  */
 
 /** Noul instruction builder: one atomic judgment per candidate. */
@@ -28,17 +29,6 @@ export const trackInstruction = (input: {
 /** P(yes) gate: keep at or above this. No human-review band in this UI —
  * the fallback is heuristic keep-all in code, never a review queue. */
 export const KEEP_THRESHOLD = 0.7
-
-/** Pinned model IDs — the response reports one; thresholds were tuned against it. */
-export const ZEN_MODEL = "jev-1.13"
-export const OPENAI_DECISIONS_MODEL = "gpt-6-luna-decision"
-export const OPENROUTER_DEFAULT_MODEL = "typesafe/jev-1.13"
-
-/** Known decision models per backend, from each backend's docs.
- * Live lists are authoritative; these apply when a list is unreachable
- * or doesn't enumerate decision models (Zen's public list is chat-only). */
-export const ZEN_KNOWN_DECISION_MODELS = ["jev-1.13", "jev-1.13-free", "gpt-6-luna-decision", "gemini-decision-1"] as const
-export const OPENAI_KNOWN_DECISION_MODELS = ["gpt-6-luna-decision"] as const
 
 export const DECISION_TIMEOUT_MS = 60_000
 

@@ -12,17 +12,17 @@
  * - `CandidateJudge` owns relevance verdicts over enriched inputs. It
  *   returns a keep/drop signal per answered question; unanswered questions
  *   are omitted so callers fall back to keep-all without caching a drop.
- * - `DecisionCodec` is the wire adapter for one decision backend
- *   (TypeSafe's System One `noul` map vs OpenAI's divergent `predicate`
- *   array). It validates transport shape and returns raw probabilities;
- *   the keep/drop gate lives once in the candidate policy layer
- *   (`decision-model.ts`), never in transport code.
+ * - `DecisionCodec` is the wire adapter for a direct System One `noul`-map
+ *   response (kept as a reference pin; the server path in `server-judge.ts`
+ *   maps the normalized predicate array instead). It validates transport
+ *   shape and returns raw probabilities; the keep/drop gate lives once in
+ *   the candidate policy layer, never in transport code.
  *
- * Decision backends (zen/openrouter/openai) are distinct from forge
- * `SourceProvider`s (`src/providers/*`, host-dispatched hydration).
- * `DECISION_BACKENDS` is the canonical list; the Effect (GUI settings) and
- * zod (RPC) enums mirror it because the runtimes cannot share a schema
- * type — that split is documented in `src/gui/definition.ts` and `src/rpc.ts`.
+ * Decision models are addressed as Model.Ref provider IDs (openai, openrouter,
+ * opencode, google) and judged through OpenCode generate.decisions - the
+ * plugin holds no keys. Forge SourceProviders (src/providers/*,
+ * host-dispatched hydration) are a separate seam. DECISION_BACKENDS below is
+ * the deprecated legacy enum, kept for compat only.
  */
 
 import type { TieredRef } from "../extract"

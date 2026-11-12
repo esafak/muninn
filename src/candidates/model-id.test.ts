@@ -41,7 +41,7 @@ describe("validateModelSyntax", () => {
 describe("defaultModelFor", () => {
   test("returns each backend's pinned default", () => {
     expect(defaultModelFor("zen")).toBe("jev-1.13")
-    expect(defaultModelFor("openrouter")).toBe("typesafe/jev-1.13")
+    expect(defaultModelFor("openrouter")).toBe("typesafe/jev-1.14")
     expect(defaultModelFor("openai")).toBe("gpt-6-luna-decision")
   })
 })

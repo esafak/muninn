@@ -172,9 +172,10 @@ export const Muninn = Rpc.define({
     judge: {
       input: z.object({
         directory: z.string(),
-        // Decision backends judge relevance; forge SourceProviders hydrate.
-        // Canonical list: DECISION_BACKENDS in src/candidates/types.ts.
-        provider: z.enum(["zen", "openrouter", "openai"]),
+        // Model.Ref: any OpenCode provider that serves decision models
+        // (openai ChatGPT sub, openrouter, opencode Console/Go, google).
+        // Auth is the user's connected account — the plugin holds no keys.
+        providerID: z.string().min(1),
         model: z.string().optional(),
         candidates: z.array(
           z.object({
@@ -206,9 +207,8 @@ export const Muninn = Rpc.define({
      * fails open to heuristic keep-all. */
     resolveModel: {
       input: z.object({
-        // Decision backends judge relevance; forge SourceProviders hydrate.
-        // Canonical list: DECISION_BACKENDS in src/candidates/types.ts.
-        provider: z.enum(["zen", "openrouter", "openai"]),
+        // Model.Ref provider; see judge above.
+        providerID: z.string().min(1),
         model: z.string().optional(),
       }),
       output: z.object({

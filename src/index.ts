@@ -8,26 +8,21 @@
 import { Credential, Plugin } from "@opencode/plugin"
 import { github } from "./providers/github"
 import type { Ref, RepoRef } from "./model"
-import { jsonReady } from "./model"
+import { jsonReady, refKey } from "./model"
 import type { SourceProvider } from "./providers/types"
 import { parseRemoteUrl, readRemote } from "./remote"
 import { Muninn } from "./rpc"
 import { fastForwardDecision, isCleanStatus, selectCanonicalRemote, selectDirectRemote, untrackedFilesArg } from "./local-cleanup"
-import { createCandidateCache } from "./candidates/cache"
-import { OPENAI_KNOWN_DECISION_MODELS, ZEN_KNOWN_DECISION_MODELS } from "./candidates/constants"
-import { createDecisionModel } from "./candidates/decision-model"
-import { capsKey } from "./candidates/model-caps"
-import { defaultModelFor, validateModelSyntax } from "./candidates/model-id"
+import { candidateCacheKey, createCandidateCache } from "./candidates/cache"
+import { DECISION_TIMEOUT_MS, KEEP_THRESHOLD } from "./candidates/constants"
+import { defaultModelForProvider, decisionProviderLabel, isAuthoritativeProvider, knownModelsForProvider } from "./providers/decision-catalog"
+import { buildServerJudgeRequest, buildVerdict, mapServerJudgeAnswers, matchRegistryModel, resolveModelStatus, toRegistryModels } from "./candidates/server-judge"
+import { validateModelSyntax } from "./candidates/model-id"
 import type { JudgeInput } from "./candidates/types"
 import { execFile } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { promisify } from "node:util"
 import { coordinateMerge } from "./merge-coordinator"
-import { checkOpenRouterModel } from "./providers/openrouter"
-import { checkOpenAIModel } from "./providers/openai"
-import type { CheckDecisionModel } from "./providers/types"
-import { checkZenModel } from "./providers/zen"
-import type { DecisionBackend } from "./candidates/types"
 
 const exec = promisify(execFile)
 const safeBranch = (branch: string): boolean => Boolean(branch) && !branch.startsWith("-") && !branch.includes("..")
@@ -209,55 +204,13 @@ const sources: readonly SourceProvider[] = [github]
 const sourceFor = (host: string | undefined): SourceProvider | undefined =>
   sources.find((source) => host !== undefined && source.hosts.includes(host))
 
-/** Uniform live check per decision backend. Canonical list: DECISION_BACKENDS. */
-const decisionModelChecks: Record<DecisionBackend, CheckDecisionModel> = {
-  zen: checkZenModel,
-  openrouter: checkOpenRouterModel,
-  openai: checkOpenAIModel,
-}
-
-/** Known decision models per backend, for when a list is unreachable. */
-const knownDecisionModels: Record<DecisionBackend, readonly string[]> = {
-  zen: ZEN_KNOWN_DECISION_MODELS,
-  openrouter: [],
-  openai: OPENAI_KNOWN_DECISION_MODELS,
-}
-
-/** Whether a reachable list miss means the ID is wrong. Zen's public
- * list is chat-only, so a miss there proves nothing. */
-const authoritativeModelLists: Record<DecisionBackend, boolean> = {
-  zen: false,
-  openrouter: true,
-  openai: true,
-}
-
-const decisionBackendLabels: Record<DecisionBackend, string> = {
-  zen: "Zen",
-  openrouter: "OpenRouter",
-  openai: "OpenAI",
-}
-
-/** Message when a reachable authoritative list misses. Zen never reports
- * invalid (its lists are never authoritative), so its entry is unreachable. */
-const invalidListMessages: Record<DecisionBackend, string> = {
-  zen: "Not in the visible Zen list.",
-  openrouter: "Not in the OpenRouter decisions catalog.",
-  openai: "Not in your OpenAI model list.",
-}
-
 export default Plugin.define({
   id: "muninn",
   async setup(ctx) {
-    const options = (ctx.options ?? {}) as {
-      zenApiKey?: string
-      openrouterApiKey?: string
-      openaiApiKey?: string
-    }
+    // Decision auth is the user's connected OpenCode account (ChatGPT/Codex
+    // OAuth, OpenRouter key, Console/Go, Gemini API): the plugin holds no
+    // keys and reads no key options or key env vars. Hard transition.
     const judgeCache = createCandidateCache()
-    // Query-time caps cache: first judge call per model resolves live from the
-    // catalog, later calls hit this map (7-day TTL inside queryCaps). Nothing at
-    // startup — setup never blocks on the network.
-    const capsCache = new Map<string, { caps: import("./candidates/model-caps").ModelCaps; at: number }>()
     await ctx.rpc.register(Muninn, {
       repo: async (input) => {
         const remote = await readRemote(input.directory)
@@ -354,73 +307,172 @@ export default Plugin.define({
           ...(c.title ? { title: c.title } : {}),
           ...(c.state ? { state: c.state } : {}),
         }))
-        const model = createDecisionModel({
-          provider: input.provider,
-          ...(input.model ? { model: input.model } : {}),
-          zenApiKey: options.zenApiKey,
-          openrouterApiKey: options.openrouterApiKey,
-          openaiApiKey: options.openaiApiKey,
-          cache: judgeCache,
-          capsCache,
+        const fallback = (reason: string) => ({
+          verdicts: candidates.map((c) => ({ key: refKey(c.ref), keep: true, reason })),
         })
-        const verdicts = await model.judge(candidates)
-        return { verdicts: verdicts.map((v) => jsonReady(v)) }
+        if (candidates.length === 0) return { verdicts: [] }
+        const providerID = input.providerID.trim()
+        const requested = (input.model ?? "").trim()
+        const defaultId = requested || defaultModelForProvider(providerID)
+        if (!defaultId) return fallback("no default for this provider: heuristic fallback")
+        // Canonicalize against the registry when discovery succeeds; otherwise
+        // judge the requested/default ID verbatim (fail-open).
+        const discovered = await ctx.model.list().catch(() => undefined)
+        const canonicalId =
+          matchRegistryModel(toRegistryModels(discovered?.data ?? []), providerID, defaultId)?.id ?? defaultId
+        // Cache scope is the full judge identity: provider + canonical model.
+        // Titles/states ride inside the key (see cache.ts), so verdicts never
+        // leak across providers, models, or evidence.
+        const scope = `${providerID}:${canonicalId}`
+        const cacheKeys = candidates.map((c) => candidateCacheKey(c, scope))
+        const cachedHits = cacheKeys.map((k) => judgeCache.get(k))
+        const pendingIndexes: number[] = []
+        cachedHits.forEach((hit, i) => {
+          if (!hit) pendingIndexes.push(i)
+        })
+        if (pendingIndexes.length === 0) {
+          return {
+            verdicts: candidates.map((c, i) => {
+              const hit = cachedHits[i]!
+              return { key: refKey(c.ref), keep: hit.keep, reason: hit.reason, confidence: hit.confidence }
+            }),
+          }
+        }
+        const pendingInputs = pendingIndexes.map((i) => candidates[i]!)
+        const { input: reqInput, questions, names } = buildServerJudgeRequest(pendingInputs)
+        // One request for all pending questions (parallel + isolated); the
+        // server resolves the user's connected account. Failure, timeout,
+        // invalid answers, or error answers fall back to keep-all without
+        // caching a drop. No chunking: only exact, verified splittable
+        // signals would split, and none are verified for this boundary.
+        const byKey = new Map<string, { keep: boolean; reason: string; confidence: number }>()
+        const controller = new AbortController()
+        const timer = setTimeout(() => controller.abort(), DECISION_TIMEOUT_MS)
+        try {
+          const result = await ctx.experimental.generate.decisions(
+            { model: { providerID, id: canonicalId }, input: reqInput, questions },
+            { signal: controller.signal },
+          )
+          for (const a of mapServerJudgeAnswers(result.answers, names)) {
+            byKey.set(a.key, buildVerdict(a.key, a.probability, KEEP_THRESHOLD))
+          }
+        } catch {
+          // Fail open below: unanswered questions keep-all, never cached.
+        } finally {
+          clearTimeout(timer)
+        }
+        pendingIndexes.forEach((origIdx, pos) => {
+          const verdict = byKey.get(names[pos]!)
+          if (verdict)
+            judgeCache.set(cacheKeys[origIdx]!, {
+              keep: verdict.keep,
+              reason: verdict.reason,
+              confidence: verdict.confidence,
+            })
+        })
+        return {
+          verdicts: candidates.map((c, i) => {
+            const hit = cachedHits[i]
+            if (hit) return { key: refKey(c.ref), keep: hit.keep, reason: hit.reason, confidence: hit.confidence }
+            const verdict = byKey.get(refKey(c.ref))
+            // Unanswered questions were never cached: keep-all without persisting a drop.
+            return verdict
+              ? { key: refKey(c.ref), keep: verdict.keep, reason: verdict.reason, confidence: verdict.confidence }
+              : { key: refKey(c.ref), keep: true, reason: "no answer: heuristic fallback" }
+          }),
+        }
       },
       resolveModel: async (input) => {
+        const providerID = input.providerID.trim()
+        const label = decisionProviderLabel(providerID)
         const raw = (input.model ?? "").trim()
         if (!raw) {
-          const canonical = defaultModelFor(input.provider)
-          return { status: "default" as const, canonical, message: `Empty uses the provider default (${canonical}).` }
+          const canonical = defaultModelForProvider(providerID)
+          if (!canonical)
+            return {
+              status: "unverified" as const,
+              message: `No default for this provider — enter a model. Judging will try it and fall back to heuristic on failure.`,
+            }
+          return {
+            status: "default" as const,
+            canonical,
+            message: `Empty uses the provider default (${canonical}).`,
+          }
         }
         const syntax = validateModelSyntax(raw)
         if (!syntax.ok) return { status: "invalid" as const, message: syntax.reason }
-        const label = decisionBackendLabels[input.provider]
-        const controller = new AbortController()
-        const timer = setTimeout(() => controller.abort(), 8_000)
-        try {
-          const result = await decisionModelChecks[input.provider](options, raw, fetch, controller.signal)
-          if (result.outcome === "found") {
-            if (result.contextLength !== undefined)
-              capsCache.set(capsKey(input.provider, raw), {
-                caps: { contextLength: result.contextLength, build: result.canonical, resolvedAt: Date.now(), source: "live" },
-                at: Date.now(),
-              })
+        // Registry reads, location-scoped: "live" means available in OpenCode,
+        // never endpoint-verified. Discovery failures fall back to
+        // known/unverified — a failed read never reports "invalid".
+        const [modelsResult, providersResult] = await Promise.all([
+          ctx.model.list().catch(() => undefined),
+          ctx.provider.list().catch(() => undefined),
+        ])
+        const registryModels = toRegistryModels(modelsResult?.data ?? [])
+        const modelsListed = modelsResult !== undefined
+        const match = matchRegistryModel(registryModels, providerID, raw)
+        const providerAvailable =
+          providersResult?.data.some((p) => p.id === providerID) ??
+          registryModels.some((m) => m.providerID === providerID)
+        const { status, canonical } = resolveModelStatus({
+          requested: raw,
+          defaultModel: defaultModelForProvider(providerID),
+          listed: match !== undefined,
+          decisionCapable:
+            match === undefined ? undefined : match.type === "decision" ? true : match.type !== undefined ? false : undefined,
+          providerAvailable,
+          modelsListed,
+          knownModels: knownModelsForProvider(providerID),
+          authoritativeList: isAuthoritativeProvider(providerID),
+        })
+        // Canonical identity is the matched registry ID; otherwise the request.
+        const id = status === "live" && match ? match.id : (canonical ?? raw)
+        const contextLength = match?.contextLength
+        switch (status) {
+          case "live":
             return {
-              status: "live" as const,
-              canonical: result.canonical,
-              ...(result.contextLength !== undefined ? { contextLength: result.contextLength } : {}),
+              status,
+              canonical: id,
+              ...(contextLength !== undefined ? { contextLength } : {}),
               message:
-                result.contextLength !== undefined
-                  ? `Resolves to ${result.canonical} · ${result.contextLength.toLocaleString("en-US")} tokens context.`
-                  : `${result.canonical} is served by ${label}.`,
+                contextLength !== undefined
+                  ? `Resolves to ${id} · ${contextLength.toLocaleString("en-US")} tokens context.`
+                  : `${id} is available in OpenCode.`,
             }
-          }
-          if (result.outcome === "not-found") {
-            if ((knownDecisionModels[input.provider] as readonly string[]).includes(raw))
-              return { status: "known" as const, canonical: raw, message: `${raw} is a known ${label} decision model.` }
-            if (authoritativeModelLists[input.provider])
-              return { status: "invalid" as const, message: invalidListMessages[input.provider] }
+          case "known":
+            return { status, canonical: id, message: `${id} is a known ${label} decision model.` }
+          case "invalid":
             return {
-              status: "unverified" as const,
-              canonical: raw,
-              message: `Not in the visible ${label} list; judging will try it and fall back to heuristic on failure.`,
+              status,
+              canonical: id,
+              message: match
+                ? `${id} is available in OpenCode but does not serve decisions.`
+                : `Not in the ${label} decisions list.`,
             }
-          }
-          if ((knownDecisionModels[input.provider] as readonly string[]).includes(raw))
-            return { status: "known" as const, canonical: raw, message: `${raw} is a known ${label} decision model.` }
-          return {
-            status: "unverified" as const,
-            canonical: raw,
-            message: `${label} list unreachable; judging will try it and fall back to heuristic on failure.`,
-          }
-        } catch {
-          return {
-            status: "unverified" as const,
-            canonical: raw,
-            message: "Validation failed; judging will try it and fall back to heuristic on failure.",
-          }
-        } finally {
-          clearTimeout(timer)
+          case "unverified":
+            if (match) {
+              return {
+                status,
+                canonical: id,
+                message: `${id} is available in OpenCode but its decision support is unknown; judging will try it and fall back to heuristic on failure.`,
+              }
+            }
+            if (!modelsListed) {
+              return {
+                status,
+                canonical: id,
+                message: `${label} model list unreachable; judging will try it and fall back to heuristic on failure.`,
+              }
+            }
+            return {
+              status,
+              canonical: id,
+              message: providerAvailable
+                ? `Not in the visible ${label} list; judging will try it and fall back to heuristic on failure.`
+                : `${label} is unavailable in this project; judging will try it and fall back to heuristic on failure.`,
+            }
+          case "default":
+            return { status, canonical: id, message: `Empty uses the provider default (${id}).` }
         }
       },
     })
