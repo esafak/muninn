@@ -13,6 +13,9 @@ import type { SourceProvider } from "./providers/types"
 import { parseRemoteUrl, readRemote } from "./remote"
 import { Muninn } from "./rpc"
 import { fastForwardDecision, isCleanStatus, selectCanonicalRemote, selectDirectRemote, untrackedFilesArg } from "./local-cleanup"
+import { createCandidateCache } from "./candidates/cache"
+import { createDecisionModel } from "./candidates/decision-model"
+import type { JudgeInput } from "./candidates/types"
 import { execFile } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { promisify } from "node:util"
@@ -201,6 +204,17 @@ const sourceFor = (host: string | undefined): SourceProvider | undefined =>
 export default Plugin.define({
   id: "muninn",
   async setup(ctx) {
+    const options = (ctx.options ?? {}) as {
+      apiKey?: string
+      zenApiKey?: string
+      openrouterApiKey?: string
+      openaiApiKey?: string
+    }
+    const judgeCache = createCandidateCache()
+    // Query-time caps cache: first judge call per model resolves live from the
+    // catalog, later calls hit this map (7-day TTL inside queryCaps). Nothing at
+    // startup — setup never blocks on the network.
+    const capsCache = new Map<string, { caps: import("./candidates/model-caps").ModelCaps; at: number }>()
     await ctx.rpc.register(Muninn, {
       repo: async (input) => {
         const remote = await readRemote(input.directory)
@@ -287,6 +301,27 @@ export default Plugin.define({
         const source = sourceFor(repo.host)
         if (!source) return { armed: false, message: `no provider for ${repo.host}` }
         return source.setAutoMerge(repo, input.number, input.enable, input.method, () => source.auth(ctx))
+      },
+      judge: async (input) => {
+        const sessionRepo = await readRemote(input.directory).catch(() => undefined)
+        const candidates: JudgeInput[] = input.candidates.map((c) => ({
+          ref: { number: c.number, ...(c.kind ? { kind: c.kind } : {}), ...(c.repo ?? sessionRepo ? { repo: (c.repo ?? sessionRepo)! } : {}), tier: c.tier },
+          snippet: c.snippet,
+          ...(c.command ? { command: c.command } : {}),
+          ...(c.title ? { title: c.title } : {}),
+          ...(c.state ? { state: c.state } : {}),
+        }))
+        const model = createDecisionModel({
+          provider: input.provider,
+          ...(input.model ? { model: input.model } : {}),
+          zenApiKey: options.zenApiKey ?? options.apiKey,
+          openrouterApiKey: options.openrouterApiKey,
+          openaiApiKey: options.openaiApiKey,
+          cache: judgeCache,
+          capsCache,
+        })
+        const verdicts = await model.judge(candidates)
+        return { verdicts: verdicts.map((v) => jsonReady(v)) }
       },
     })
   },

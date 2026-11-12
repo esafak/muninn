@@ -184,13 +184,20 @@ export const messagesText = (messages: readonly unknown[]): string => {
 }
 
 /** The four provenance buckets Muninn scans, one per message-part kind. Tool
- * outputs stay grouped per tool call (array of arrays) so the listing rule can
- * judge each output on its own. */
+ * outputs stay grouped per tool call so the listing rule can judge each
+ * output on its own — and each output carries its own invoking command, so
+ * provenance never depends on parallel-array position. */
+export interface ToolOutput {
+  /** The invoked command of this tool call, when it had one. */
+  command?: string
+  texts: string[]
+}
+
 export interface Buckets {
   user: string[]
   commands: string[]
   prose: string[]
-  outputs: string[][]
+  outputs: ToolOutput[]
 }
 
 export const messageBuckets = (messages: readonly unknown[]): Buckets => {
@@ -213,18 +220,22 @@ export const messageBuckets = (messages: readonly unknown[]): Buckets => {
       if (p.type !== "tool") continue
       const state = p.state as { status?: unknown; input?: unknown; content?: unknown } | undefined
       if (!state || state.status !== "completed") continue
+      let command: string | undefined
       if (state.input && typeof state.input === "object") {
-        const command = (state.input as { command?: unknown }).command
-        if (typeof command === "string") buckets.commands.push(command)
+        const raw = (state.input as { command?: unknown }).command
+        if (typeof raw === "string") {
+          buckets.commands.push(raw)
+          command = raw
+        }
       }
-      const output: string[] = []
+      const texts: string[] = []
       if (Array.isArray(state.content))
         for (const block of state.content)
           if (block && typeof block === "object" && (block as { type?: unknown }).type === "text") {
             const text = (block as { text?: unknown }).text
-            if (typeof text === "string") output.push(text)
+            if (typeof text === "string") texts.push(text)
           }
-      if (output.length > 0) buckets.outputs.push(output)
+      if (texts.length > 0) buckets.outputs.push({ ...(command ? { command } : {}), texts })
     }
   }
   return buckets
@@ -273,7 +284,7 @@ export const deliberateRefs = (
   for (const text of buckets.commands) addBlock(text, "command")
   for (const text of buckets.prose) addBlock(text, "prose")
   for (const output of buckets.outputs)
-    for (const text of output) {
+    for (const text of output.texts) {
       const detailed = scanDetailed(text, repo, lexicons)
       const listed = listedRunKeys(detailed)
       const refs = detailed.filter((ref) => !listed.has(refKey(ref)))

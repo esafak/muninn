@@ -307,6 +307,57 @@ export const pillEligible = (
   return false
 }
 
+/** Sidebar pin: member identity survives lead changes. PR pins carry
+ * `{repo, number}` (kind `pr` implied); issue/run-only groups pin their lead
+ * member (`kind` explicit, since `#42` alone is ambiguous); anything else
+ * falls back to the chain key for older pins. Empty pin = unpinned. `owner`
+ * is the pinning session: only it may expire the pin, so another session in
+ * the same repository can never erase it. */
+export interface Pin {
+  repo?: RepoRef
+  number?: number
+  kind?: "pr" | "issue" | "run"
+  key?: string
+  owner?: string
+}
+
+export const pinForChain = (chain: Chain): Pin => {
+  const open = chain.prs.find((pull) => pull.state === "open" || pull.state === "draft") ?? chain.prs[0]
+  if (open) return { repo: open.repo, number: open.number }
+  const issue = chain.issues[0]
+  if (issue) return { repo: issue.repo, number: issue.number, kind: "issue" }
+  const run = chain.runs[0]
+  if (run) return { repo: run.repo, number: run.id, kind: "run" }
+  return { key: chain.key }
+}
+
+export const samePin = (a: Pin, b: Pin): boolean => {
+  if (a.number !== undefined && b.number !== undefined && a.repo && b.repo)
+    return (
+      a.number === b.number &&
+      (a.kind ?? "pr") === (b.kind ?? "pr") &&
+      repoKey(a.repo) === repoKey(b.repo)
+    )
+  return a.key !== undefined && a.key === b.key
+}
+
+/** Resolve the pinned chain: member identity wins (any state, any kind —
+ * an explicit pin bypasses eligibility); chain-key fallback covers pins
+ * written before member identity existed. */
+export const pinnedChain = (chains: readonly Chain[], pin: Pin): Chain | undefined => {
+  if (pin.number !== undefined && pin.repo) {
+    const kind = pin.kind ?? "pr"
+    return chains.find((chain) => {
+      if (kind === "pr") return chain.prs.some((pull) => pull.number === pin.number && repoKey(pull.repo) === repoKey(pin.repo!))
+      if (kind === "issue")
+        return chain.issues.some((issue) => issue.number === pin.number && repoKey(issue.repo) === repoKey(pin.repo!))
+      return chain.runs.some((run) => run.id === pin.number && repoKey(run.repo) === repoKey(pin.repo!))
+    })
+  }
+  if (pin.key !== undefined) return chains.find((chain) => chain.key === pin.key)
+  return undefined
+}
+
 /** The pill's lead chain, among the eligible pool: the worst-toned PR chain
  * outranks recency (failing checks, conflicts, blocked merges, or a requested
  * review beat a calm newer one); otherwise the most recently updated open/draft PR chain; then

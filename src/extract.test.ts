@@ -247,7 +247,17 @@ describe("messageBuckets", () => {
     const message = assistantMessage([toolPart({ command: "gh pr view 3670" }, "opened yesterday"), toolPart({ command: "gh run list" }, "run 1\nrun 2")])
     const buckets = messageBuckets([message])
     expect(buckets.commands).toEqual(["gh pr view 3670", "gh run list"])
-    expect(buckets.outputs).toEqual([["opened yesterday"], ["run 1\nrun 2"]])
+    expect(buckets.outputs).toEqual([
+      { command: "gh pr view 3670", texts: ["opened yesterday"] },
+      { command: "gh run list", texts: ["run 1\nrun 2"] },
+    ])
+  })
+
+  test("outputs keep their own command when a call has no command", () => {
+    const noCommand = assistantMessage([toolPart({}, "PR 3670 is open")])
+    const buckets = messageBuckets([noCommand])
+    expect(buckets.outputs).toEqual([{ texts: ["PR 3670 is open"] }])
+    expect(buckets.commands).toEqual([])
   })
 
   test("incomplete tool states contribute nothing", () => {
