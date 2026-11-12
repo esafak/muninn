@@ -200,6 +200,27 @@ export const Muninn = Rpc.define({
         ),
       }),
     },
+    /** Validates a candidate model ID against a decision backend's live list.
+     * Empty resolves to the provider default. Statuses inform the settings
+     * footer only: saving and judging never block on validation, and judging
+     * fails open to heuristic keep-all. */
+    resolveModel: {
+      input: z.object({
+        // Decision backends judge relevance; forge SourceProviders hydrate.
+        // Canonical list: DECISION_BACKENDS in src/candidates/types.ts.
+        provider: z.enum(["zen", "openrouter", "openai"]),
+        model: z.string().optional(),
+      }),
+      output: z.object({
+        status: z.enum(["default", "live", "known", "unverified", "invalid"]),
+        /** The ID to send: trimmed input, catalog build, or provider default. */
+        canonical: z.string().optional(),
+        /** Live context length, when the backend reports one. */
+        contextLength: z.number().optional(),
+        /** Human-readable note for the settings footer. */
+        message: z.string().optional(),
+      }),
+    },
     /** Arms (enable) or disarms auto-merge: merge when checks pass and required reviews approve. */
     autoMerge: {
       input: z.object({

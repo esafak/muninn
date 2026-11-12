@@ -9,7 +9,7 @@
  * timeout, invalid JSON, or missing key falls back to keep-all (Heuristic).
  */
 
-import { DECISION_TIMEOUT_MS, KEEP_THRESHOLD, OPENAI_DECISIONS_MODEL, OPENROUTER_DEFAULT_MODEL, ZEN_MODEL } from "./constants"
+import { DECISION_TIMEOUT_MS, KEEP_THRESHOLD } from "./constants"
 import { refKey } from "../model"
 import { candidateCacheKey, createCandidateCache } from "./cache"
 import type { CandidateCache } from "./cache"
@@ -17,13 +17,14 @@ import { capsKey, chunkSizeForBudget, effectiveMaxTokens, isCapsFresh } from "./
 import type { ModelCaps } from "./model-caps"
 import { jevCodec } from "./codecs/jev"
 import { openaiCodec } from "./codecs/openai"
-import type { CandidateJudge, JudgeInput, Verdict } from "./types"
+import { defaultModelFor } from "./model-id"
+import type { CandidateJudge, DecisionBackend, DecisionCodec, JudgeInput, Verdict } from "./types"
 /** Backend specifics live under src/providers/*; orchestration stays here. */
 import { OPENROUTER_DECISIONS_ENDPOINT, resolveOpenRouterCaps, resolveOpenRouterKey } from "../providers/openrouter"
 import { ZEN_DECISIONS_ENDPOINT, resolveZenKey } from "../providers/zen"
 import { OPENAI_DECISIONS_ENDPOINT, resolveOpenAIKey } from "../providers/openai"
 
-export type DecisionProvider = "zen" | "openrouter" | "openai"
+export type DecisionProvider = DecisionBackend
 
 export interface DecisionModelOptions {
   provider: DecisionProvider
@@ -42,24 +43,30 @@ export interface DecisionModelOptions {
   capsCache?: Map<string, { caps: ModelCaps; at: number }>
 }
 
-const resolveDecisionKey = (opts: DecisionModelOptions): string | undefined => {
-  if (opts.provider === "openai") return resolveOpenAIKey(opts)
-  if (opts.provider === "openrouter") return resolveOpenRouterKey(opts)
-  return resolveZenKey(opts)
+/** Per-backend wiring; orchestration reads these tables, never branches. */
+const decisionKeys: Record<DecisionBackend, (opts: DecisionModelOptions) => string | undefined> = {
+  zen: resolveZenKey,
+  openrouter: resolveOpenRouterKey,
+  openai: resolveOpenAIKey,
 }
 
-const decisionEndpoint = (opts: DecisionModelOptions): string => {
-  if (opts.provider === "openai") return OPENAI_DECISIONS_ENDPOINT
-  if (opts.provider === "openrouter") return OPENROUTER_DECISIONS_ENDPOINT
-  return ZEN_DECISIONS_ENDPOINT
+const decisionEndpoints: Record<DecisionBackend, string> = {
+  zen: ZEN_DECISIONS_ENDPOINT,
+  openrouter: OPENROUTER_DECISIONS_ENDPOINT,
+  openai: OPENAI_DECISIONS_ENDPOINT,
 }
 
-const decisionModelId = (opts: DecisionModelOptions): string => {
-  if (opts.model) return opts.model
-  if (opts.provider === "openai") return OPENAI_DECISIONS_MODEL
-  if (opts.provider === "openrouter") return OPENROUTER_DEFAULT_MODEL
-  return ZEN_MODEL
+const decisionCodecs: Record<DecisionBackend, DecisionCodec> = {
+  zen: jevCodec,
+  openrouter: jevCodec,
+  openai: openaiCodec,
 }
+
+const resolveDecisionKey = (opts: DecisionModelOptions): string | undefined => decisionKeys[opts.provider](opts)
+
+const decisionEndpoint = (opts: DecisionModelOptions): string => decisionEndpoints[opts.provider]
+
+const decisionModelId = (opts: DecisionModelOptions): string => opts.model || defaultModelFor(opts.provider)
 
 /** Pure splitter so chunking stays testable without network or mocks. Size is
  * always explicit — never a hardcoded default; the caller derives it from
@@ -75,18 +82,16 @@ export const chunkIndexes = (length: number, size: number): number[][] => {
   return out
 }
 
-/** Query-time caps: live catalog on first need (OpenRouter only), cached 7-day
- * in the caller-owned map. Nothing at startup, nothing hardcoded — misses
- * proceed as one slice and split on 413. The catalog fetch aborts against the
- * caller's remaining overall budget so a stalled catalog fails open instead
- * of blocking refresh. */
-export const queryCaps = async (
+/** Only OpenRouter exposes a live catalog; the other backends chunk by
+ * halve-on-overflow alone. */
+const noCaps = async (): Promise<ModelCaps | undefined> => undefined
+
+const openRouterCaps = async (
   opts: DecisionModelOptions,
   modelId: string,
   fetchFn: typeof fetch,
-  budgetMs = 8_000,
+  budgetMs: number,
 ): Promise<ModelCaps | undefined> => {
-  if (opts.provider !== "openrouter") return undefined
   const store = opts.capsCache
   const k = capsKey(opts.provider, modelId)
   const hit = store?.get(k)
@@ -103,6 +108,27 @@ export const queryCaps = async (
     clearTimeout(timer)
   }
 }
+
+const capsResolvers: Record<
+  DecisionBackend,
+  (opts: DecisionModelOptions, modelId: string, fetchFn: typeof fetch, budgetMs: number) => Promise<ModelCaps | undefined>
+> = {
+  zen: noCaps,
+  openrouter: openRouterCaps,
+  openai: noCaps,
+}
+
+/** Query-time caps: live catalog on first need, cached 7-day in the
+ * caller-owned map. Nothing at startup, nothing hardcoded — misses
+ * proceed as one slice and split on 413. The catalog fetch aborts against the
+ * caller's remaining overall budget so a stalled catalog fails open instead
+ * of blocking refresh. */
+export const queryCaps = async (
+  opts: DecisionModelOptions,
+  modelId: string,
+  fetchFn: typeof fetch,
+  budgetMs = 8_000,
+): Promise<ModelCaps | undefined> => capsResolvers[opts.provider](opts, modelId, fetchFn, budgetMs)
 
 /** Initial slices from queried caps; unknown caps proceed as one slice. */
 export const initialSlices = (
@@ -122,7 +148,7 @@ export const createDecisionModel = (opts: DecisionModelOptions): CandidateJudge 
   const cache = opts.cache ?? createCandidateCache()
   // The codec validates transport shape only. The keep/drop gate lives here,
   // once, in the candidate policy layer — never in transport code.
-  const codec = opts.provider === "openai" ? openaiCodec : jevCodec
+  const codec = decisionCodecs[opts.provider]
   const modelId = decisionModelId(opts)
   return {
     id: `decision-${opts.provider}`,
