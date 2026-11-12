@@ -1,0 +1,36 @@
+src/candidates/constants.ts
+  h_ea91e2db23540f 37-42
+src/candidates/model-id.test.ts
+  h_ea91e2db23540f 1-64
+src/candidates/model-id.ts
+  h_ea91e2db23540f 1-58
+src/candidates/types.ts
+  h_ea91e2db23540f 31
+src/gui/definition.ts
+  h_ea91e2db23540f 90-95,99,103,178-184,186-187
+src/gui/window.tsx
+  h_ea91e2db23540f 10,134-141,145,173-174,177,186,191,197,202,320,330,337,572-573,577,580,1574-1591,1608-1614,1621-1624,1636-1695,1721-1732,1738,1740-1746,1754-1777
+src/index.ts
+  h_ea91e2db23540f 17,19-20,26-30,212-239,362-427
+src/providers/openai.ts
+  h_ea91e2db23540f 9-11,14-15,20-41
+src/providers/openrouter.ts
+  h_ea91e2db23540f 10,39-48,50-70,82
+src/providers/types.ts
+  h_ea91e2db23540f 35-51
+src/providers/zen.ts
+  h_ea91e2db23540f 7-9,12-13,18-38
+src/rpc.ts
+  h_ea91e2db23540f 203-223
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "fa60d5e5bd38130f0fa1c0cfc1ee5c6e6920c80e",
+  "prompts": {},
+  "humans": {
+    "h_ea91e2db23540f": {
+      "author": "Emre Şafak <3928300+esafak@users.noreply.github.com>"
+    }
+  }
+}
