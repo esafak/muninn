@@ -19,8 +19,9 @@ import { jevCodec } from "./codecs/jev"
 import { openaiCodec } from "./codecs/openai"
 import { defaultModelFor } from "./model-id"
 import type { CandidateJudge, DecisionBackend, DecisionCodec, JudgeInput, Verdict } from "./types"
+import type { DecisionModelCheck } from "../providers/types"
 /** Backend specifics live under src/providers/*; orchestration stays here. */
-import { OPENROUTER_DECISIONS_ENDPOINT, resolveOpenRouterCaps, resolveOpenRouterKey } from "../providers/openrouter"
+import { OPENROUTER_DECISIONS_ENDPOINT, checkOpenRouterModel, resolveOpenRouterKey } from "../providers/openrouter"
 import { ZEN_DECISIONS_ENDPOINT, resolveZenKey } from "../providers/zen"
 import { OPENAI_DECISIONS_ENDPOINT, resolveOpenAIKey } from "../providers/openai"
 
@@ -86,6 +87,24 @@ export const chunkIndexes = (length: number, size: number): number[][] => {
  * halve-on-overflow alone. */
 const noCaps = async (): Promise<ModelCaps | undefined> => undefined
 
+/** Pure mapping from a live check outcome to caps: found windows cache;
+ * unreachable reuses the stale entry WITHOUT refreshing its timestamp
+ * (freshness is TTL, not a maximum — and requests still pin that older
+ * build); not-found and unusable windows yield nothing, never stale. */
+export const capsFromCheck = (
+  checked: DecisionModelCheck,
+  hit: ModelCaps | undefined,
+  now: number,
+): { caps: ModelCaps | undefined; cache: boolean } => {
+  if (checked.outcome === "found" && checked.contextLength !== undefined && checked.contextLength > 0)
+    return {
+      caps: { contextLength: checked.contextLength, build: checked.canonical, resolvedAt: now, source: "live" },
+      cache: true,
+    }
+  if (checked.outcome === "unreachable") return { caps: hit, cache: false }
+  return { caps: undefined, cache: false }
+}
+
 const openRouterCaps = async (
   opts: DecisionModelOptions,
   modelId: string,
@@ -99,11 +118,10 @@ const openRouterCaps = async (
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), Math.max(1, budgetMs))
   try {
-    const caps = await resolveOpenRouterCaps(modelId, fetchFn, Date.now(), controller.signal)
-    if (caps && store) store.set(k, { caps, at: Date.now() })
+    const checked = await checkOpenRouterModel({}, modelId, fetchFn, controller.signal)
+    const { caps, cache } = capsFromCheck(checked, hit?.caps, Date.now())
+    if (caps && cache && store) store.set(k, { caps, at: Date.now() })
     return caps
-  } catch {
-    return hit?.caps
   } finally {
     clearTimeout(timer)
   }

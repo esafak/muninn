@@ -2018,6 +2018,8 @@ const STYLES = `
 .mn-merge.armed:hover { background: var(--v2-overlay-simple-overlay-hover); filter: none; }
 /* The pending-merge spinner rides inside the Armed button, tinted by it. */
 .mn-merge.armed .mn-spin {
+  background: none; color: var(--v2-state-fg-warning, #9a6700);
+  box-shadow: inset 0 0 0 .5px var(--v2-state-border-warning, #9a6700);
   width: 9px; height: 9px; border: 1px solid transparent;
   border-top-color: currentColor; border-left-color: currentColor;
   animation-duration: 1.1s;

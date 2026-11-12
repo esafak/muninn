@@ -50,9 +50,10 @@ jobs:
         run: |
           bun install --frozen-lockfile
           echo "$GITHUB_WORKSPACE/node_modules/.bin" >> "$GITHUB_PATH"
-      - uses: esafak/pi-reviewer@b8c00291c4e9955b612ec2da967f1d79325cbabe
+      - uses: esafak/pi-reviewer@f587cbf74c4b9fd03d5b018a5d1342b53bc401e4
         with:
           github-token: ${{ steps.bot-token.outputs.token }}
           pi-api-key: ${{ secrets.PI_API_KEY }}
           model: ${{ vars.MODEL_NAME }}
           thinking: ${{ env.THINKING }}
+          request-changes: "true"
