@@ -1,0 +1,59 @@
+src/candidates/cache.ts
+  s_7d6d2f1fd036b6::t_34dea93998238d 1-58
+src/candidates/candidates.test.ts
+  s_7d6d2f1fd036b6::t_6842e0f485e23d 1-190
+src/candidates/codecs/jev.ts
+  s_7d6d2f1fd036b6::t_febedd426ffa3b 1-60
+src/candidates/codecs/openai.ts
+  s_7d6d2f1fd036b6::t_d16372d0ff3803 1-65
+src/candidates/constants.ts
+  s_7d6d2f1fd036b6::t_7afffde2024aa9 1-40
+src/candidates/decision-model.ts
+  s_7d6d2f1fd036b6::t_78130d1137060b 1-250
+src/candidates/filtering.ts
+  s_7d6d2f1fd036b6::t_9ac57d151f40f6 1-38
+src/candidates/heuristic.ts
+  s_7d6d2f1fd036b6::t_dd8ac232d9e61f 1-105
+src/candidates/model-caps.ts
+  s_7d6d2f1fd036b6::t_f8b7422483fa19 1-40
+src/candidates/types.ts
+  s_7d6d2f1fd036b6::t_ac491d63dda637 1-86
+src/extract.test.ts
+  s_7d6d2f1fd036b6::t_937498241fff8c 250-260
+src/extract.ts
+  s_7d6d2f1fd036b6::t_439ea07b99479c 187-195,200,223,225-229,231,236,238,287
+src/gui/definition.ts
+  s_7d6d2f1fd036b6::t_35dd99b4bde48f 90-96,98,133-146,173-179
+src/gui/history.tsx
+  s_7d6d2f1fd036b6::t_9b97fae38eb31a 32-35,224-236
+src/index.ts
+  s_7d6d2f1fd036b6::t_15a51a15443380 16-18,207-217,305-325
+src/model.test.ts
+  s_7d6d2f1fd036b6::t_3dd44fcca88de0 704-753
+src/model.ts
+  s_7d6d2f1fd036b6::t_051fe2a6c49f09 320-370
+src/providers/openai.ts
+  s_7d6d2f1fd036b6::t_2a46f7651bed24 1-14
+src/providers/openrouter.ts
+  s_7d6d2f1fd036b6::t_276b6041fbad5e 1-62
+src/providers/zen.ts
+  s_7d6d2f1fd036b6::t_2fa4beac699dda 1-12
+src/rpc.ts
+  s_7d6d2f1fd036b6::t_6e7b3b34545bf4 170-202
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2f1a476513726c66feaf2383e6a31465050759bb",
+  "prompts": {},
+  "sessions": {
+    "s_7d6d2f1fd036b6": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_e31ccd7a8ffdX80KcllEOTg0n5",
+        "model": "unknown"
+      },
+      "human_author": "Emre Şafak <3928300+esafak@users.noreply.github.com>"
+    }
+  }
+}
