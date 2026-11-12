@@ -58,8 +58,7 @@ marks are pure and bundled into windows; auth, hydration, merge settings, and
 branch runs are server-side and dispatched by claimed host.
 
 To add a provider, implement `SourceProvider` and a lexicon, register both, and
-extend the `ProviderID` union. No UI changes should be needed. Design rationale
-and settled decisions are in `docs/design/`.
+extend the `ProviderID` union. No UI changes should be needed.
 
 ## Style
 
