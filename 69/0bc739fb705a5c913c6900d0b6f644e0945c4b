@@ -1,0 +1,19 @@
+src/candidates/candidates.test.ts
+  s_edbc8d9a19dd05::t_0076a94880ea6f 7,192-215
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "690bc739fb705a5c913c6900d0b6f644e0945c4b",
+  "prompts": {},
+  "sessions": {
+    "s_edbc8d9a19dd05": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_e2fc522c2ffeH43QjvRTGbdN0L",
+        "model": "unknown"
+      },
+      "human_author": "Emre Şafak <3928300+esafak@users.noreply.github.com>"
+    }
+  }
+}
