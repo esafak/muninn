@@ -4,6 +4,7 @@ import { githubLexicon } from "../providers/github/lexicon"
 import type { RepoRef } from "../model"
 import { heuristicExtract } from "./heuristic"
 import { CACHE_MAX_ENTRIES, candidateCacheKey, createCandidateCache } from "./cache"
+import { capsFromCheck } from "./decision-model"
 import { jevCodec } from "./codecs/jev"
 import { openaiCodec } from "./codecs/openai"
 
@@ -186,5 +187,29 @@ describe("typed bare-ref filtering", () => {
     expect(bareSurvives(judged, base, 42, ["issue", "pr"])).toBe(true)
     expect(bareKindKept(judged, base, 42, "pr")).toBe(true)
     expect(bareKindKept(judged, base, 42, "issue")).toBe(false)
+  })
+})
+
+describe("capsFromCheck", () => {
+  const stale = { contextLength: 1_000_000, build: "typesafe/jev-1.13-20250101", resolvedAt: 1, source: "live" as const }
+
+  test("usable found windows cache with the canonical build", () => {
+    expect(capsFromCheck({ outcome: "found", canonical: "typesafe/jev-1.13-20260917", contextLength: 1_048_576 }, undefined, 7)).toEqual({
+      caps: { contextLength: 1_048_576, build: "typesafe/jev-1.13-20260917", resolvedAt: 7, source: "live" },
+      cache: true,
+    })
+  })
+
+  test("found without a usable window yields nothing", () => {
+    expect(capsFromCheck({ outcome: "found", canonical: "x" }, stale, 7)).toEqual({ caps: undefined, cache: false })
+    expect(capsFromCheck({ outcome: "found", canonical: "x", contextLength: 0 }, stale, 7)).toEqual({ caps: undefined, cache: false })
+    expect(capsFromCheck({ outcome: "found", canonical: "x", contextLength: -5 }, stale, 7)).toEqual({ caps: undefined, cache: false })
+  })
+
+  test("unreachable reuses stale caps without caching; not-found never does", () => {
+    expect(capsFromCheck({ outcome: "unreachable" }, stale, 7)).toEqual({ caps: stale, cache: false })
+    expect(capsFromCheck({ outcome: "unreachable" }, undefined, 7)).toEqual({ caps: undefined, cache: false })
+    expect(capsFromCheck({ outcome: "not-found" }, stale, 7)).toEqual({ caps: undefined, cache: false })
+    expect(capsFromCheck({ outcome: "not-found" }, undefined, 7)).toEqual({ caps: undefined, cache: false })
   })
 })
