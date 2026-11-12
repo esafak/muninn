@@ -1,11 +1,15 @@
-import { createEffect, createMemo, createSignal, onCleanup, For, Show } from "solid-js"
+import { createEffect, createMemo, createSignal, onCleanup, untrack, For, Show } from "solid-js"
 import type { JSX } from "solid-js"
 import { createStore } from "solid-js/store"
 import { ComposerPill, MenuItem, Panel, SettingsPage, createKeyed, usePlugin, type IconName, type Plugin } from "@opencode/plugin/gui"
 import { associate } from "../associate"
-import { deliberateRefs, messageBuckets, wireRefs } from "../extract"
-import type { ArmedEntry, Chain, Entity, PullEntity, RepoRef, RunEntity, RunStatus } from "../model"
-import { chainTone, armedTargets, staleHeadRetryEligible, staleHeadEvidenceUsable, sessionAttemptCurrent, targetRefreshConfirmed, pillPick, pillEligible, mergeReady, mergeWhy, pendingReviewNotice, latestRun, pullForRun, prConflicted, refKey, repoKey, entityKey } from "../model"
+import { messageBuckets, wireRefs } from "../extract"
+import type { TieredRef } from "../extract"
+import { heuristicExtract } from "../candidates/heuristic"
+import { bareKindKept, bareSurvives } from "../candidates/filtering"
+import { isDecisionBackend } from "../candidates/types"
+import type { ArmedEntry, Chain, Entity, Pin, PullEntity, RepoRef, RunEntity, RunStatus } from "../model"
+import { chainTone, armedTargets, staleHeadRetryEligible, staleHeadEvidenceUsable, sessionAttemptCurrent, targetRefreshConfirmed, pillPick, pillEligible, pinnedChain, pinForChain, samePin, mergeReady, mergeWhy, pendingReviewNotice, latestRun, pullForRun, prConflicted, refKey, repoKey, entityKey } from "../model"
 import { githubLexicon } from "../providers/github/lexicon"
 import { baseCheckoutDecision, cleanFromCheck, cleanupDecision, cleanupResultMessage, cleanupSessionMatches, locateCheckout, safeFastForward, sessionMoveConfirmed, shouldFastForwardBase, shouldRecordCleanupFailure, worktreeOccupancyDecision } from "../local-cleanup"
 import type { CheckoutKind } from "../local-cleanup"
@@ -120,15 +124,92 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
    * through, so incidental discoveries never become candidates. */
   const buckets = createMemo(() => messageBuckets(messageList()))
 
-  const refs = createMemo(() => deliberateRefs(buckets(), meta.repo ?? undefined, [githubLexicon]))
+  /** One extraction: refs plus their evidence snippets. A single scan feeds
+   * both the tiers and the judge — the two never diverge. */
+  const extracted = createMemo(() =>
+    heuristicExtract(buckets(), meta.repo ?? undefined, [githubLexicon], (ctx.stores.settings.value.candidateProvider ?? "heuristic") === "heuristic" ? "strict" : "permissive"),
+  )
+  const refs = () => extracted().refs
+
+  /** Snippets for the DecisionModel: first bucket string (+command) per ref. */
+  const snippets = () => extracted().snippets
+
+  /**
+   * Per-ref keep/drop verdicts, scoped to the session + directory + provider +
+   * model that produced them. `undefined` (or a scope mismatch) means heuristic
+   * keep-all: verdicts never leak across sessions, models, or provider switches.
+   */
+  interface JudgeVerdicts {
+    sessionID: string
+    directory: string
+    provider: string
+    model?: string
+    kept: Map<string, boolean>
+  }
+  const [verdicts, setVerdicts] = createSignal<JudgeVerdicts | undefined>(undefined)
+  /**
+   * Operation epoch: refresh and the message debounce share it, and the
+   * LATEST pipeline to start wins. Captured before any await — a slow
+   * refresh that started first must never overwrite a newer debounce
+   * judgment, and a stale session's callbacks must never invalidate the
+   * current session's pending judgment.
+   */
+  let judgeEpoch = 0
+  const candidateProvider = () => ctx.stores.settings.value.candidateProvider ?? "heuristic"
+  const candidateModel = () => ctx.stores.settings.value.candidateModel
+  // Stale verdicts never apply across provider switches. Track ONLY the
+  // provider/model here: rechain() reads verdicts, so running it tracked
+  // would make every committed judgment immediately wipe itself.
+  createEffect(() => {
+    candidateProvider()
+    candidateModel()
+    untrack(() => {
+      setVerdicts(undefined)
+      rechain()
+    })
+  })
+
+  /** Verdicts only when they belong to this session, directory, provider, and model. */
+  const verdictsForSession = (): Map<string, boolean> | undefined => {
+    const v = verdicts()
+    const current = session()
+    if (!v || !current || v.sessionID !== current.id || v.directory !== current.directory) return undefined
+    if (v.provider !== candidateProvider()) return undefined
+    if ((v.model ?? undefined) !== (candidateModel() ?? undefined)) return undefined
+    return v.kept
+  }
+
+  /** Refs after the DecisionModel filter; heuristic mode returns refs unchanged.
+   * Bare-ref survival is judged over ACTUAL hydrated kinds (`bareSurvives`):
+   * all-explicit-drops drops, anything unanswered fails open — so a sliced-off
+   * kind can never silently kill its bare ref. */
+  const filteredRefs = createMemo(() => {
+    if (candidateProvider() === "heuristic") return refs()
+    const judged = verdictsForSession()
+    if (!judged) return refs()
+    return refs().filter((ref) => {
+      if (ref.kind) return judged.get(refKey(ref)) !== false
+      if (!ref.repo) return true
+      const base = repoKey(ref.repo)
+      const hydrated = (["issue", "pr", "run"] as const).filter(
+        (kind) => entities[`${base}#${kind}${ref.number}`] !== undefined,
+      )
+      return bareSurvives(judged, base, ref.number, hydrated)
+    })
+  })
 
   const rechain = () => {
     const repo = meta.repo
     // Chains are session-associated: only entities this session's transcript
     // references join, joined against the (global, durable) entity cache. Bare
-    // references don't know their kind — try all three. Runs pull in their pull
-    // requests (matched by head SHA), so the association is visible without a mention.
-    const relevant = refs().flatMap((ref) => {
+    // references fan out to their hydrated kinds — but only kept kinds join:
+    // a dropped kind is filtered here, not just at the ref level, so an
+    // issue-keeps/PR-drops verdict can't smuggle the PR into its chain.
+    // Runs pull in their pull requests (matched by head SHA), so the
+    // association is visible without a mention.
+    // When the DecisionModel judged, dropped refs never reach chains.
+    const judged = verdictsForSession()
+    const relevant = filteredRefs().flatMap((ref) => {
       if (ref.kind) {
         const entity = entities[refKey(ref)]
         return entity ? [entity] : []
@@ -136,10 +217,28 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       if (!ref.repo) return []
       const base = repoKey(ref.repo)
       return (["issue", "pr", "run"] as const)
-        .map((kind) => entities[`${base}#${kind}${ref.number}`])
-        .filter((entity): entity is Entity => entity !== undefined)
+        .map((kind) => ({ kind, entity: entities[`${base}#${kind}${ref.number}`] as Entity | undefined }))
+        .filter((entry): entry is { kind: "issue" | "pr" | "run"; entity: Entity } => entry.entity !== undefined)
+        .filter(({ kind }) => bareKindKept(judged, base, ref.number, kind))
+        .map(({ entity }) => entity)
     })
     const related: Entity[] = []
+    // Explicit intent beats model verdicts: the pinned member joins even
+    // when filtered out, so a drop can never hide the user's override.
+    // Member identity (repo+number+kind) resolves run-series groups that
+    // chain keys (JSON tuples) could never address.
+    {
+      const pin = ctx.stores.pinned.value
+      const pinnedExtra: Entity[] = []
+      if (pin.number !== undefined && pin.repo) {
+        const peer = entities[`${repoKey(pin.repo)}#${pin.kind ?? "pr"}${pin.number}`]
+        if (peer && !relevant.includes(peer)) pinnedExtra.push(peer)
+      } else if (pin.key !== undefined) {
+        const peer = (entities as Record<string, Entity | undefined>)[pin.key]
+        if (peer && !relevant.includes(peer)) pinnedExtra.push(peer)
+      }
+      relevant.push(...pinnedExtra)
+    }
     for (const entity of relevant) {
       if (entity.kind !== "run") continue
       for (const candidate of Object.values(entities)) {
@@ -155,6 +254,26 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       }
     }
     setChains(associate([...relevant, ...related], repo ? (runs[repoKey(repo)] ?? []) : []))
+    // Expiry: a pin whose chain is gone unpins so a stale override can't stick
+    // the pill — but only in the session that owns it (legacy ownerless pins
+    // keep the same-repo rule). Another session's refresh must never erase it.
+    const pin = ctx.stores.pinned.value
+    const currentId = session()?.id
+    const pinOwnedHere = (() => {
+      if (pin.repo === undefined && pin.key === undefined) return false
+      if (!repo) return false
+      const sameRepo = pin.repo ? repoKey(pin.repo) === repoKey(repo) : pin.key!.startsWith(`${repoKey(repo)}#`)
+      if (!sameRepo) return false
+      return pin.owner === undefined || (currentId !== undefined && pin.owner === currentId)
+    })()
+    if (pinOwnedHere && !pinnedChain(chains(), pin))
+      ctx.stores.pinned.update((draft) => {
+        delete draft.repo
+        delete draft.number
+        delete draft.kind
+        delete draft.key
+        delete draft.owner
+      })
   }
 
   const open = (url: string) => ctx.system.openExternal(url)
@@ -167,6 +286,83 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     } catch (error) {
       console.warn(`[muninn] ${name} failed`, error)
       throw new Error(`${name}: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
+  /** One post-hydration policy: judge heuristic survivors with hydrated
+   * titles/states, then rechain. Used by both refresh and the message
+   * debounce so model filtering never depends on which path hydrated last.
+   * - Refs are validated exactly like hydration input (`wireRefs`): an
+   *   invalid number drops out instead of rejecting the whole batch.
+   * - Only the latest call may commit (generation guard): overlapping calls
+   *   from refresh and the debounce can't complete backwards.
+   * - Verdicts are scoped to session + directory + provider + model; a
+   *   response that arrives after any of those changed is discarded. RPC
+   *   failure clears same-scope verdicts (fail-open keep-all) under the
+   *   same guard instead of retaining stale drops. */
+  const judgeFound = async (
+    sessionID: string,
+    directory: string,
+    foundRefs: readonly TieredRef[],
+    epoch: number,
+  ): Promise<void> => {
+    const provider = candidateProvider()
+    if (provider === "heuristic" || foundRefs.length === 0) return
+    if (epoch !== judgeEpoch) return
+    const judgedModel = candidateModel()
+    const fresh = (): boolean => {
+      const live = session()
+      return epoch === judgeEpoch && !!live && live.id === sessionID && live.directory === directory &&
+        candidateProvider() === provider && (candidateModel() ?? undefined) === (judgedModel ?? undefined)
+    }
+    try {
+      // Validate like hydration: invalid numbers drop out instead of wedging
+      // the whole judge call. The wire cap keeps the most deliberate tiers.
+      const wire = wireRefs(foundRefs)
+      // Bare refs fan out post-hydration: one JudgeInput per hydrated kind
+      // (issue/PR/run title+state each), capped at 64 for the RPC schema.
+      // Typed verdicts map back: bare stays iff any typed keeps.
+      const candidates = wire.refs.flatMap((ref) => {
+        const snippet = snippets().get(refKey(ref))
+        const base = { tier: ref.tier, snippet: snippet?.text ?? "", ...(snippet?.command ? { command: snippet.command } : {}) }
+        if (ref.kind) {
+          const entity = entities[refKey(ref)]
+          const title = entity === undefined ? undefined : entity.kind === "run" ? entity.name : entity.title
+          const state = entity === undefined ? undefined : entity.kind === "run" ? entity.status : entity.state
+          return [{
+            number: ref.number, kind: ref.kind,
+            ...(ref.repo ? { repo: ref.repo } : {}),
+            ...base,
+            ...(title ? { title } : {}),
+            ...(state ? { state } : {}),
+          }]
+        }
+        if (!ref.repo) return [{ number: ref.number, ...base }]
+        const repoBase = repoKey(ref.repo)
+        const hydrated = (["issue", "pr", "run"] as const)
+          .map((kind) => ({ kind, entity: entities[`${repoBase}#${kind}${ref.number}`] as Entity | undefined }))
+          .filter((entry): entry is { kind: "issue" | "pr" | "run"; entity: Entity } => entry.entity !== undefined)
+        if (hydrated.length === 0) return [{ number: ref.number, ...(ref.repo ? { repo: ref.repo } : {}), ...base }]
+        return hydrated.map(({ kind, entity }) => ({
+          number: ref.number, kind,
+          ...(ref.repo ? { repo: ref.repo } : {}),
+          ...base,
+          title: entity.kind === "run" ? entity.name : entity.title,
+          state: entity.kind === "run" ? entity.status : entity.state,
+        }))
+      }).slice(0, 64)
+      const judged = await ctx.client
+        .rpc(Muninn)
+        .judge({ directory, provider, ...(judgedModel ? { model: judgedModel } : {}), candidates })
+        .catch(() => undefined)
+      // Commit or clear under the same freshness guard: a stale success must
+      // not overwrite newer verdicts, and a failure must not retain stale drops.
+      if (!fresh()) return
+      if (judged)
+        setVerdicts({ sessionID, directory, provider, ...(judgedModel ? { model: judgedModel } : {}), kept: new Map(judged.verdicts.map((v) => [v.key, v.keep])) })
+      else setVerdicts(undefined)
+    } catch {
+      if (fresh()) setVerdicts(undefined)
     }
   }
 
@@ -184,6 +380,10 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     const current = session()
     if (!current) return false
     const generation = ++refreshGeneration
+    // Operation epoch shared with the message debounce: whichever pipeline
+    // starts last owns the next judgment. Captured before any network I/O so
+    // a slow refresh can never overwrite a newer debounce judgment.
+    const epoch = ++judgeEpoch
     const currentRefresh = () =>
       generation === refreshGeneration && sessionAttemptCurrent(current, session())
     const targetKey = target ? mergeKey(target.repo, target.number) : undefined
@@ -275,6 +475,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
         if (!currentRefresh()) return false
         for (const [key, pull] of recoveredPulls) refreshedPullByPR.set(key, pull)
         setMeta("error", null)
+        await judgeFound(current.id, current.directory, found, epoch)
         rechain()
         const knownPulls = Object.values(entities).filter((entity): entity is PullEntity =>
           entity.kind === "pr" && repoKey(entity.repo) === repoKey(repo),
@@ -320,27 +521,43 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       setEntities(cached())
       setRuns({})
       setChains([])
+      // Verdicts belong to the session that produced them; never carry over.
+      setVerdicts(undefined)
       setSessionReady(false)
       void refresh()
     },
   )
 
-  // Messages changed: re-hydrate after a short debounce, so streaming text settles.
+  // Messages changed re-hydrates after a short debounce, so streaming text settles.
+  // Provider/model changes re-judge through the same path: the effect tracks
+  // them, so a settled model switch schedules exactly one judgment.
   let timer: ReturnType<typeof setTimeout> | undefined
   createEffect(() => {
     const found = refs()
+    const provider = candidateProvider()
+    const model = candidateModel()
+    void provider
+    void model
     if (!meta.repo || found.length === 0) return
     clearTimeout(timer)
     timer = setTimeout(() => {
       const current = session()
       if (!current) return
-      const wire = wireRefs(found)
+      // Same shared epoch: a debounce that fires later wins over an older refresh.
+      const epoch = ++judgeEpoch
+      const wire = wireRefs(refs())
       void ctx.client
         .rpc(Muninn)
         .hydrate({ directory: current.directory, refs: wire.refs })
-        .then(({ entities: hydrated, unresolved }) => {
+        .then(async ({ entities: hydrated, unresolved }) => {
+          // Reject stale callbacks before touching shared state: a session that
+          // moved directories must not merge the old directory's entities.
+          if (!sessionAttemptCurrent(current, session())) return
           merge(hydrated)
           setMeta("unresolved", unresolved.length)
+          // Same policy as refresh: judge before chaining, so the message
+          // path never bypasses model filtering.
+          await judgeFound(current.id, current.directory, refs(), epoch)
           rechain()
         })
         .catch(() => undefined)
@@ -365,6 +582,11 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
   // pill is the session's work, and a newer PR outranks it through `pillPick`),
   // CI needing attention, an armed merge pending. Mentions of other branches'
   // work stay in the sidebar; settled history never pills.
+  // Provider draft: TextInput is free-form, so intermediate keystrokes must not
+  // normalize the stored setting (typing "openrouter" letter by letter would
+  // otherwise persist "heuristic" on every prefix). Draft locally, persist
+  // only complete valid backend names.
+
   const waitForAllStatusChecks = () => ctx.stores.settings.value.waitForAllStatusChecks !== false
   const pillState = createMemo(() => {
     const eligible = chains().filter((chain) =>
@@ -375,13 +597,52 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
         armed: ctx.stores.armed.value.entries,
       }),
     )
-    return { eligible, picked: pillPick(eligible, waitForAllStatusChecks()) }
+    const normal = pillPick(eligible, waitForAllStatusChecks())
+    // Single-pin override: pull identity (or chain key) bypasses eligibility.
+    // Expiry is disappearance: a pinned chain that's gone unpins on next rechain.
+    const pinned = pinnedChain(chains(), ctx.stores.pinned.value)
+    if (pinned) return { eligible, picked: { chain: pinned, reason: "pinned" as const, considered: eligible.length + 1 } }
+    return { eligible, picked: normal }
   })
   // The menu's merge-when-ready toggle binds to the first open PR across
-  // eligible chains. Reactive — the popover updates while it's open.
-  const menuLead = createMemo(() =>
-    pillState().eligible.flatMap((chain) => chain.prs.filter((pull) => pull.state === "open").map((pull) => ({ chain, pull })))[0],
-  )
+  // eligible chains (pinned first when it has one open). Reactive.
+  const menuLead = createMemo(() => {
+    const pinned = pillState().picked?.reason === "pinned" ? pillState().picked!.chain : undefined
+    const pinnedOpen = pinned?.prs.filter((pull) => pull.state === "open").map((pull) => ({ chain: pinned, pull }))[0]
+    return pinnedOpen ?? pillState().eligible.flatMap((chain) => chain.prs.filter((pull) => pull.state === "open").map((pull) => ({ chain, pull })))[0]
+  })
+
+  const isPinned = (chain: Chain): boolean => {
+    const pin = ctx.stores.pinned.value
+    if (pin.number !== undefined && pin.repo) return samePin(pinForChain(chain), pin)
+    if (pin.key !== undefined) return chain.key === pin.key
+    return false
+  }
+  const togglePin = (chain: Chain): void => {
+    const next = pinForChain(chain)
+    const owner = session()?.id
+    ctx.stores.pinned.update((draft) => {
+      const current = draft as Pin
+      if (samePin(current, next)) {
+        delete current.repo
+        delete current.number
+        delete current.kind
+        delete current.key
+        delete current.owner
+      } else {
+        if (next.repo) current.repo = next.repo
+        else delete current.repo
+        if (next.number !== undefined) current.number = next.number
+        else delete current.number
+        if (next.kind !== undefined) current.kind = next.kind
+        else delete current.kind
+        if (next.key !== undefined) current.key = next.key
+        else delete current.key
+        if (owner !== undefined) current.owner = owner
+        else delete current.owner
+      }
+    })
+  }
 
   /** Whether a PR is armed for Muninn-driven merge-when-ready — ours, or already
    * armed on the forge's side (shown the same; cancel handles both). */
@@ -955,7 +1216,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       // pick comes from the shared memo — exactly what the footer reports.
       const worst = picked.chain
       const lead = worst.prs.find((pull) => pull.state === "open" || pull.state === "draft") ??
-        (picked.reason === "merged" ? worst.prs.find((pull) => pull.state === "merged") : undefined)
+        (picked.reason === "merged" || picked.reason === "pinned" ? worst.prs.find((pull) => pull.state === "merged") ?? worst.prs[0] : undefined)
       const run = latestRun(worst.runs)
       if (!lead && !run) return undefined
       const chainStatus = chainTone(worst, waitForAllStatusChecks())
@@ -963,20 +1224,22 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
 
       // The icon shape encodes the provider merge state; pill tone still encodes
       // overall chain health. The label stays `#number title ⌄`. An armed lead PR
-      // puts a ticking braille spinner in front: a merge is pending.
+      // puts a ticking braille spinner in front: a merge is pending. A pinned
+      // chain pins the label with ★ so the override is visible.
       const mergeStatus = lead?.state === "open" ? lead.mergeState : undefined
       const circle = pillStatusIcon(lead?.state, mergeStatus, tone, pillIcon(meta.provider))
       const pending = lead?.state === "open" ? isArmed(lead) : false
+      const pinnedMark = picked.reason === "pinned" ? "★ " : ""
       const short = (title: string): string => (title.length > 24 ? `${title.slice(0, 24)}…` : title)
 
       return {
         icon: circle,
         label: lead
-          ? `${pending ? `${SPIN_FRAMES[spin()]} ` : ""}#${lead.number} ${short(lead.title)}${lead.state === "merged" ? ` · ${ctx.t("state.merged")}` : ""} ▾`
-          : `run #${run!.id}${run!.status === "succeeded" ? "" : ` · ${ctx.t(`state.${run!.status}`)}`} ▾`,
+          ? `${pinnedMark}${pending ? `${SPIN_FRAMES[spin()]} ` : ""}#${lead.number} ${short(lead.title)}${lead.state === "merged" ? ` · ${ctx.t("state.merged")}` : ""} ▾`
+          : `${pinnedMark}run #${run!.id}${run!.status === "succeeded" ? "" : ` · ${ctx.t(`state.${run!.status}`)}`} ▾`,
         tone,
         title: lead
-          ? `#${lead.number} ${lead.title}${lead.state === "merged"
+          ? `${picked.reason === "pinned" ? `${ctx.t("pill.pinned")} · ` : ""}#${lead.number} ${lead.title}${lead.state === "merged"
             ? ` · merged${lead.mergedAt === undefined ? "" : ` · ${new Date(lead.mergedAt).toLocaleString()}`}`
             : lead.state === "open"
               ? ` · merge ${mergeStatus ?? "unknown"}${lead.reviewState ? ` · reviews ${lead.reviewState}` : ""}`
@@ -1186,6 +1449,8 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
             onMerge={mergePull}
             onArm={armPull}
             isArmed={isArmed}
+            isPinned={isPinned}
+            onPin={togglePin}
           />
         </div>
         <Show when={chains().length === 0 && meta.repo === null && !sessionReady()}>
@@ -1226,6 +1491,14 @@ const MuninnSettings = (): JSX.Element => {
   const ctx = usePlugin<typeof definition>()
   const ui = ctx.ui
   const days = () => Math.max(1, Math.round(ctx.stores.settings.value.retentionDays))
+  // Draft locally so mid-word keystrokes ("ope…") never normalize the stored
+  // setting; persist only complete valid backend names. External changes
+  // (another window) are adopted when the draft holds a valid value.
+  const [providerDraft, setProviderDraft] = createSignal<string>(ctx.stores.settings.value.candidateProvider ?? "heuristic")
+  createEffect(() => {
+    const current = ctx.stores.settings.value.candidateProvider ?? "heuristic"
+    if (isDecisionBackend(providerDraft()) && providerDraft() !== current) setProviderDraft(current)
+  })
 
   return (
     <ui.SettingsLayout title={ctx.t("settings.title")} description={ctx.t("settings.description")}>
@@ -1251,6 +1524,35 @@ const MuninnSettings = (): JSX.Element => {
         </ui.SettingsRow>
       </ui.SettingsSection>
       <ui.SettingsSection title={ctx.t("settings.section.merging")}>
+        <ui.SettingsRow
+          id="candidate-provider"
+          title={ctx.t("settings.candidateProvider")}
+          description={ctx.t("settings.candidateProvider.description")}
+        >
+          <ui.TextInput
+            value={providerDraft()}
+            label={ctx.t("settings.candidateProvider")}
+            onInput={(value) => {
+              setProviderDraft(value)
+              const v = value.trim().toLowerCase()
+              if (isDecisionBackend(v)) ctx.stores.settings.update((draft) => { draft.candidateProvider = v })
+            }}
+          />
+        </ui.SettingsRow>
+        <ui.SettingsRow
+          id="candidate-model"
+          title={ctx.t("settings.candidateModel")}
+          description={ctx.t("settings.candidateModel.description")}
+        >
+          <ui.TextInput
+            value={ctx.stores.settings.value.candidateModel ?? ""}
+            label={ctx.t("settings.candidateModel")}
+            onInput={(value) => {
+              const v = value.trim()
+              ctx.stores.settings.update((draft) => { (draft as { candidateModel?: string }).candidateModel = v || undefined })
+            }}
+          />
+        </ui.SettingsRow>
         <ui.SettingsRow
           id="wait-for-all-status-checks"
           title={ctx.t("settings.waitForAllStatusChecks")}
