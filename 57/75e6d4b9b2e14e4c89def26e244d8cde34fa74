@@ -1,0 +1,23 @@
+.github/workflows/pi-review.yml
+  s_9e8943db980262::t_19e28b5bbe5b23 53,59
+src/candidates/candidates.test.ts
+  s_9e8943db980262::t_0c016a0ddc0723 7,192-215
+src/candidates/decision-model.ts
+  s_9e8943db980262::t_d070662a128cf8 22,24,90-107,121-123
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5775e6d4b9b2e14e4c89def26e244d8cde34fa74",
+  "prompts": {},
+  "sessions": {
+    "s_9e8943db980262": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_e2f5557b1ffeBkjQXFQGyGogxR",
+        "model": "unknown"
+      },
+      "human_author": "Emre Şafak <3928300+esafak@users.noreply.github.com>"
+    }
+  }
+}
