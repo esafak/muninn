@@ -31,4 +31,4 @@
 - No `any`. Type inference over annotations; annotate only exports and literal-widening spots.
 - Tests: one `describe` per function, table-ish cases, assert exact shapes.
 - Commits: conventional (`feat:`, `fix:`, `docs:`, `chore:`…), no scope unless clarifying.
-- Never rewrite published history: no rebase or force-push on `main` or any branch with an open PR. Fix mistakes with revert commits on top; prefer rebase over merge when integrating updates with `gh`.
+- Never rewrite published history to fix mistakes: no manual rebase or force-push on `main` or any branch with an open PR — use revert commits on top. The only exception is integrating base-branch updates, which prefers rebase over merge via `gh`.
