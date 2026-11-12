@@ -32,6 +32,23 @@ export type MergeResult =
   | { merged: true }
   | { merged: false; message?: string; headChanged?: boolean; inFlight?: boolean; alreadyHandled?: boolean }
 
+/** Result of checking one model ID against a decision backend's live list. */
+export type DecisionModelCheck =
+  | { outcome: "found"; canonical: string; contextLength?: number }
+  | { outcome: "not-found" }
+  | { outcome: "unreachable" }
+
+/** Uniform live check every decision backend implements. `key` is the
+ * backend's credential (undefined when none is configured); backends with
+ * public lists ignore it. Total: network failures report `unreachable`,
+ * never throw. */
+export type CheckDecisionModel = (
+  key: string | undefined,
+  modelId: string,
+  fetchFn?: typeof fetch,
+  signal?: AbortSignal,
+) => Promise<DecisionModelCheck>
+
 export interface SourceProvider {
   /** Registry id, e.g. "github". */
   id: string

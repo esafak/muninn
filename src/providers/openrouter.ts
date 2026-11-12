@@ -7,6 +7,7 @@
  */
 
 import type { ModelCaps } from "../candidates/model-caps"
+import type { CheckDecisionModel } from "./types"
 
 export const OPENROUTER_DECISIONS_ENDPOINT = "https://openrouter.ai/api/v1/systemone"
 
@@ -35,12 +36,38 @@ export const resolveOpenRouterCaps = async (
   now = Date.now(),
   signal?: AbortSignal,
 ): Promise<ModelCaps | undefined> => {
+  const found = await checkOpenRouterModel(undefined, modelId, fetchFn, signal)
+  if (found.outcome !== "found" || found.contextLength === undefined) return undefined
+  return { contextLength: found.contextLength, build: found.canonical, resolvedAt: now, source: "live" }
+}
+
+/** Catalog check: found (with caps when the entry reports a usable window),
+ * not-found (reachable catalog without the ID), or unreachable (network,
+ * non-OK, or malformed payload — never evidence of absence). The catalog
+ * is public, so the key is ignored. */
+export const checkOpenRouterModel: CheckDecisionModel = async (_key, modelId, fetchFn = fetch, signal) => {
   const wanted = modelId.trim()
-  if (!wanted) return undefined
-  const response = await fetchFn(OPENROUTER_CATALOG_URL, { headers: { Accept: "application/json" }, ...(signal ? { signal } : {}) })
-  if (!response.ok) return undefined
-  const payload = (await response.json()) as { data?: CatalogModel[] }
-  const entries = Array.isArray(payload.data) ? payload.data : []
+  if (!wanted) return { outcome: "not-found" }
+  try {
+    const response = await fetchFn(OPENROUTER_CATALOG_URL, { headers: { Accept: "application/json" }, ...(signal ? { signal } : {}) })
+    if (!response.ok) return { outcome: "unreachable" }
+    const payload = (await response.json()) as { data?: CatalogModel[] }
+    if (!Array.isArray(payload.data)) return { outcome: "unreachable" }
+    const found = matchCatalogEntry(payload.data, wanted)
+    if (!found) return { outcome: "not-found" }
+    return {
+      outcome: "found",
+      canonical: found.build,
+      ...(found.entry.context_length && found.entry.context_length > 0
+        ? { contextLength: found.entry.context_length }
+        : {}),
+    }
+  } catch {
+    return { outcome: "unreachable" }
+  }
+}
+
+const matchCatalogEntry = (entries: CatalogModel[], wanted: string): { entry: CatalogModel; build: string } | undefined => {
   const bare = wanted.includes("/") ? wanted.split("/").pop()! : wanted
   const match =
     entries.find((e) => e.id === wanted) ??
@@ -52,11 +79,5 @@ export const resolveOpenRouterCaps = async (
   const targetSlug = match.alias_target?.slug
   const target = targetSlug ? entries.find((e) => e.id === targetSlug || e.canonical_slug === targetSlug) : undefined
   const resolved = target ?? match
-  if (!resolved.context_length || resolved.context_length <= 0) return undefined
-  return {
-    contextLength: resolved.context_length,
-    build: resolved.canonical_slug ?? targetSlug ?? resolved.id,
-    resolvedAt: now,
-    source: "live",
-  }
+  return { entry: resolved, build: resolved.canonical_slug ?? targetSlug ?? resolved.id }
 }

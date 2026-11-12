@@ -28,7 +28,7 @@
 import type { TieredRef } from "../extract"
 
 /** Decision backends the judge can route to. Pinned model IDs live in settings. */
-export const DECISION_BACKENDS = ["heuristic", "zen", "openrouter", "openai"] as const
+export const DECISION_BACKENDS = ["zen", "openrouter", "openai"] as const
 
 export type DecisionBackend = (typeof DECISION_BACKENDS)[number]
 

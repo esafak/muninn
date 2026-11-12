@@ -7,6 +7,7 @@ import { messageBuckets, wireRefs } from "../extract"
 import type { TieredRef } from "../extract"
 import { heuristicExtract } from "../candidates/heuristic"
 import { bareKindKept, bareSurvives } from "../candidates/filtering"
+import { defaultModelFor, validateModelSyntax } from "../candidates/model-id"
 import { isDecisionBackend } from "../candidates/types"
 import type { ArmedEntry, Chain, Entity, Pin, PullEntity, RepoRef, RunEntity, RunStatus } from "../model"
 import { chainTone, armedTargets, staleHeadRetryEligible, staleHeadEvidenceUsable, sessionAttemptCurrent, targetRefreshConfirmed, pillPick, pillEligible, pinnedChain, pinForChain, isFreshBaseSession, mergeReady, mergeWhy, pendingReviewNotice, latestRun, pullForRun, prConflicted, refKey, repoKey, entityKey } from "../model"
@@ -130,10 +131,18 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
    * through, so incidental discoveries never become candidates. */
   const buckets = createMemo(() => messageBuckets(messageList()))
 
+  /** Toggle for the one-shot decision-model judge; off keeps heuristic tier rules. */
+  const decisionModelsEnabled = () => ctx.stores.settings.value.decisionModelsEnabled === true
+  const candidateProvider = () => {
+    const stored = ctx.stores.settings.value.candidateProvider as string | undefined
+    return isDecisionBackend(stored ?? "") ? stored as "zen" | "openrouter" | "openai" : "zen"
+  }
+  const candidateModel = () => ctx.stores.settings.value.candidateModel
+
   /** One extraction: refs plus their evidence snippets. A single scan feeds
    * both the tiers and the judge — the two never diverge. */
   const extracted = createMemo(() =>
-    heuristicExtract(buckets(), meta.repo ?? undefined, [githubLexicon], (ctx.stores.settings.value.candidateProvider ?? "heuristic") === "heuristic" ? "strict" : "permissive"),
+    heuristicExtract(buckets(), meta.repo ?? undefined, [githubLexicon], decisionModelsEnabled() ? "permissive" : "strict"),
   )
   const refs = () => extracted().refs
 
@@ -161,12 +170,11 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
    * current session's pending judgment.
    */
   let judgeEpoch = 0
-  const candidateProvider = () => ctx.stores.settings.value.candidateProvider ?? "heuristic"
-  const candidateModel = () => ctx.stores.settings.value.candidateModel
-  // Stale verdicts never apply across provider switches. Track ONLY the
-  // provider/model here: rechain() reads verdicts, so running it tracked
+  // Stale verdicts never apply across toggle/provider switches. Track ONLY the
+  // toggle/provider/model here: rechain() reads verdicts, so running it tracked
   // would make every committed judgment immediately wipe itself.
   createEffect(() => {
+    decisionModelsEnabled()
     candidateProvider()
     candidateModel()
     untrack(() => {
@@ -175,22 +183,23 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     })
   })
 
-  /** Verdicts only when they belong to this session, directory, provider, and model. */
+  /** Verdicts only when they belong to this session, directory, toggle, provider, and model. */
   const verdictsForSession = (): Map<string, boolean> | undefined => {
     const v = verdicts()
     const current = session()
     if (!v || !current || v.sessionID !== current.id || v.directory !== current.directory) return undefined
+    if (!decisionModelsEnabled()) return undefined
     if (v.provider !== candidateProvider()) return undefined
     if ((v.model ?? undefined) !== (candidateModel() ?? undefined)) return undefined
     return v.kept
   }
 
-  /** Refs after the DecisionModel filter; heuristic mode returns refs unchanged.
+  /** Refs after the DecisionModel filter; toggle-off returns refs unchanged.
    * Bare-ref survival is judged over ACTUAL hydrated kinds (`bareSurvives`):
    * all-explicit-drops drops, anything unanswered fails open — so a sliced-off
    * kind can never silently kill its bare ref. */
   const filteredRefs = createMemo(() => {
-    if (candidateProvider() === "heuristic") return refs()
+    if (!decisionModelsEnabled()) return refs()
     const judged = verdictsForSession()
     if (!judged) return refs()
     return refs().filter((ref) => {
@@ -308,7 +317,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
    *   invalid number drops out instead of rejecting the whole batch.
    * - Only the latest call may commit (generation guard): overlapping calls
    *   from refresh and the debounce can't complete backwards.
-   * - Verdicts are scoped to session + directory + provider + model; a
+   * - Verdicts are scoped to session + directory + toggle + provider + model; a
    *   response that arrives after any of those changed is discarded. RPC
    *   failure clears same-scope verdicts (fail-open keep-all) under the
    *   same guard instead of retaining stale drops. */
@@ -318,14 +327,14 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     foundRefs: readonly TieredRef[],
     epoch: number,
   ): Promise<void> => {
+    if (!decisionModelsEnabled() || foundRefs.length === 0) return
     const provider = candidateProvider()
-    if (provider === "heuristic" || foundRefs.length === 0) return
     if (epoch !== judgeEpoch) return
     const judgedModel = candidateModel()
     const fresh = (): boolean => {
       const live = session()
       return epoch === judgeEpoch && !!live && live.id === sessionID && live.directory === directory &&
-        candidateProvider() === provider && (candidateModel() ?? undefined) === (judgedModel ?? undefined)
+        decisionModelsEnabled() && candidateProvider() === provider && (candidateModel() ?? undefined) === (judgedModel ?? undefined)
     }
     try {
       // Validate like hydration: invalid numbers drop out instead of wedging
@@ -560,13 +569,15 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
   )
 
   // Messages changed re-hydrates after a short debounce, so streaming text settles.
-  // Provider/model changes re-judge through the same path: the effect tracks
-  // them, so a settled model switch schedules exactly one judgment.
+  // Toggle/provider/model changes re-judge through the same path: the effect tracks
+  // them, so a settled switch schedules exactly one judgment.
   let timer: ReturnType<typeof setTimeout> | undefined
   createEffect(() => {
     const found = refs()
+    const enabled = decisionModelsEnabled()
     const provider = candidateProvider()
     const model = candidateModel()
+    void enabled
     void provider
     void model
     const isFresh = fresh()
@@ -665,10 +676,6 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
   // pill is the session's work, and a newer PR outranks it through `pillPick`),
   // CI needing attention, an armed merge pending. Mentions of other branches'
   // work stay in the sidebar; settled history never pills.
-  // Provider draft: TextInput is free-form, so intermediate keystrokes must not
-  // normalize the stored setting (typing "openrouter" letter by letter would
-  // otherwise persist "heuristic" on every prefix). Draft locally, persist
-  // only complete valid backend names.
 
   const waitForAllStatusChecks = () => ctx.stores.settings.value.waitForAllStatusChecks !== false
   const pillState = createMemo(() => {
@@ -1565,6 +1572,24 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
           keywords: "cache retention days history keep sidebar",
         },
         {
+          id: "decision-models-enabled",
+          title: ctx.t("settings.decisionModelsEnabled"),
+          description: ctx.t("settings.decisionModelsEnabled.description"),
+          keywords: "decision model judge filter candidate heuristic semantic",
+        },
+        {
+          id: "candidate-provider",
+          title: ctx.t("settings.candidateProvider"),
+          description: ctx.t("settings.candidateProvider.description"),
+          keywords: "decision backend provider zen openrouter openai judge",
+        },
+        {
+          id: "candidate-model",
+          title: ctx.t("settings.candidateModel"),
+          description: ctx.t("settings.candidateModel.description"),
+          keywords: "decision model id pinned jev luna validate",
+        },
+        {
           id: "wait-for-all-status-checks",
           title: ctx.t("settings.waitForAllStatusChecks"),
           description: ctx.t("settings.waitForAllStatusChecks.description"),
@@ -1580,21 +1605,23 @@ const MuninnSettings = (): JSX.Element => {
   const ctx = usePlugin<typeof definition>()
   const ui = ctx.ui
   const days = () => Math.max(1, Math.round(ctx.stores.settings.value.retentionDays))
-  // Draft locally so mid-word keystrokes ("ope…") never normalize the stored
-  // setting; persist only complete valid backend names. External changes
-  // (another window) are adopted when the draft holds a valid value.
-  const [providerDraft, setProviderDraft] = createSignal<string>(ctx.stores.settings.value.candidateProvider ?? "heuristic")
-  createEffect(() => {
-    const current = ctx.stores.settings.value.candidateProvider ?? "heuristic"
-    if (isDecisionBackend(providerDraft()) && providerDraft() !== current) setProviderDraft(current)
-  })
+  // Backend is a Select, so only complete valid backends ever persist — no
+  // draft needed. Legacy "heuristic" stored values fall back to "zen": the
+  // toggle (not the provider name) now decides whether the judge runs.
+  const selectedProvider = (): "zen" | "openrouter" | "openai" => {
+    const stored = ctx.stores.settings.value.candidateProvider as string | undefined
+    return isDecisionBackend(stored ?? "") ? (stored as "zen" | "openrouter" | "openai") : "zen"
+  }
   // Model IDs are free text: commit trailing-edge debounced so typing never
   // wipes verdicts or re-arms the judge per keystroke. The timer is local to
   // this component and cleared on unmount.
   const [modelDraft, setModelDraft] = createSignal<string>(ctx.stores.settings.value.candidateModel ?? "")
   let modelCommit: ReturnType<typeof setTimeout> | undefined
   let committedModel = ctx.stores.settings.value.candidateModel ?? ""
-  onCleanup(() => clearTimeout(modelCommit))
+  onCleanup(() => {
+    clearTimeout(modelCommit)
+    modelEpoch++
+  })
   createEffect(() => {
     // Tracks ONLY the store: keystrokes update the draft signal, which this
     // effect never reads, so typing can never retrigger it mid-word. Only a
@@ -1606,6 +1633,66 @@ const MuninnSettings = (): JSX.Element => {
       setModelDraft(current)
     }
   })
+  // Live validation of the committed model ID: syntax is instant and local,
+  // existence resolves server-side against the backend's list (OpenRouter
+  // catalog, Zen/OpenAI list endpoints, known sets as fallback). Unknown-
+  // but-well-formed IDs warn, never block: judging fails open to heuristic.
+  interface ModelCheck {
+    status: "default" | "live" | "known" | "unverified" | "invalid" | "checking"
+    message?: string
+  }
+  const initialModelCheck = (): ModelCheck => {
+    const provider = selectedProvider()
+    const committed = (ctx.stores.settings.value.candidateModel ?? "").trim()
+    if (!committed) {
+      const canonical = defaultModelFor(provider)
+      return { status: "default", message: `Empty uses the provider default (${canonical}).` }
+    }
+    const syntax = validateModelSyntax(committed)
+    return syntax.ok ? { status: "checking" } : { status: "invalid", message: syntax.reason }
+  }
+  const [modelCheck, setModelCheck] = createSignal<ModelCheck>(initialModelCheck())
+  let modelEpoch = 0
+  createEffect(() => {
+    const provider = selectedProvider()
+    const committed = (ctx.stores.settings.value.candidateModel ?? "").trim()
+    if (!committed) {
+      modelEpoch++
+      const canonical = defaultModelFor(provider)
+      setModelCheck({ status: "default", message: `Empty uses the provider default (${canonical}).` })
+      return
+    }
+    const syntax = validateModelSyntax(committed)
+    if (!syntax.ok) {
+      modelEpoch++
+      setModelCheck({ status: "invalid", message: syntax.reason })
+      return
+    }
+    const epoch = ++modelEpoch
+    setModelCheck({ status: "checking" })
+    void ctx.client
+      .rpc(Muninn)
+      .resolveModel({ provider, model: committed })
+      .then((result) => {
+        if (epoch !== modelEpoch) return
+        setModelCheck({
+          status: result.status,
+          ...(result.message ? { message: result.message } : {}),
+        })
+      })
+      .catch(() => {
+        if (epoch !== modelEpoch) return
+        setModelCheck({
+          status: "unverified",
+          message: "Validation unreachable; judging will try it and fall back to heuristic on failure.",
+        })
+      })
+  })
+  const modelStatusLine = (): string => {
+    const check = modelCheck()
+    if (check.status === "checking") return ctx.t("settings.candidateModel.checking")
+    return check.message ?? ""
+  }
 
   return (
     <ui.SettingsLayout title={ctx.t("settings.title")} description={ctx.t("settings.description")}>
@@ -1632,18 +1719,31 @@ const MuninnSettings = (): JSX.Element => {
       </ui.SettingsSection>
       <ui.SettingsSection title={ctx.t("settings.section.merging")}>
         <ui.SettingsRow
+          id="decision-models-enabled"
+          title={ctx.t("settings.decisionModelsEnabled")}
+          description={ctx.t("settings.decisionModelsEnabled.description")}
+        >
+          <ui.Switch
+            checked={ctx.stores.settings.value.decisionModelsEnabled === true}
+            label={ctx.t("settings.decisionModelsEnabled")}
+            hideLabel
+            onChange={(checked) => ctx.stores.settings.update((draft) => { draft.decisionModelsEnabled = checked })}
+          />
+        </ui.SettingsRow>
+        <ui.SettingsRow
           id="candidate-provider"
           title={ctx.t("settings.candidateProvider")}
           description={ctx.t("settings.candidateProvider.description")}
         >
-          <ui.TextInput
-            value={providerDraft()}
+          <ui.Select
             label={ctx.t("settings.candidateProvider")}
-            onInput={(value) => {
-              setProviderDraft(value)
-              const v = value.trim().toLowerCase()
-              if (isDecisionBackend(v)) ctx.stores.settings.update((draft) => { draft.candidateProvider = v })
-            }}
+            options={[
+              { value: "zen", label: ctx.t("settings.candidateProvider.zen") },
+              { value: "openrouter", label: ctx.t("settings.candidateProvider.openrouter") },
+              { value: "openai", label: ctx.t("settings.candidateProvider.openai") },
+            ]}
+            value={selectedProvider()}
+            onChange={(value) => ctx.stores.settings.update((draft) => { draft.candidateProvider = value })}
           />
         </ui.SettingsRow>
         <ui.SettingsRow
@@ -1651,20 +1751,30 @@ const MuninnSettings = (): JSX.Element => {
           title={ctx.t("settings.candidateModel")}
           description={ctx.t("settings.candidateModel.description")}
         >
-          <ui.TextInput
-            value={modelDraft()}
-            label={ctx.t("settings.candidateModel")}
-            onInput={(value) => {
-              setModelDraft(value)
-              clearTimeout(modelCommit)
-              modelCommit = setTimeout(() => {
-                modelCommit = undefined
-                const v = value.trim()
-                committedModel = v
-                ctx.stores.settings.update((draft) => { draft.candidateModel = v || undefined })
-              }, 500)
-            }}
-          />
+          <div style={{ display: "flex", "flex-direction": "column", gap: "4px", "align-items": "flex-end" }}>
+            <ui.TextInput
+              value={modelDraft()}
+              label={ctx.t("settings.candidateModel")}
+              invalid={modelCheck().status === "invalid"}
+              onInput={(value) => {
+                setModelDraft(value)
+                clearTimeout(modelCommit)
+                modelCommit = setTimeout(() => {
+                  modelCommit = undefined
+                  const v = value.trim()
+                  committedModel = v
+                  ctx.stores.settings.update((draft) => { draft.candidateModel = v || undefined })
+                }, 500)
+              }}
+            />
+            <span
+              class="mn-note"
+              style={{ padding: "0 4px" }}
+              data-warn={modelCheck().status === "invalid" || modelCheck().status === "unverified" ? "" : undefined}
+            >
+              {modelStatusLine()}
+            </span>
+          </div>
         </ui.SettingsRow>
         <ui.SettingsRow
           id="wait-for-all-status-checks"

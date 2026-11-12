@@ -87,15 +87,20 @@ export const definition = Plugin.define({
         /** Fast-forward the clean local base checkout after a successful merge. */
         fastForwardBase: Schema.optional(Schema.Boolean),
         waitForAllStatusChecks: Schema.optional(Schema.Boolean),
-        /** Which candidate judge filters pill/sidebar. Heuristic is today's tier rules.
+        /** Toggle for the one-shot decision-model judge after hydration.
+         * Off keeps today's heuristic tier rules; on relaxes the listing guard
+         * and judges survivors semantically. Failures fall back to heuristic.
+         * Keys stay server-only. */
+        decisionModelsEnabled: Schema.optional(Schema.Boolean),
+        /** Which decision backend judges relevance when the toggle is on.
          * Decision backends are distinct from forge SourceProviders: they judge
          * relevance, never hydrate. Canonical list: DECISION_BACKENDS in
          * src/candidates/types.ts (Effect/zod cannot share one schema type). */
-        candidateProvider: Schema.optional(Schema.Literals(["heuristic", "zen", "openrouter", "openai"])),
+        candidateProvider: Schema.optional(Schema.Literals(["zen", "openrouter", "openai"])),
         /** Pinned model ID for the DecisionModel (zen/openrouter/openai only). */
         candidateModel: Schema.optional(Schema.String),
       }),
-      { retentionDays: 30, debugMode: true, mergeMethod: "squash", deleteBranch: true, fastForwardBase: false, waitForAllStatusChecks: true, candidateProvider: "heuristic" as const },
+      { retentionDays: 30, debugMode: true, mergeMethod: "squash", deleteBranch: true, fastForwardBase: false, waitForAllStatusChecks: true, decisionModelsEnabled: false, candidateProvider: "zen" as const },
     ),
     /** Pull requests Muninn is driving to merge ("merge when ready"): armed
      * locally, fired by Muninn's refresh cycle once checks and reviews are green. */
@@ -170,10 +175,16 @@ export const definition = Plugin.define({
       "settings.debug.description": "Show the diagnostics footer (build SHAs, pill state, hydration stats) at the bottom of the panel.",
       "settings.waitForAllStatusChecks": "Wait for all status checks",
       "settings.waitForAllStatusChecks.description": "Wait for all check-runs and commit status contexts on the current pull request head. Neutral and skipped check-runs count as complete.",
-      "settings.candidateProvider": "Candidate filter",
-      "settings.candidateProvider.description": "Heuristic is today's tier rules (default). Zen, OpenRouter, or OpenAI adds a one-shot decision-model judge after hydration; failures fall back to heuristic. Keys stay server-only.",
+      "settings.decisionModelsEnabled": "Decision models",
+      "settings.decisionModelsEnabled.description": "Judge survivors with a decision model after hydration. Off keeps heuristic rules; failures fall back.",
+      "settings.candidateProvider": "Decision backend",
+      "settings.candidateProvider.description": "Which backend judges relevance when decision models are on.",
+      "settings.candidateProvider.zen": "Zen",
+      "settings.candidateProvider.openrouter": "OpenRouter",
+      "settings.candidateProvider.openai": "OpenAI",
       "settings.candidateModel": "Candidate model",
-      "settings.candidateModel.description": "Pinned model ID for zen/openrouter/openai (e.g. jev-1.13, typesafe/jev-1.13, gpt-6-luna). Empty uses the provider default.",
+      "settings.candidateModel.description": "Pinned model ID (e.g. jev-1.13). Empty uses the provider default.",
+      "settings.candidateModel.checking": "Checking model…",
       "chain.pin": "Pin to pill",
       "chain.unpin": "Unpin from pill",
       "pill.pinned": "pinned",

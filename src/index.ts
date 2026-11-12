@@ -14,12 +14,20 @@ import { parseRemoteUrl, readRemote } from "./remote"
 import { Muninn } from "./rpc"
 import { fastForwardDecision, isCleanStatus, selectCanonicalRemote, selectDirectRemote, untrackedFilesArg } from "./local-cleanup"
 import { createCandidateCache } from "./candidates/cache"
+import { OPENAI_KNOWN_DECISION_MODELS, ZEN_KNOWN_DECISION_MODELS } from "./candidates/constants"
 import { createDecisionModel } from "./candidates/decision-model"
+import { capsKey } from "./candidates/model-caps"
+import { defaultModelFor, validateModelSyntax } from "./candidates/model-id"
 import type { JudgeInput } from "./candidates/types"
 import { execFile } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { promisify } from "node:util"
 import { coordinateMerge } from "./merge-coordinator"
+import { checkOpenRouterModel } from "./providers/openrouter"
+import { checkOpenAIModel, resolveOpenAIKey } from "./providers/openai"
+import type { CheckDecisionModel } from "./providers/types"
+import { checkZenModel, resolveZenKey } from "./providers/zen"
+import type { DecisionBackend } from "./candidates/types"
 
 const exec = promisify(execFile)
 const safeBranch = (branch: string): boolean => Boolean(branch) && !branch.startsWith("-") && !branch.includes("..")
@@ -201,6 +209,34 @@ const sources: readonly SourceProvider[] = [github]
 const sourceFor = (host: string | undefined): SourceProvider | undefined =>
   sources.find((source) => host !== undefined && source.hosts.includes(host))
 
+/** Uniform live check per decision backend. Canonical list: DECISION_BACKENDS. */
+const decisionModelChecks: Record<DecisionBackend, CheckDecisionModel> = {
+  zen: checkZenModel,
+  openrouter: checkOpenRouterModel,
+  openai: checkOpenAIModel,
+}
+
+/** Known decision models per backend, for when a list is unreachable. */
+const knownDecisionModels: Record<DecisionBackend, readonly string[]> = {
+  zen: ZEN_KNOWN_DECISION_MODELS,
+  openrouter: [],
+  openai: OPENAI_KNOWN_DECISION_MODELS,
+}
+
+/** Whether a reachable list miss means the ID is wrong. Zen's public
+ * list is chat-only, so a miss there proves nothing. */
+const authoritativeModelLists: Record<DecisionBackend, boolean> = {
+  zen: false,
+  openrouter: true,
+  openai: true,
+}
+
+const decisionBackendLabels: Record<DecisionBackend, string> = {
+  zen: "Zen",
+  openrouter: "OpenRouter",
+  openai: "OpenAI",
+}
+
 export default Plugin.define({
   id: "muninn",
   async setup(ctx) {
@@ -322,6 +358,72 @@ export default Plugin.define({
         })
         const verdicts = await model.judge(candidates)
         return { verdicts: verdicts.map((v) => jsonReady(v)) }
+      },
+      resolveModel: async (input) => {
+        const raw = (input.model ?? "").trim()
+        if (!raw) {
+          const canonical = defaultModelFor(input.provider)
+          return { status: "default" as const, canonical, message: `Empty uses the provider default (${canonical}).` }
+        }
+        const syntax = validateModelSyntax(raw)
+        if (!syntax.ok) return { status: "invalid" as const, message: syntax.reason }
+        const label = decisionBackendLabels[input.provider]
+        const key =
+          input.provider === "zen"
+            ? resolveZenKey({ zenApiKey: options.zenApiKey, apiKey: options.apiKey })
+            : input.provider === "openai"
+              ? resolveOpenAIKey({ openaiApiKey: options.openaiApiKey })
+              : undefined
+        const controller = new AbortController()
+        const timer = setTimeout(() => controller.abort(), 8_000)
+        try {
+          const result = await decisionModelChecks[input.provider](key, raw, fetch, controller.signal)
+          if (result.outcome === "found") {
+            if (result.contextLength !== undefined)
+              capsCache.set(capsKey(input.provider, raw), {
+                caps: { contextLength: result.contextLength, build: result.canonical, resolvedAt: Date.now(), source: "live" },
+                at: Date.now(),
+              })
+            return {
+              status: "live" as const,
+              canonical: result.canonical,
+              ...(result.contextLength !== undefined ? { contextLength: result.contextLength } : {}),
+              message:
+                result.contextLength !== undefined
+                  ? `Resolves to ${result.canonical} · ${result.contextLength.toLocaleString("en-US")} tokens context.`
+                  : `${result.canonical} is served by ${label}.`,
+            }
+          }
+          if (result.outcome === "not-found") {
+            if ((knownDecisionModels[input.provider] as readonly string[]).includes(raw))
+              return { status: "known" as const, canonical: raw, message: `${raw} is a known ${label} decision model.` }
+            if (authoritativeModelLists[input.provider])
+              return {
+                status: "invalid" as const,
+                message: input.provider === "openrouter" ? "Not in the OpenRouter decisions catalog." : `Not in your ${label} model list.`,
+              }
+            return {
+              status: "unverified" as const,
+              canonical: raw,
+              message: `Not in the visible ${label} list; judging will try it and fall back to heuristic on failure.`,
+            }
+          }
+          if ((knownDecisionModels[input.provider] as readonly string[]).includes(raw))
+            return { status: "known" as const, canonical: raw, message: `${raw} is a known ${label} decision model.` }
+          return {
+            status: "unverified" as const,
+            canonical: raw,
+            message: `${label} list unreachable; judging will try it and fall back to heuristic on failure.`,
+          }
+        } catch {
+          return {
+            status: "unverified" as const,
+            canonical: raw,
+            message: "Validation failed; judging will try it and fall back to heuristic on failure.",
+          }
+        } finally {
+          clearTimeout(timer)
+        }
       },
     })
   },
