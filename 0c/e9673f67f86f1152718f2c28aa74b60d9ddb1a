@@ -1,0 +1,14 @@
+AGENTS.md
+  h_ea91e2db23540f 34
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0ce9673f67f86f1152718f2c28aa74b60d9ddb1a",
+  "prompts": {},
+  "humans": {
+    "h_ea91e2db23540f": {
+      "author": "Emre Şafak <3928300+esafak@users.noreply.github.com>"
+    }
+  }
+}
