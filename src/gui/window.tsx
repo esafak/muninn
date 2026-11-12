@@ -1509,10 +1509,18 @@ const MuninnSettings = (): JSX.Element => {
   // this component and cleared on unmount.
   const [modelDraft, setModelDraft] = createSignal<string>(ctx.stores.settings.value.candidateModel ?? "")
   let modelCommit: ReturnType<typeof setTimeout> | undefined
+  let committedModel = ctx.stores.settings.value.candidateModel ?? ""
   onCleanup(() => clearTimeout(modelCommit))
   createEffect(() => {
+    // Tracks ONLY the store: keystrokes update the draft signal, which this
+    // effect never reads, so typing can never retrigger it mid-word. Only a
+    // genuine external write (another window) diverges from the last commit
+    // and gets adopted.
     const current = ctx.stores.settings.value.candidateModel ?? ""
-    if (modelCommit === undefined && current !== modelDraft()) setModelDraft(current)
+    if (current !== committedModel) {
+      committedModel = current
+      setModelDraft(current)
+    }
   })
 
   return (
@@ -1568,6 +1576,7 @@ const MuninnSettings = (): JSX.Element => {
               modelCommit = setTimeout(() => {
                 modelCommit = undefined
                 const v = value.trim()
+                committedModel = v
                 ctx.stores.settings.update((draft) => { draft.candidateModel = v || undefined })
               }, 500)
             }}
