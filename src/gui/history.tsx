@@ -2,7 +2,7 @@ import { For, Match, Show, Switch, createSignal } from "solid-js"
 import type { Accessor, JSX } from "solid-js"
 import { usePlugin } from "@opencode/plugin/gui"
 import type { Chain, PullEntity, RepoRef, RunEntity, RunStatus } from "../model"
-import { chainTone, mergeReady, mergeWhy, prConflicted } from "../model"
+import { chainTone, mergeFailed, mergeReady, mergeWhy, prConflicted } from "../model"
 import type { definition } from "./definition"
 import { Mark } from "./marks"
 import { CancelledGlyph, CheckGlyph, CrossGlyph, IssueGlyph, MergeGlyph, MergedGlyph, PinGlyph, PullConflictGlyph, PullGlyph, QueuedGlyph, UnknownGlyph } from "./icons"
@@ -39,9 +39,12 @@ export interface HistoryProps {
 
 /**
  * The PR action button, shared by the sidebar and the pill's dropdown — GitHub's
- * three states: green "Merge" when it can merge now; amber "Merge when ready"
- * arming auto-merge when something blocks it; an amber "Armed" cancelling it when
- * auto-merge is on. Nothing renders for merged/closed PRs.
+ * states: green "Merge" when it can merge now; red disabled "Merge when ready"
+ * when checks failed, changes were requested, or the branch conflicts/is
+ * blocked (fix it first — it can't be armed); amber "Merge when ready" while
+ * something is still running or unavailable; a state-tinted "Merging when ready"
+ * once watched (green = merging next check, red = blocked, amber = still
+ * waiting — click stops it). Nothing renders for merged/closed PRs.
  */
 export const MergeButton = (props: {
   chain: Chain
@@ -54,21 +57,27 @@ export const MergeButton = (props: {
   <Show when={props.pull.state === "open"}>
     <Switch>
       <Match when={props.isArmed(props.pull)}>
-        <button
-          class="mn-merge armed"
-          title={
-            props.pull.autoMerge
-              ? `armed here and on the forge (${props.pull.autoMerge}) — Muninn merges once checks pass and merge requirements are satisfied. Click to cancel.`
-              : "Muninn is watching — it merges once checks pass and merge requirements are satisfied. Click to cancel."
-          }
-          onClick={(event) => {
-            event.stopPropagation()
-            void props.onArm(props.pull, false)
-          }}
-        >
-          <span class="mn-spin" />
-          Armed
-        </button>
+        {(() => {
+          const ready = mergeReady(props.chain, props.pull, props.waitForAllStatusChecks())
+          const failed = !ready && mergeFailed(props.chain, props.pull, props.waitForAllStatusChecks())
+          const state = ready
+            ? "ready — merging on the next check (within ~30s)"
+            : `${mergeWhy(props.chain, props.pull, props.waitForAllStatusChecks())} — will merge when green`
+          const forge = props.pull.autoMerge ? ` (also on the forge as ${props.pull.autoMerge})` : ""
+          return (
+            <button
+              class={`mn-merge armed${ready ? " ready" : ""}${failed ? " failed" : ""}`}
+              title={`Merging when ready${forge}: ${state}. Click to stop.`}
+              onClick={(event) => {
+                event.stopPropagation()
+                void props.onArm(props.pull, false)
+              }}
+            >
+              <span class="mn-spin" />
+              Merging when ready
+            </button>
+          )
+        })()}
       </Match>
       <Match when={mergeReady(props.chain, props.pull, props.waitForAllStatusChecks())}>
         <button
@@ -80,6 +89,16 @@ export const MergeButton = (props: {
           }}
         >
           Merge
+        </button>
+      </Match>
+      <Match when={props.pull.state === "open" && mergeFailed(props.chain, props.pull, props.waitForAllStatusChecks())}>
+        <button
+          class="mn-merge failed"
+          disabled
+          title={`${mergeWhy(props.chain, props.pull, props.waitForAllStatusChecks())} — fix this before it can merge`}
+          onClick={(event) => event.stopPropagation()}
+        >
+          Merge when ready
         </button>
       </Match>
       <Match when={props.pull.state === "open"}>
