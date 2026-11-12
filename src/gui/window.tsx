@@ -671,7 +671,10 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
   // One eligibility policy, one memo, three consumers (`show`, `menu`,
   // `debugLine`) — the same values everywhere, with no per-consumer filter for
   // the footer's census to drift away from (the failure mode the old
-  // `live()`-counts-vs-`pillChains()`-pick split already produced). State-driven
+  // `live()`-counts-vs-`pillChains()`-pick split already produced). The menu
+  // alone takes one explicit-pin exception (see `menuChains`): a pinned chain
+  // outside `eligible` still gets a row, so the popover never omits the pill's
+  // pick. State-driven
   // via `pillEligible`: the session's own PR (still shown after it merges — the
   // pill is the session's work, and a newer PR outranks it through `pillPick`),
   // CI needing attention, an armed merge pending. Mentions of other branches'
@@ -732,8 +735,16 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       else delete current.owner
     })
   }
+  // The menu's rows: the eligible chains, with the picked pin prepended when
+  // it isn't eligible — otherwise a pin-only pill would open an empty popover.
+  // (Reference equality holds: both are drawn from the same `chains()` array.)
   // The menu's merge-when-ready toggle binds to the first open PR across
   // eligible chains (pinned first when it has one open). Reactive.
+  const menuChains = createMemo(() => {
+    const { eligible, picked } = pillState()
+    if (picked?.reason === "pinned" && !eligible.includes(picked.chain)) return [picked.chain, ...eligible]
+    return eligible
+  })
   const menuLead = createMemo(() => {
     const pinned = pillState().picked?.reason === "pinned" ? pillState().picked!.chain : undefined
     const pinnedOpen = pinned?.prs.filter((pull) => pull.state === "open").map((pull) => ({ chain: pinned, pull }))[0]
@@ -1352,7 +1363,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       // toggle binds to it. Reactive — the popover updates while it's open.
       return (
       <div class="mn-pop">
-        <For each={pillState().eligible.slice(0, 3)}>
+        <For each={menuChains().slice(0, 3)}>
           {(chain) => (
             <div class="mn-pop-chain" data-tone={chainTone(chain, waitForAllStatusChecks())}>
               <For each={chain.prs}>
