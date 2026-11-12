@@ -92,15 +92,15 @@ export const definition = Plugin.define({
          * and judges survivors semantically. Failures fall back to heuristic.
          * Keys stay server-only. */
         decisionModelsEnabled: Schema.optional(Schema.Boolean),
-        /** Which decision backend judges relevance when the toggle is on.
-         * Decision backends are distinct from forge SourceProviders: they judge
-         * relevance, never hydrate. Canonical list: DECISION_BACKENDS in
-         * src/candidates/types.ts (Effect/zod cannot share one schema type). */
-        candidateProvider: Schema.optional(Schema.Literals(["zen", "openrouter", "openai"])),
-        /** Pinned model ID for the DecisionModel (zen/openrouter/openai only). */
+        /** Which OpenCode provider judges relevance when the toggle is on.
+         * A Model.Ref providerID (openai ChatGPT sub, openrouter, opencode
+         * Console/Go, google) — auth is the user's connected account, the
+         * plugin holds no keys. No legacy values: hard transition. */
+        candidateProviderID: Schema.optional(Schema.String),
+        /** Pinned model ID for the judge (per-provider default when blank). */
         candidateModel: Schema.optional(Schema.String),
       }),
-      { retentionDays: 30, debugMode: true, mergeMethod: "squash", deleteBranch: true, fastForwardBase: false, waitForAllStatusChecks: true, decisionModelsEnabled: false, candidateProvider: "zen" as const },
+      { retentionDays: 30, debugMode: true, mergeMethod: "squash", deleteBranch: true, fastForwardBase: false, waitForAllStatusChecks: true, decisionModelsEnabled: false, candidateProviderID: "opencode" as const },
     ),
     /** Pull requests Muninn is driving to merge ("merge when ready"): armed
      * locally, fired by Muninn's refresh cycle once checks and reviews are green. */
@@ -184,13 +184,15 @@ export const definition = Plugin.define({
       "settings.section.decisionModels": "Decision models",
       "settings.decisionModelsEnabled": "Decision models",
       "settings.decisionModelsEnabled.description": "Judge survivors with a decision model after hydration. Off keeps heuristic rules; failures fall back.",
-      "settings.candidateProvider": "Decision backend",
-      "settings.candidateProvider.description": "Which backend judges relevance when decision models are on.",
-      "settings.candidateProvider.zen": "Zen",
-      "settings.candidateProvider.openrouter": "OpenRouter",
-      "settings.candidateProvider.openai": "OpenAI",
+      "settings.candidateProviderID": "Decision provider",
+      "settings.candidateProviderID.description": "Which connected OpenCode provider judges relevance when decision models are on.",
+      "settings.candidateProviderID.opencode": "Console",
+      "settings.candidateProviderID.openrouter": "OpenRouter",
+      "settings.candidateProviderID.openai": "OpenAI",
+      "settings.candidateProviderID.google": "Google",
+      "settings.candidateProviderID.__custom": "Custom…",
       "settings.candidateModel": "Candidate model",
-      "settings.candidateModel.description": "Pinned model ID (e.g. jev-1.13). Empty uses the provider default.",
+      "settings.candidateModel.description": "Pinned model ID (e.g. jev-1.13, gemini-decision-1). Empty uses the provider default.",
       "settings.candidateModel.checking": "Checking model…",
       "chain.pin": "Pin to pill",
       "chain.unpin": "Unpin from pill",

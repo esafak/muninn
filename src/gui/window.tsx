@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, onCleanup, untrack, For, Show } from "solid-js"
+import { createEffect, createMemo, createResource, createSignal, onCleanup, untrack, For, Show } from "solid-js"
 import type { JSX } from "solid-js"
 import { createStore } from "solid-js/store"
 import { ComposerPill, MenuItem, Panel, SettingsPage, createKeyed, usePlugin, type IconName, type Plugin } from "@opencode/plugin/gui"
@@ -7,8 +7,9 @@ import { messageBuckets, wireRefs } from "../extract"
 import type { TieredRef } from "../extract"
 import { heuristicExtract } from "../candidates/heuristic"
 import { bareKindKept, bareSurvives } from "../candidates/filtering"
-import { defaultModelFor, validateModelSyntax } from "../candidates/model-id"
-import { isDecisionBackend } from "../candidates/types"
+import { defaultModelForProvider, decisionProviderIds, decisionProviderLabel } from "../providers/decision-catalog"
+import { CUSTOM_PROVIDER, mergeProviderOptions, resolveCustomCommit } from "./provider-options"
+import { validateModelSyntax } from "../candidates/model-id"
 import type { ArmedEntry, Chain, Entity, Pin, PullEntity, RepoRef, RunEntity, RunStatus } from "../model"
 import { chainTone, armedTargets, staleHeadRetryEligible, staleHeadEvidenceUsable, sessionAttemptCurrent, targetRefreshConfirmed, pillPick, pillEligible, pinnedChain, pinForChain, isFreshBaseSession, mergeReady, mergeWhy, pendingReviewNotice, latestRun, pullForRun, prConflicted, refKey, repoKey, entityKey, menuChains } from "../model"
 import { githubLexicon } from "../providers/github/lexicon"
@@ -133,9 +134,12 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
 
   /** Toggle for the one-shot decision-model judge; off keeps heuristic tier rules. */
   const decisionModelsEnabled = () => ctx.stores.settings.value.decisionModelsEnabled === true
-  const candidateProvider = () => {
-    const stored = ctx.stores.settings.value.candidateProvider as string | undefined
-    return isDecisionBackend(stored ?? "") ? stored as "zen" | "openrouter" | "openai" : "zen"
+  /** Model.Ref providerID: the stored value verbatim (or the default when
+   * blank). Unknown IDs are never coerced here — they flow to resolveModel's
+   * footer warning and fail-open judging. */
+  const candidateProviderID = () => {
+    const stored = ctx.stores.settings.value.candidateProviderID as string | undefined
+    return stored?.trim() || "opencode"
   }
   const candidateModel = () => ctx.stores.settings.value.candidateModel
 
@@ -157,7 +161,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
   interface JudgeVerdicts {
     sessionID: string
     directory: string
-    provider: string
+    providerID: string
     model?: string
     kept: Map<string, boolean>
   }
@@ -175,7 +179,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
   // would make every committed judgment immediately wipe itself.
   createEffect(() => {
     decisionModelsEnabled()
-    candidateProvider()
+    candidateProviderID()
     candidateModel()
     untrack(() => {
       setVerdicts(undefined)
@@ -189,7 +193,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     const current = session()
     if (!v || !current || v.sessionID !== current.id || v.directory !== current.directory) return undefined
     if (!decisionModelsEnabled()) return undefined
-    if (v.provider !== candidateProvider()) return undefined
+    if (v.providerID !== candidateProviderID()) return undefined
     if ((v.model ?? undefined) !== (candidateModel() ?? undefined)) return undefined
     return v.kept
   }
@@ -328,13 +332,13 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     epoch: number,
   ): Promise<void> => {
     if (!decisionModelsEnabled() || foundRefs.length === 0) return
-    const provider = candidateProvider()
+    const providerID = candidateProviderID()
     if (epoch !== judgeEpoch) return
     const judgedModel = candidateModel()
     const fresh = (): boolean => {
       const live = session()
       return epoch === judgeEpoch && !!live && live.id === sessionID && live.directory === directory &&
-        decisionModelsEnabled() && candidateProvider() === provider && (candidateModel() ?? undefined) === (judgedModel ?? undefined)
+        decisionModelsEnabled() && candidateProviderID() === providerID && (candidateModel() ?? undefined) === (judgedModel ?? undefined)
     }
     try {
       // Validate like hydration: invalid numbers drop out instead of wedging
@@ -374,13 +378,13 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       }).slice(0, 64)
       const judged = await ctx.client
         .rpc(Muninn)
-        .judge({ directory, provider, ...(judgedModel ? { model: judgedModel } : {}), candidates })
+        .judge({ directory, providerID, ...(judgedModel ? { model: judgedModel } : {}), candidates })
         .catch(() => undefined)
       // Commit or clear under the same freshness guard: a stale success must
       // not overwrite newer verdicts, and a failure must not retain stale drops.
       if (!fresh()) return
       if (judged)
-        setVerdicts({ sessionID, directory, provider, ...(judgedModel ? { model: judgedModel } : {}), kept: new Map(judged.verdicts.map((v) => [v.key, v.keep])) })
+        setVerdicts({ sessionID, directory, providerID, ...(judgedModel ? { model: judgedModel } : {}), kept: new Map(judged.verdicts.map((v) => [v.key, v.keep])) })
       else setVerdicts(undefined)
     } catch {
       if (fresh()) setVerdicts(undefined)
@@ -575,10 +579,10 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
   createEffect(() => {
     const found = refs()
     const enabled = decisionModelsEnabled()
-    const provider = candidateProvider()
+    const providerID = candidateProviderID()
     const model = candidateModel()
     void enabled
-    void provider
+    void providerID
     void model
     const isFresh = fresh()
     const hadTimer = timer !== undefined
@@ -1604,16 +1608,16 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
           keywords: "decision model judge filter candidate heuristic semantic",
         },
         {
-          id: "candidate-provider",
-          title: ctx.t("settings.candidateProvider"),
-          description: ctx.t("settings.candidateProvider.description"),
-          keywords: "decision backend provider zen openrouter openai judge",
+          id: "candidate-provider-id",
+          title: ctx.t("settings.candidateProviderID"),
+          description: ctx.t("settings.candidateProviderID.description"),
+          keywords: "decision model provider openai openrouter console google judge",
         },
         {
           id: "candidate-model",
           title: ctx.t("settings.candidateModel"),
           description: ctx.t("settings.candidateModel.description"),
-          keywords: "decision model id pinned jev luna validate",
+          keywords: "decision model id pinned jev luna gemini validate",
         },
       ]
     },
@@ -1625,25 +1629,61 @@ const MuninnSettings = (): JSX.Element => {
   const ctx = usePlugin<typeof definition>()
   const ui = ctx.ui
   const days = () => Math.max(1, Math.round(ctx.stores.settings.value.retentionDays))
-  // Backend is a Select, so only complete valid backends ever persist — no
-  // draft needed. Legacy "heuristic" stored values fall back to "zen": the
-  // toggle (not the provider name) now decides whether the judge runs.
-  const selectedProvider = (): "zen" | "openrouter" | "openai" => {
-    const stored = ctx.stores.settings.value.candidateProvider as string | undefined
-    return isDecisionBackend(stored ?? "") ? (stored as "zen" | "openrouter" | "openai") : "zen"
+  // Provider is a Select over the registry catalog plus live discovery, so
+  // only complete valid providers ever persist — no draft needed. Unknown
+  // stored values are preserved through the custom entry (hard transition
+  // only dropped the legacy `candidateProvider` key, never new-key values).
+  const [connectedProviders] = createResource(async () => {
+    try {
+      const out = await ctx.client.model.list({ types: ["decision"] }).catch(() => undefined)
+      if (!out) return { ids: [] as string[], ok: false }
+      return { ids: [...new Set(out.data.map((m) => m.providerID))], ok: true }
+    } catch {
+      return { ids: [] as string[], ok: false }
+    }
+  })
+  const providerLabel = (id: string): string =>
+    id === CUSTOM_PROVIDER
+      ? ctx.t("settings.candidateProviderID.__custom")
+      : decisionProviderIds().includes(id)
+        ? ctx.t(`settings.candidateProviderID.${id}`)
+        : decisionProviderLabel(id)
+  const [customForced, setCustomForced] = createSignal(false)
+  const picker = () =>
+    mergeProviderOptions({
+      catalogIds: decisionProviderIds(),
+      discoveredIds: connectedProviders()?.ids ?? [],
+      stored: (ctx.stores.settings.value.candidateProviderID ?? "").trim(),
+      fallback: "opencode",
+      labels: providerLabel,
+    })
+  const selectedProviderID = (): string => {
+    const merged = picker()
+    return customForced() ? CUSTOM_PROVIDER : merged.selectValue
   }
+  const showCustomInput = (): boolean => customForced() || picker().showCustomInput
+  /** Raw provider for validation: the stored value verbatim, defaulted only
+   * when blank. Never the "__custom" Select placeholder. */
+  const validatedProviderID = (): string => (ctx.stores.settings.value.candidateProviderID ?? "").trim() || "opencode"
   // Model IDs are free text: commit trailing-edge debounced so typing never
   // wipes verdicts or re-arms the judge per keystroke. The timer is local to
   // this component and cleared on unmount.
   const [modelDraft, setModelDraft] = createSignal<string>(ctx.stores.settings.value.candidateModel ?? "")
   let modelCommit: ReturnType<typeof setTimeout> | undefined
   let committedModel = ctx.stores.settings.value.candidateModel ?? ""
+  // Same debounce for the custom provider-ID input.
+  const [customDraft, setCustomDraft] = createSignal<string>(
+    (ctx.stores.settings.value.candidateProviderID ?? "").trim(),
+  )
+  let customCommit: ReturnType<typeof setTimeout> | undefined
+  let committedCustom = (ctx.stores.settings.value.candidateProviderID ?? "").trim()
   onCleanup(() => {
     clearTimeout(modelCommit)
+    clearTimeout(customCommit)
     modelEpoch++
   })
   createEffect(() => {
-    // Tracks ONLY the store: keystrokes update the draft signal, which this
+    // Tracks ONLY the store: keystrokes update the draft signals, which this
     // effect never reads, so typing can never retrigger it mid-word. Only a
     // genuine external write (another window) diverges from the last commit
     // and gets adopted.
@@ -1652,34 +1692,46 @@ const MuninnSettings = (): JSX.Element => {
       committedModel = current
       setModelDraft(current)
     }
+    const currentProvider = (ctx.stores.settings.value.candidateProviderID ?? "").trim()
+    if (currentProvider !== committedCustom) {
+      committedCustom = currentProvider
+      setCustomDraft(currentProvider)
+      // An external write wins over a pending keystroke commit: cancel it
+      // and reconcile custom mode with the adopted value.
+      clearTimeout(customCommit)
+      customCommit = undefined
+      setCustomForced(false)
+    }
   })
   // Live validation of the committed model ID: syntax is instant and local,
-  // existence resolves server-side against the backend's list (OpenRouter
-  // catalog, Zen/OpenAI list endpoints, known sets as fallback). Unknown-
-  // but-well-formed IDs warn, never block: judging fails open to heuristic.
+  // existence resolves server-side against OpenCode's registry for the
+  // selected provider (listing + decision capability + known sets).
+  // Unknown-but-well-formed IDs warn, never block: judging fails open.
   interface ModelCheck {
     status: "default" | "live" | "known" | "unverified" | "invalid" | "checking"
     message?: string
   }
+  const blankNote = (providerID: string): { status: ModelCheck["status"]; message: string } => {
+    const canonical = defaultModelForProvider(providerID)
+    return canonical
+      ? { status: "default", message: `Empty uses the provider default (${canonical}).` }
+      : { status: "unverified", message: "No default for this provider — enter a model." }
+  }
   const initialModelCheck = (): ModelCheck => {
-    const provider = selectedProvider()
+    const providerID = validatedProviderID()
     const committed = (ctx.stores.settings.value.candidateModel ?? "").trim()
-    if (!committed) {
-      const canonical = defaultModelFor(provider)
-      return { status: "default", message: `Empty uses the provider default (${canonical}).` }
-    }
+    if (!committed) return blankNote(providerID)
     const syntax = validateModelSyntax(committed)
     return syntax.ok ? { status: "checking" } : { status: "invalid", message: syntax.reason }
   }
   const [modelCheck, setModelCheck] = createSignal<ModelCheck>(initialModelCheck())
   let modelEpoch = 0
   createEffect(() => {
-    const provider = selectedProvider()
+    const providerID = validatedProviderID()
     const committed = (ctx.stores.settings.value.candidateModel ?? "").trim()
     if (!committed) {
       modelEpoch++
-      const canonical = defaultModelFor(provider)
-      setModelCheck({ status: "default", message: `Empty uses the provider default (${canonical}).` })
+      setModelCheck(blankNote(providerID))
       return
     }
     const syntax = validateModelSyntax(committed)
@@ -1692,7 +1744,7 @@ const MuninnSettings = (): JSX.Element => {
     setModelCheck({ status: "checking" })
     void ctx.client
       .rpc(Muninn)
-      .resolveModel({ provider, model: committed })
+      .resolveModel({ providerID, model: committed })
       .then((result) => {
         if (epoch !== modelEpoch) return
         setModelCheck({
@@ -1808,20 +1860,63 @@ const MuninnSettings = (): JSX.Element => {
           />
         </ui.SettingsRow>
         <ui.SettingsRow
-          id="candidate-provider"
-          title={ctx.t("settings.candidateProvider")}
-          description={ctx.t("settings.candidateProvider.description")}
+          id="candidate-provider-id"
+          title={ctx.t("settings.candidateProviderID")}
+          description={ctx.t("settings.candidateProviderID.description")}
         >
-          <ui.Select
-            label={ctx.t("settings.candidateProvider")}
-            options={[
-              { value: "zen", label: ctx.t("settings.candidateProvider.zen") },
-              { value: "openrouter", label: ctx.t("settings.candidateProvider.openrouter") },
-              { value: "openai", label: ctx.t("settings.candidateProvider.openai") },
-            ]}
-            value={selectedProvider()}
-            onChange={(value) => ctx.stores.settings.update((draft) => { draft.candidateProvider = value })}
-          />
+          <div style={{ display: "flex", "flex-direction": "column", gap: "4px", "align-items": "flex-end" }}>
+            <ui.Select
+              label={ctx.t("settings.candidateProviderID")}
+              options={picker().options}
+              value={selectedProviderID()}
+              onChange={(value) => {
+                if (value === CUSTOM_PROVIDER) {
+                  setCustomForced(true)
+                  return
+                }
+                // A newer selection cancels any pending custom commit.
+                clearTimeout(customCommit)
+                customCommit = undefined
+                const knownIds = picker()
+                  .options.filter((o) => o.value !== CUSTOM_PROVIDER)
+                  .map((o) => o.value)
+                const applied = resolveCustomCommit(value, knownIds)
+                committedCustom = applied.store ?? ""
+                setCustomDraft(applied.store ?? "")
+                setCustomForced(applied.forced)
+                ctx.stores.settings.update((draft) => { draft.candidateProviderID = applied.store })
+              }}
+            />
+            <Show when={connectedProviders.loading}>
+              <span class="mn-note" style={{ padding: "0 4px" }}>Checking connected providers…</span>
+            </Show>
+            <Show when={!connectedProviders.loading && connectedProviders()?.ok === false}>
+              <span class="mn-note" style={{ padding: "0 4px" }} data-warn="">
+                Couldn't reach connected providers; showing known providers.
+              </span>
+            </Show>
+            <Show when={showCustomInput()}>
+              <ui.TextInput
+                value={customDraft()}
+                label={ctx.t("settings.candidateProviderID")}
+                onInput={(value) => {
+                  setCustomDraft(value)
+                  clearTimeout(customCommit)
+                  customCommit = setTimeout(() => {
+                    customCommit = undefined
+                    const knownIds = picker()
+                      .options.filter((o) => o.value !== CUSTOM_PROVIDER)
+                      .map((o) => o.value)
+                    const applied = resolveCustomCommit(value, knownIds)
+                    committedCustom = applied.store ?? ""
+                    setCustomDraft(applied.store ?? "")
+                    setCustomForced(applied.forced)
+                    ctx.stores.settings.update((draft) => { draft.candidateProviderID = applied.store })
+                  }, 500)
+                }}
+              />
+            </Show>
+          </div>
         </ui.SettingsRow>
         <ui.SettingsRow
           id="candidate-model"
