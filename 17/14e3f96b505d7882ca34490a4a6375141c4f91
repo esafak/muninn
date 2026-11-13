@@ -1,0 +1,18 @@
+src/associate.test.ts
+  h_ea91e2db23540f 104,110-111,113
+src/model.test.ts
+  h_ea91e2db23540f 3,593,602,604-605,630-664,670,703,705-707,713-714,717,724,726,748,751-767
+src/model.ts
+  h_ea91e2db23540f 270-282,290,307-310,312-313,409-450
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1714e3f96b505d7882ca34490a4a6375141c4f91",
+  "prompts": {},
+  "humans": {
+    "h_ea91e2db23540f": {
+      "author": "Emre Şafak <3928300+esafak@users.noreply.github.com>"
+    }
+  }
+}
