@@ -1703,8 +1703,8 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
             </div>
           }
         >
-          <Show when={pillState().picks[0]}>
-            {(entry) => pillMenuFor(entry().chain, input)}
+        <Show when={pillState().picks[0]} keyed>
+            {(entry) => pillMenuFor(entry.chain, input)}
           </Show>
         </Show>
       </Show>
