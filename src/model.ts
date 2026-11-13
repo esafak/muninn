@@ -267,18 +267,19 @@ export const pendingReviewNotice = (pull: PullEntity): string | undefined =>
   pull.reviewState === "pending" ? "reviews are pending (no approval on record)" : undefined
 
 /** Pill eligibility — what deserves the composer's highest-commitment surface.
- * Eligible: the session's own work (a PR from the session's repository on the
- * session's branch — repo-scoped, since a foreign PR can share a branch name;
- * or a PR whose head SHA equals the session checkout's HEAD — a push from any
- * local branch name counts as own work). Own work remains eligible after merging
- * while either ownership match holds; SHA-only ownership lapses if local HEAD
- * advances beyond the PR head. `pillPick` ranks the eligible chains.
- * Also eligible is anything needing attention now: CI queued/running/failed on current heads
- * (status-derived, so a discovered failure pills with no mention at all) and
- * an armed PR pending merge, matched by repository and number. Everything else
- * is sidebar material: other branches' PRs (mention is not intent — see the
- * PR #5 recruiting incident), issue-only chains, closed-without-merge work,
- * settled run-only chains. */
+ * Only the session's own work pills, one pill per chain (pinned first, capped
+ * for display): a PR from the session's repository on the session's branch —
+ * repo-scoped, since a foreign PR can share a branch name; or a PR whose head
+ * SHA equals the session checkout's HEAD — a push from any local branch name
+ * counts as own work. `created` is the sticky memory of PRs this session
+ * previously owned (branch/SHA matched at creation time): sequential
+ * multi-PR sessions keep every created PR pilled after switching branches,
+ * while either ownership match holds for live work. Own work remains eligible
+ * after merging while it is not closed; SHA-only ownership lapses if local
+ * HEAD advances beyond the PR head. `pillPick` ranks the eligible chains.
+ * Everything else is sidebar material: other branches' PRs (mention is not
+ * intent — see the PR #5 recruiting incident), issue-only chains,
+ * closed-without-merge work, settled run-only chains. */
 export const pillEligible = (
   chain: Chain,
   ctx: {
@@ -286,6 +287,7 @@ export const pillEligible = (
     sessionRepo?: RepoRef
     sessionHeadSha?: string
     armed?: readonly { repo: RepoRef; number: number }[]
+    created?: ReadonlySet<string>
   } = {},
 ): boolean => {
   // The session's own work: repository-scoped, since a foreign PR can share a
@@ -302,25 +304,13 @@ export const pillEligible = (
     )
   )
     return true
-  // CI needing attention, scoped to current work: runs on open/draft PR heads,
-  // or any run when the chain has no PRs (a discovered failure pills with no
-  // mention at all). Stale runs — earlier heads, merged/closed PRs — are
-  // history, not attention.
-  const current = chain.prs.length === 0
-    ? latestRuns(chain.runs)
-    : chain.prs
-        .filter((pull) => pull.state === "open" || pull.state === "draft")
-        .flatMap((pull) => currentRunsForPull(chain, pull))
-  if (current.some((run) => run.status === "queued" || run.status === "running" || run.status === "failed"))
-    return true
-  const armed = ctx.armed ?? []
+  // Sticky session-created memory: a PR this session previously owned stays
+  // eligible after the checkout moves on to the next PR's branch. Closed
+  // work still drops out; keys are repo-scoped entity keys, so a foreign
+  // PR can never ride along.
   if (
-    armed.length > 0 &&
-    chain.prs.some(
-      (pull) =>
-        pull.state === "open" &&
-        armed.some((entry) => entry.number === pull.number && repoKey(entry.repo) === repoKey(pull.repo)),
-    )
+    ctx.created !== undefined &&
+    chain.prs.some((pull) => pull.state !== "closed" && ctx.created!.has(entityKey(pull)))
   )
     return true
   return false
@@ -414,6 +404,48 @@ export const pillPick = (
   const runChains = chains.filter((chain) => chain.runs.length > 0).toSorted(byNewest)
   if (runChains[0]) return { chain: runChains[0], reason: "runs-only", considered: runChains.length }
   return undefined
+}
+
+/**
+ * Every pill above the composer, in display order: the same priority as
+ * `pillPick` (danger open/draft PRs first, then calm open/draft PRs newest-first,
+ * then attention-bearing run-only chains, then merged chains, then settled
+ * run-bearing chains), but returning the whole list instead of just the lead.
+ * `pillPick` is the first element of this list. An issue-only chain never
+ * appears — there is nothing to show. Deduplicated by chain key; callers cap
+ * the length for display.
+ */
+export const pillPicks = (
+  chains: readonly Chain[],
+  waitForAllStatusChecks = true,
+): { chain: Chain; reason: "danger" | "newest" | "runs-only" | "merged" }[] => {
+  const byNewest = (a: { updatedAt: number }, b: { updatedAt: number }): number => b.updatedAt - a.updatedAt
+  const seen = new Set<string>()
+  const out: { chain: Chain; reason: "danger" | "newest" | "runs-only" | "merged" }[] = []
+  const push = (chain: Chain, reason: "danger" | "newest" | "runs-only" | "merged"): void => {
+    if (seen.has(chain.key)) return
+    seen.add(chain.key)
+    out.push({ chain, reason })
+  }
+  const prChains = chains.filter((chain) => chain.prs.some((pull) => pull.state === "open" || pull.state === "draft")).toSorted(byNewest)
+  for (const chain of prChains.toSorted((a, b) => {
+    const dangerA = chainTone(a, waitForAllStatusChecks) === "danger" ? 0 : 1
+    const dangerB = chainTone(b, waitForAllStatusChecks) === "danger" ? 0 : 1
+    return dangerA - dangerB || b.updatedAt - a.updatedAt
+  }))
+    push(chain, chainTone(chain, waitForAllStatusChecks) === "danger" ? "danger" : "newest")
+  const attention = chains
+    .filter((chain) =>
+      chain.prs.length === 0 &&
+      latestRuns(chain.runs).some((run) => run.status === "queued" || run.status === "running" || run.status === "failed"),
+    )
+    .toSorted(byNewest)
+  for (const chain of attention) push(chain, "runs-only")
+  const mergedChains = chains.filter((chain) => chain.prs.some((pull) => pull.state === "merged")).toSorted(byNewest)
+  for (const chain of mergedChains) push(chain, "merged")
+  const runChains = chains.filter((chain) => chain.runs.length > 0).toSorted(byNewest)
+  for (const chain of runChains) push(chain, "runs-only")
+  return out
 }
 
 /**
