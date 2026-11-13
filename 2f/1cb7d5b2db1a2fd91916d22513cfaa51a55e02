@@ -1,0 +1,14 @@
+README.md
+  h_ea91e2db23540f 27,29-34
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2f1cb7d5b2db1a2fd91916d22513cfaa51a55e02",
+  "prompts": {},
+  "humans": {
+    "h_ea91e2db23540f": {
+      "author": "Emre Şafak <3928300+esafak@users.noreply.github.com>"
+    }
+  }
+}
