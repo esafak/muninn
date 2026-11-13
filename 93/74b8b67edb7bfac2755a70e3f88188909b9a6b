@@ -1,0 +1,18 @@
+src/gui/definition.ts
+  h_ea91e2db23540f 139
+src/gui/history.tsx
+  h_ea91e2db23540f 33,35
+src/gui/window.tsx
+  h_ea91e2db23540f 4,19,91-94,290-314,597-598,720-724,726,733,740-746,785-788,1072,1076-1080,1083,1087-1096,1353-1388,1390,1394,1409-1648,1650-1653,1655-1658,1660-1666,1668-1684,1687-1691,2270
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9374b8b67edb7bfac2755a70e3f88188909b9a6b",
+  "prompts": {},
+  "humans": {
+    "h_ea91e2db23540f": {
+      "author": "Emre Şafak <3928300+esafak@users.noreply.github.com>"
+    }
+  }
+}
