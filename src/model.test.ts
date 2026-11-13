@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import type { Chain, IssueEntity, PullEntity, RepoRef, RunEntity } from "./model"
-import { chainTone, mergeReady, mergeWhy, pendingReviewNotice, armedTargets, staleHeadRetryEligible, staleHeadEvidenceUsable, sessionAttemptCurrent, targetRefreshConfirmed, pillPick, type ArmedEntry, pillEligible, pullForRun, pullsForRun, jsonReady, prConflicted, isFreshBaseSession, menuChains } from "./model"
+import { chainTone, mergeFailed, mergeReady, mergeWhy, pendingReviewNotice, armedTargets, staleHeadRetryEligible, staleHeadEvidenceUsable, sessionAttemptCurrent, targetRefreshConfirmed, pillPick, type ArmedEntry, pillEligible, pullForRun, pullsForRun, jsonReady, prConflicted, isFreshBaseSession, menuChains } from "./model"
 import { associate } from "./associate"
 
 const repo = { host: "github.com", owner: "sst", repo: "opencode" }
@@ -242,6 +242,65 @@ describe("mergeWhy", () => {
       statusChecks: { headSha: "abc123", state: "available", contexts: [{ name: "gate", status: "running" }] },
     })
     expect(mergeWhy(chain({ prs: [pendingAndBlocked] }), pendingAndBlocked, false)).toBe("blocked by branch rules or a missing review")
+  })
+})
+
+describe("mergeFailed", () => {
+  const context = (status: "running" | "succeeded" | "failed" | "cancelled") => ({ name: "gate", status })
+
+  test("failed or cancelled current-head runs are hard-blocked", () => {
+    expect(mergeFailed(chain({ runs: [run("failed")] }))).toBe(true)
+    expect(mergeFailed(chain({ runs: [run("cancelled")] }))).toBe(true)
+  })
+
+  test("running or queued runs are merely waiting", () => {
+    expect(mergeFailed(chain({ runs: [run("running")] }))).toBe(false)
+    expect(mergeFailed(chain({ runs: [run("queued")] }))).toBe(false)
+  })
+
+  test("status contexts only fail when fresh, available, and opted in", () => {
+    const failed = pull({ statusChecks: { headSha: "abc123", state: "available", contexts: [context("failed")] } })
+    const cancelled = pull({ statusChecks: { headSha: "abc123", state: "available", contexts: [context("cancelled")] } })
+    const stale = pull({ headSha: "new-head", statusChecks: { headSha: "abc123", state: "available", contexts: [context("failed")] } })
+    const unavailable = pull({ statusChecks: { headSha: "abc123", state: "unavailable", contexts: [context("failed")] } })
+    expect(mergeFailed(chain({ prs: [failed] }), failed)).toBe(true)
+    expect(mergeFailed(chain({ prs: [cancelled] }), cancelled)).toBe(true)
+    expect(mergeFailed(chain({ prs: [stale] }), stale)).toBe(false)
+    expect(mergeFailed(chain({ prs: [unavailable] }), unavailable)).toBe(false)
+    expect(mergeFailed(chain({ prs: [failed] }), failed, false)).toBe(false)
+  })
+
+  test("reviews, conflicts, and blocks are hard-blocked; pending is not", () => {
+    expect(mergeFailed(chain({ prs: [pull({ reviewState: "changes_requested" })] }))).toBe(true)
+    expect(mergeFailed(chain({ prs: [pull({ mergeState: "conflict" })] }))).toBe(true)
+    expect(mergeFailed(chain({ prs: [pull({ mergeState: "blocked" })] }))).toBe(true)
+    expect(mergeFailed(chain({ prs: [pull({ mergeState: "pending" })] }))).toBe(false)
+  })
+
+  test("ready, missing, and non-open PRs never fail", () => {
+    expect(mergeFailed(chain({ runs: [], prs: [pull({ mergeState: "ready" })] }))).toBe(false)
+    expect(mergeFailed(chain({ prs: [] }))).toBe(false)
+    expect(mergeFailed(chain({ prs: [pull({ state: "merged" })] }))).toBe(false)
+    expect(mergeFailed(chain({ prs: [pull({ state: "closed", mergeState: "blocked" })] }))).toBe(false)
+  })
+
+  test("other heads, repos, and superseded runs do not fail this PR", () => {
+    const otherHead = run("failed")
+    otherHead.headSha = "other-head"
+    expect(mergeFailed(chain({ runs: [otherHead] }))).toBe(false)
+    const otherRepo = { ...run("failed"), repo: { host: "github.com", owner: "other", repo: "repo" } }
+    expect(mergeFailed(chain({ runs: [otherRepo] }))).toBe(false)
+    const superseded = { ...run("cancelled"), series: { key: "ci", sequence: 1 } }
+    const latest = { ...run("succeeded"), series: { key: "ci", sequence: 2 } }
+    expect(mergeFailed(chain({ runs: [superseded, latest] }))).toBe(false)
+  })
+
+  test("a blocked member fails without failing its lead", () => {
+    const lead = pull({ number: 1 })
+    const blocked = pull({ number: 2, mergeState: "blocked" })
+    const grouped = chain({ prs: [lead, blocked] })
+    expect(mergeFailed(grouped, blocked)).toBe(true)
+    expect(mergeFailed(grouped, lead)).toBe(false)
   })
 })
 

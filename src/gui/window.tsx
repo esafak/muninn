@@ -1449,7 +1449,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
                   class="mn-pop-toggle"
                   title={
                     isArmed(lead().pull)
-                      ? `Muninn is driving the merge (${lead().pull.autoMerge ? "also armed on the forge" : "armed locally"}); ${mergeReady(lead().chain, lead().pull, waitForAllStatusChecks()) ? "merging on the next check (within ~30s)" : `waiting: ${mergeWhy(lead().chain, lead().pull, waitForAllStatusChecks())}`} — click to cancel`
+                      ? `Merging when ready (${lead().pull.autoMerge ? "also on the forge" : "watched locally"}); ${mergeReady(lead().chain, lead().pull, waitForAllStatusChecks()) ? "merging on the next check (within ~30s)" : `waiting: ${mergeWhy(lead().chain, lead().pull, waitForAllStatusChecks())}`} — click to stop`
                       : mergeReady(lead().chain, lead().pull, waitForAllStatusChecks())
                         ? "green now — Muninn merges on its next check (within ~30s)"
                         : `Muninn merges once checks pass and merge requirements are satisfied — now blocked: ${mergeWhy(lead().chain, lead().pull, waitForAllStatusChecks())}`
@@ -1994,7 +1994,6 @@ const STYLES = `
 .mn-row { position: relative; display: flex; align-items: center; gap: 8px; padding: 6px 10px 6px 12px; border-radius: 7px; min-width: 0; }
 .mn-row:hover { background: var(--v2-overlay-simple-overlay-hover); cursor: pointer; }
 .mn-row.sub { padding-left: 26px; }
-.mn-row.sub::before { content: ""; position: absolute; left: 22px; top: -4px; height: 8px; width: 1px; background: var(--v2-border-border-strong); }
 .mn-kind { flex: none; display: inline-flex; }
 .mn-kind[data-state="issue-open"], .mn-kind[data-state="pr-open"] { color: var(--v2-state-fg-success); }
 .mn-kind[data-state="pr-draft"] { color: var(--v2-icon-icon-faint); }
@@ -2104,14 +2103,28 @@ const STYLES = `
   padding: 4px 9px; border-radius: 6px; cursor: pointer;
   color: #fff;
   background: #1f883d; border: none;
+  outline: none; box-shadow: none;
 }
+.mn-merge:focus { outline: none; box-shadow: none; }
+.mn-merge:focus-visible { outline: 1px solid var(--v2-state-fg-warning, #9a6700); outline-offset: 1px; box-shadow: none; }
 @media (prefers-color-scheme: dark) {
   .mn-merge { background: #238636; }
 }
 .mn-merge:hover { filter: brightness(1.1); }
+.mn-merge.failed:disabled { opacity: .65; cursor: not-allowed; filter: none; pointer-events: none; }
+/* Wrapper is the real pointer target: the disabled button is click-through,
+ * so tooltip, row-click suppression, and cursor all live here. */
+.mn-wrap-fail { display: inline-flex; flex: none; cursor: not-allowed; }
 .mn-merge.pending {
   background: #9a6700;
   color: #fff;
+}
+.mn-merge.failed {
+  background: #cf222e;
+  color: #fff;
+}
+@media (prefers-color-scheme: dark) {
+  .mn-merge.failed { background: #da3633; }
 }
 .mn-merge.armed {
   background: none; color: var(--v2-state-fg-warning, #9a6700);
@@ -2119,7 +2132,13 @@ const STYLES = `
   display: inline-flex; align-items: center; gap: 5px;
 }
 .mn-merge.armed:hover { background: var(--v2-overlay-simple-overlay-hover); filter: none; }
-/* The pending-merge spinner rides inside the Armed button, tinted by it. */
+.mn-merge.armed.ready { color: var(--v2-state-fg-success, #1a7f37); box-shadow: inset 0 0 0 .5px var(--v2-state-fg-success, #1a7f37); }
+.mn-merge.armed.failed { color: #cf222e; box-shadow: inset 0 0 0 .5px #cf222e; }
+@media (prefers-color-scheme: dark) {
+  .mn-merge.armed.failed { color: #f47067; box-shadow: inset 0 0 0 .5px #f47067; }
+}
+.mn-merge.armed.ready .mn-spin { color: var(--v2-state-fg-success, #1a7f37); box-shadow: inset 0 0 0 .5px var(--v2-state-fg-success, #1a7f37); background: none; }
+.mn-merge.armed.failed .mn-spin { color: #cf222e; box-shadow: inset 0 0 0 .5px #cf222e; background: none; }
 .mn-merge.armed .mn-spin {
   background: none; color: var(--v2-state-fg-warning, #9a6700);
   box-shadow: inset 0 0 0 .5px var(--v2-state-border-warning, #9a6700);

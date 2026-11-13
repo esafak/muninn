@@ -240,6 +240,25 @@ export const mergeWhy = (chain: Chain, pull = chain.prs[0], waitForAllStatusChec
   return "not ready"
 }
 
+/** Whether a not-ready PR is hard-blocked (red) rather than merely waiting
+ * (amber): a failed or cancelled check on the current head, failed/cancelled
+ * status contexts, requested changes, conflicts, or branch-rule blocks. Running
+ * checks, unavailable snapshots, and missing evidence stay amber — they can
+ * still turn green without intervention. Returns false for ready or non-open
+ * PRs, so callers check it only as the red branch before the amber fallback. */
+export const mergeFailed = (chain: Chain, pull = chain.prs[0], waitForAllStatusChecks = true): boolean => {
+  if (!pull || pull.state !== "open") return false
+  if (mergeReady(chain, pull, waitForAllStatusChecks)) return false
+  const currentRuns = currentRunsForPull(chain, pull)
+  if (currentRuns.some((run) => run.status === "failed" || run.status === "cancelled")) return true
+  if (waitForAllStatusChecks && pull.statusChecks?.state === "available" && pull.statusChecks.headSha === pull.headSha) {
+    if (pull.statusChecks.contexts.some((context) => context.status === "failed" || context.status === "cancelled")) return true
+  }
+  if (pull.reviewState === "changes_requested") return true
+  if (pull.mergeState === "conflict" || pull.mergeState === "blocked") return true
+  return false
+}
+
 /** Confirmation fragment for merge/arm dialogs when review activity exists
  * without an approval (comments, dismissed, or otherwise non-decisive
  * reviews). The provider does not block these, so merging stays allowed —
