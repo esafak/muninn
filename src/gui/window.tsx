@@ -1,7 +1,7 @@
 import { createEffect, createMemo, createResource, createSignal, onCleanup, untrack, For, Show } from "solid-js"
 import type { JSX } from "solid-js"
 import { createStore } from "solid-js/store"
-import { ComposerPill, MenuItem, Panel, SettingsPage, createKeyed, usePlugin, type IconName, type Plugin } from "@opencode/plugin/gui"
+import { ComposerPill, MenuItem, Panel, SettingsPage, createKeyed, usePlugin, type ComposerPillMenuProps, type IconName, type Plugin } from "@opencode/plugin/gui"
 import { associate } from "../associate"
 import { messageBuckets, wireRefs } from "../extract"
 import type { TieredRef } from "../extract"
@@ -16,7 +16,7 @@ import {
 import { CUSTOM_PROVIDER, mergeProviderOptions, resolveCustomCommit } from "./provider-options"
 import { validateModelSyntax } from "../candidates/model-id"
 import type { ArmedEntry, Chain, Entity, Pin, PullEntity, RepoRef, RunEntity, RunStatus } from "../model"
-import { chainTone, armedTargets, staleHeadRetryEligible, staleHeadEvidenceUsable, sessionAttemptCurrent, targetRefreshConfirmed, pillPick, pillEligible, pinnedChain, pinForChain, isFreshBaseSession, mergeReady, mergeWhy, pendingReviewNotice, latestRun, pullForRun, prConflicted, refKey, repoKey, entityKey, menuChains } from "../model"
+import { chainTone, armedTargets, staleHeadRetryEligible, staleHeadEvidenceUsable, sessionAttemptCurrent, targetRefreshConfirmed, pillPick, pillPicks, pillEligible, pinnedChain, pinForChain, isFreshBaseSession, mergeReady, mergeWhy, pendingReviewNotice, latestRun, pullForRun, prConflicted, refKey, repoKey, entityKey } from "../model"
 import { githubLexicon } from "../providers/github/lexicon"
 import { baseCheckoutDecision, cleanFromCheck, cleanupDecision, cleanupResultMessage, cleanupSessionMatches, locateCheckout, safeFastForward, sessionMoveConfirmed, shouldFastForwardBase, shouldRecordCleanupFailure, worktreeOccupancyDecision } from "../local-cleanup"
 import type { CheckoutKind } from "../local-cleanup"
@@ -88,6 +88,10 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
   const [runs, setRuns] = createStore<Record<string, readonly RunEntity[]>>({})
   const [chains, setChains] = createSignal<readonly Chain[]>([])
   const [sessionReady, setSessionReady] = createSignal(false)
+  /** Sticky memory of PRs this session owned (branch/SHA matched while live):
+   * sequential multi-PR sessions keep every created PR pilled after moving to
+   * the next branch. Reset on session switch; keys are repo-scoped entity keys. */
+  const [createdKeys, setCreatedKeys] = createSignal<ReadonlySet<string>>(new Set())
   const mergeInFlight = new Set<string>()
   const serverBusyUntil = new Map<string, number>()
   const rejectedHeadByPR = new Map<string, string>()
@@ -283,7 +287,31 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       setChains([])
       return
     }
-    setChains(associate([...relevant, ...related], repo ? (runs[repoKey(repo)] ?? []) : []))
+    const next = associate([...relevant, ...related], repo ? (runs[repoKey(repo)] ?? []) : [])
+    setChains(next)
+    // Remember PRs this session owns right now (branch/SHA match): the sticky
+    // session-created set behind multi-pill sessions. Later branch switches
+    // must not drop earlier created PRs from the pills.
+    if (repo) {
+      const owned: string[] = []
+      for (const chain of next)
+        for (const pull of chain.prs) {
+          if (pull.state === "closed") continue
+          if (repoKey(pull.repo) !== repoKey(repo)) continue
+          if (
+            (meta.branch !== "" && pull.headBranch === meta.branch) ||
+            (meta.headSha !== null && pull.headSha === meta.headSha)
+          )
+            owned.push(entityKey(pull))
+        }
+      if (owned.length > 0)
+        setCreatedKeys((previous) => {
+          let changed = false
+          for (const key of owned) if (!previous.has(key)) { changed = true; break }
+          if (!changed) return previous
+          return new Set([...previous, ...owned])
+        })
+    }
     // Expiry: a pin whose chain is gone unpins so a stale override can't stick
     // the pill — but only in the session that owns it (legacy ownerless pins
     // keep the same-repo rule). Another session's refresh must never erase it.
@@ -566,6 +594,8 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       setEntities(cached())
       setRuns({})
       setChains([])
+      // Created-PR memory belongs to the session that earned it; never carry over.
+      setCreatedKeys(new Set<string>())
       // Verdicts belong to the session that produced them; never carry over.
       setVerdicts(undefined)
       setSessionReady(false)
@@ -687,22 +717,33 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
   // work stay in the sidebar; settled history never pills.
 
   const waitForAllStatusChecks = () => ctx.stores.settings.value.waitForAllStatusChecks !== false
+  /** How many chains the single condensed pill covers: pinned first, then
+   * `pillPicks` order. Dots cap at five and the host truncates the title past
+   * three lines; anything beyond the cap stays in the sidebar, the debug
+   * census, and the popover's overflow row. */
+  const MAX_PILLS = 5
   const pillState = createMemo(() => {
-    if (fresh()) return { eligible: [], picked: undefined }
+    if (fresh()) return { eligible: [] as Chain[], picked: undefined as { chain: Chain; reason: "pinned" | "danger" | "newest" | "runs-only" | "merged"; considered: number } | undefined, picks: [] as { chain: Chain; reason: "pinned" | "danger" | "newest" | "runs-only" | "merged" }[] }
     const eligible = chains().filter((chain) =>
       pillEligible(chain, {
         sessionBranch: meta.branch || undefined,
         sessionRepo: meta.repo || undefined,
         sessionHeadSha: meta.headSha || undefined,
         armed: ctx.stores.armed.value.entries,
+        created: createdKeys(),
       }),
     )
     const normal = pillPick(eligible, waitForAllStatusChecks())
     // Single-pin override: pull identity (or chain key) bypasses eligibility.
     // Expiry is disappearance: a pinned chain that's gone unpins on next rechain.
     const pinned = pinnedChain(chains(), ctx.stores.pinned.value)
-    if (pinned) return { eligible, picked: { chain: pinned, reason: "pinned" as const, considered: eligible.length + 1 } }
-    return { eligible, picked: normal }
+    if (pinned) {
+      const ordered = pillPicks(eligible, waitForAllStatusChecks()).filter((entry) => entry.chain.key !== pinned.key)
+      const picks = [{ chain: pinned, reason: "pinned" as const }, ...ordered].slice(0, MAX_PILLS)
+      return { eligible, picked: { chain: pinned, reason: "pinned" as const, considered: eligible.length + 1 }, picks }
+    }
+    const picks = pillPicks(eligible, waitForAllStatusChecks()).slice(0, MAX_PILLS)
+    return { eligible, picked: normal, picks }
   })
 
   const isPinned = (chain: Chain): boolean => {
@@ -741,13 +782,10 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       else delete current.owner
     })
   }
-  // The menu's merge-when-ready toggle binds to the first open PR across
-  // eligible chains (pinned first when it has one open). Reactive.
-  const menuLead = createMemo(() => {
-    const pinned = pillState().picked?.reason === "pinned" ? pillState().picked!.chain : undefined
-    const pinnedOpen = pinned?.prs.filter((pull) => pull.state === "open").map((pull) => ({ chain: pinned, pull }))[0]
-    return pinnedOpen ?? pillState().eligible.flatMap((chain) => chain.prs.filter((pull) => pull.state === "open").map((pull) => ({ chain, pull })))[0]
-  })
+  // Each pill's merge-when-ready toggle binds to its own chain's first open
+  // PR. Reactive per chain — the popover updates while it's open.
+  const menuLeadFor = (chain: Chain): { chain: Chain; pull: PullEntity } | undefined =>
+    chain.prs.filter((pull) => pull.state === "open").map((pull) => ({ chain, pull }))[0]
 
   /** Whether a PR is armed for Muninn-driven merge-when-ready — ours, or already
    * armed on the forge's side (shown the same; cancel handles both). */
@@ -1031,26 +1069,31 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     }
   }
 
-  // Diagnostics footer: the pill's full decision state, plus which builds are loaded.
+  // Diagnostics footer: the pills' full decision state, plus which builds are loaded.
   const debugLine = () => {
     const current = session()
     const gate = current?.id === meta.sessionID ? "✓" : "✗"
-    const { eligible, picked } = pillState()
-    // The capsule's exact pick, then the why: which rule won and out of how many
-    // candidates, and how the chain chose its lead PR. Read from the same memo
-    // the capsule uses — eligibility and pick are never recomputed per consumer.
+    const { eligible, picked, picks } = pillState()
+    // Every capsule in display order, then the lead's why: which rule won and
+    // out of how many candidates, and how the chain chose its lead PR. Read
+    // from the same memo the capsules use — eligibility and picks are never
+    // recomputed per consumer.
     const lead = picked?.chain.prs.find((pull) => pull.state === "open" || pull.state === "draft") ??
       (picked?.reason === "merged" ? picked.chain.prs.find((pull) => pull.state === "merged") : undefined)
-    const run = picked ? latestRun(picked.chain.runs) : undefined
-    const pill = !picked
+    const pill = picks.length === 0
       ? eligible.length > 0
         ? "off: no eligible chains"
         : "off: nothing eligible"
-      : lead
-        ? `#${lead.number} ${lead.title.slice(0, 36)}${lead.state === "merged" ? " · merged" : ""}`
-        : run
-          ? `run #${run.id}`
-          : "off"
+      : picks
+          .map(({ chain, reason }) => {
+            const chainLead = chain.prs.find((pull) => pull.state === "open" || pull.state === "draft") ??
+              (reason === "merged" || reason === "pinned" ? chain.prs.find((pull) => pull.state === "merged") ?? chain.prs[0] : undefined)
+            const chainRun = chainLead ? undefined : latestRun(chain.runs)
+            if (chainLead) return `#${chainLead.number} ${chainLead.title.slice(0, 36)}${chainLead.state === "merged" ? " · merged" : ""}`
+            if (chainRun) return `run #${chainRun.id}`
+            return "off"
+          })
+          .join(" | ")
     // Pipeline census: refs by provenance tier, how many hit the entity store,
     // how big the store is. A PR that reaches hydration but not the pill — or a
     // tool-discovery that wrongly became a candidate — gets caught here.
@@ -1307,38 +1350,48 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     }
   }
 
-  ctx.add(ComposerPill, {
-    id: "links",
-    order: 10,
-    show: (input) => {
-      if (!input.session || input.session.id !== meta.sessionID) return undefined
-      const { picked } = pillState()
-      // Pinned chains bypass eligibility, so the gate is the pick alone: an
-      // empty eligible list with a pin must still show the pill.
-      if (!picked) return undefined
-
-      // PR chains are the primary work: the pill leads with the worst-toned PR
-      // chain (failing/conflicted/review-blocked beats a calm newer one), else
-      // the most recently updated; run-only chains are the last resort. The
-      // pick comes from the shared memo — exactly what the footer reports.
-      const worst = picked.chain
-      const lead = worst.prs.find((pull) => pull.state === "open" || pull.state === "draft") ??
-        (picked.reason === "merged" || picked.reason === "pinned" ? worst.prs.find((pull) => pull.state === "merged") ?? worst.prs[0] : undefined)
-      const run = latestRun(worst.runs)
+  // ── Component 1: one condensed pill above the composer ───────────────────
+  // One eligibility policy, one memo, two consumers (`show`, `menu`) plus the
+  // `debugLine` census — the same values everywhere. State-driven via
+  // `pillEligible`: only the session's own work pills — live branch/SHA
+  // match plus the sticky created set, so sequential multi-PR sessions keep
+  // every created PR (still shown after merging). Mentions of other branches'
+  // work stay in the sidebar; settled history never pills.
+  //
+  // Condensing (option E): a single capsule leads with the worst-toned PR's
+  // identity plus one dot per extra PR and an overflow count —
+  // `#2730 title ●●● +2 ▾`. One PR renders exactly like the old single pill.
+  // The capsule icon is the forge mark whenever several PRs share the pill
+  // (no single merge state to encode); tone is the worst chain tone. The
+  // popover stacks one section per chain in `pillPicks` order.
+  const short = (title: string): string => (title.length > 24 ? `${title.slice(0, 24)}…` : title)
+  const leadOf = (entry: { chain: Chain; reason: "pinned" | "danger" | "newest" | "runs-only" | "merged" }): PullEntity | undefined =>
+    entry.chain.prs.find((pull) => pull.state === "open" || pull.state === "draft") ??
+    (entry.reason === "merged" || entry.reason === "pinned" ? entry.chain.prs.find((pull) => pull.state === "merged") ?? entry.chain.prs[0] : undefined)
+  const worstTone = (entries: readonly { chain: Chain }[]): "success" | "warning" | "danger" | undefined => {
+    let seen: "success" | "warning" | "danger" | undefined
+    for (const entry of entries) {
+      const tone = chainTone(entry.chain, waitForAllStatusChecks())
+      if (tone === "danger") return "danger"
+      if (tone === "warning") seen = "warning"
+      else if (tone === "success" && seen === undefined) seen = "success"
+    }
+    return seen
+  }
+  const pillCondensedView = () => {
+    const picks = pillState().picks
+    if (picks.length === 0) return undefined
+    // Single PR: byte-identical to the old per-pill capsule.
+    if (picks.length === 1) {
+      const entry = picks[0]!
+      const lead = leadOf(entry)
+      const run = latestRun(entry.chain.runs)
       if (!lead && !run) return undefined
-      const chainStatus = chainTone(worst, waitForAllStatusChecks())
-      const tone = pillStatusTone(lead?.state, chainStatus)
-
-      // The icon shape encodes the provider merge state; pill tone still encodes
-      // overall chain health. The label stays `#number title ⌄`. An armed lead PR
-      // puts a ticking braille spinner in front: a merge is pending. A pinned
-      // override is marked in the tooltip, not the label.
+      const tone = pillStatusTone(lead?.state, chainTone(entry.chain, waitForAllStatusChecks()))
       const mergeStatus = lead?.state === "open" ? lead.mergeState : undefined
       const circle = pillStatusIcon(lead?.state, mergeStatus, tone, pillIcon(meta.provider))
       const pending = lead?.state === "open" ? isArmed(lead) : false
-      const short = (title: string): string => (title.length > 24 ? `${title.slice(0, 24)}…` : title)
-      const pinnedSuffix = picked.reason === "pinned" ? ` · ${ctx.t("pill.pinned")}` : ""
-
+      const pinnedSuffix = entry.reason === "pinned" ? ` · ${ctx.t("pill.pinned")}` : ""
       return {
         icon: circle,
         label: lead
@@ -1353,150 +1406,291 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
               : ""}${pinnedSuffix}`
           : `${ctx.t("pill.title")}${pinnedSuffix}`,
       }
-    },
-    // The pill's dropdown: the full chain picture with the merge controls the
-    // sidebar has, plus the merge-method/delete-branch choices. Reads the stores
-    // itself, so it stays live while open. Run ids live only here (pill grammar).
-    menu: (input) => {
-      // The lead open PR across eligible chains: the footer's merge-when-ready
-      // toggle binds to it. Reactive — the popover updates while it's open.
-      return (
-      <div class="mn-pop">
-        <For each={menuChains(pillState().picked, pillState().eligible)}>
-          {(chain) => (
-            <div class="mn-pop-chain" data-tone={chainTone(chain, waitForAllStatusChecks())}>
-              <For each={chain.prs}>
-                {(pull) => (
-                  <div class="mn-pop-row" onClick={() => { input.close(); open(pull.url) }}>
-                    <span
-                      class="mn-kind"
-                      data-state={prConflicted(pull) ? "pr-conflict" : `pr-${pull.state}`}
-                      title={ctx.t(prConflicted(pull) ? "state.pr-conflict" : `state.${pull.state}`)}
-                    >
-                      {pull.state === "merged" ? <MergedGlyph /> : prConflicted(pull) ? <PullConflictGlyph /> : <PullGlyph />}
-                    </span>
-                    <span
-                      class="mn-merge-state"
-                      data-state={pull.state === "merged" ? "merged" : pull.mergeState ?? "unknown"}
-                      data-armed={isArmed(pull) ? "" : undefined}
-                      title={`merge: ${pull.state === "merged" ? "merged" : pull.mergeState ?? "unknown"}${pull.reviewState ? ` · reviews: ${pull.reviewState}` : ""}${isArmed(pull) ? " · Muninn is watching" : ""}`}
-                    >
-                      {pull.state === "open" && pull.mergeState == null ? <UnknownGlyph /> : <MergeGlyph />}
-                    </span>
-                    <span class="mn-pop-id">#{pull.number}</span>
-                    <span class="mn-pop-title">{pull.title}</span>
-                    <MergeButton
-                      chain={chain}
-                      pull={pull}
-                      isArmed={isArmed}
-                      waitForAllStatusChecks={waitForAllStatusChecks}
-                      onMerge={mergePull}
-                      onArm={armPull}
-                    />
-                    <button class="mn-copy-link" type="button" title="Copy PR link" aria-label="Copy PR link" onClick={(event) => copyLink(event, pull.url)}><CopyGlyph /></button>
-                  </div>
-                )}
-              </For>
-              <For each={chain.issues}>
-                {(issue) => (
-                  <div class="mn-pop-row" onClick={() => { input.close(); open(issue.url) }}>
-                    <span class="mn-kind" data-state={`issue-${issue.state}`} title={ctx.t(`state.${issue.state}`)}>
-                      <IssueGlyph closed={issue.state === "closed"} />
-                    </span>
-                    <span class="mn-pop-id">#{issue.number}</span>
-                    <span class="mn-pop-title">{issue.title}</span>
-                    <button class="mn-copy-link" type="button" title="Copy issue link" aria-label="Copy issue link" onClick={(event) => copyLink(event, issue.url)}><CopyGlyph /></button>
-                  </div>
-                )}
-              </For>
-              <For each={chain.runs.slice(0, 3)}>
-                {(run) => {
-                  const relatedPull = pullForRun(run, chain.prs)
-                  return (
-                    <div class="mn-pop-row" onClick={() => { input.close(); open(run.url) }}>
-                      <span class="mn-kind" data-state={run.status} title={ctx.t(`state.${run.status}`)}>
-                        {runGlyph(run.status)}
-                      </span>
-                      <span class="mn-pop-id">#{run.id}</span>
-                      <span class="mn-pop-title" title={relatedPull ? `${run.name} · associated with PR #${relatedPull.number}` : run.name}>
-                        {run.name}{relatedPull ? ` · PR #${relatedPull.number}` : ""}
-                      </span>
-                      <button class="mn-copy-link" type="button" title="Copy run link" aria-label="Copy run link" onClick={(event) => copyLink(event, run.url)}><CopyGlyph /></button>
-                    </div>
-                  )
-                }}
-              </For>
-              <Show when={chain.runs.length > 3}>
-                <div
-                  class="mn-pop-more"
-                  onClick={() => {
-                    input.close()
-                    if (input.session?.id) ctx.layout.open(`${ctx.id}:history`, input.session)
-                  }}
+    }
+    // Several PRs, one capsule: lead identity + one dot per pill + overflow.
+    // The icon stays the forge mark — several merge states share this pill,
+    // so no single status circle can lead it.
+    const leadEntry = picks[0]!
+    const lead = leadOf(leadEntry)
+    const tone = pillStatusTone(lead?.state, worstTone(picks))
+    const icon = pillIcon(meta.provider)
+    const armed = picks.some((entry) => {
+      const pull = leadOf(entry)
+      return pull?.state === "open" ? isArmed(pull) : false
+    })
+    const dots = "●".repeat(Math.min(picks.length, 5))
+    const pinnedSuffix = picks.some((entry) => entry.reason === "pinned") ? ` · ${ctx.t("pill.pinned")}` : ""
+    const title = picks
+      .map((entry) => {
+        const pull = leadOf(entry)
+        if (!pull) {
+          const run = latestRun(entry.chain.runs)
+          return run ? `run #${run.id} ${run.status}` : undefined
+        }
+        return pull.state === "merged"
+          ? `#${pull.number} ${pull.title} · merged`
+          : pull.state === "open"
+            ? `#${pull.number} ${pull.title} · merge ${pull.mergeState ?? "unknown"}${pull.reviewState ? ` · reviews ${pull.reviewState}` : ""}`
+            : `#${pull.number} ${pull.title} · ${pull.state}`
+      })
+      .filter((clause): clause is string => clause !== undefined)
+      .join(" · ")
+    return {
+      icon,
+      label: lead
+        ? `${armed ? `${SPIN_FRAMES[spin()]} ` : ""}#${lead.number} ${short(lead.title)} ${dots} +${picks.length - 1} ▾`
+        : `${armed ? `${SPIN_FRAMES[spin()]} ` : ""}${picks.length} PRs ${dots} ▾`,
+      tone,
+      title: `${title}${pinnedSuffix}`,
+    }
+  }
+
+  // One chain's rows: PRs, issues, runs. Shared by the single-chain popover
+  // and the condensed multi-chain popover (which stacks one per pick).
+  const pillChainRows = (chain: Chain, input: ComposerPillMenuProps): JSX.Element => (
+        <div class="mn-pop-chain" data-tone={chainTone(chain, waitForAllStatusChecks())}>
+          <For each={chain.prs}>
+            {(pull) => (
+              <div class="mn-pop-row" onClick={() => { input.close(); open(pull.url) }}>
+                <span
+                  class="mn-kind"
+                  data-state={prConflicted(pull) ? "pr-conflict" : `pr-${pull.state}`}
+                  title={ctx.t(prConflicted(pull) ? "state.pr-conflict" : `state.${pull.state}`)}
                 >
-                  +{chain.runs.length - 3} runs in the sidebar
+                  {pull.state === "merged" ? <MergedGlyph /> : prConflicted(pull) ? <PullConflictGlyph /> : <PullGlyph />}
+                </span>
+                <span
+                  class="mn-merge-state"
+                  data-state={pull.state === "merged" ? "merged" : pull.mergeState ?? "unknown"}
+                  data-armed={isArmed(pull) ? "" : undefined}
+                  title={`merge: ${pull.state === "merged" ? "merged" : pull.mergeState ?? "unknown"}${pull.reviewState ? ` · reviews: ${pull.reviewState}` : ""}${isArmed(pull) ? " · Muninn is watching" : ""}`}
+                >
+                  {pull.state === "open" && pull.mergeState == null ? <UnknownGlyph /> : <MergeGlyph />}
+                </span>
+                <span class="mn-pop-id">#{pull.number}</span>
+                <span class="mn-pop-title">{pull.title}</span>
+                <MergeButton
+                  chain={chain}
+                  pull={pull}
+                  isArmed={isArmed}
+                  waitForAllStatusChecks={waitForAllStatusChecks}
+                  onMerge={mergePull}
+                  onArm={armPull}
+                />
+                <button class="mn-copy-link" type="button" title="Copy PR link" aria-label="Copy PR link" onClick={(event) => copyLink(event, pull.url)}><CopyGlyph /></button>
+              </div>
+            )}
+          </For>
+          <For each={chain.issues}>
+            {(issue) => (
+              <div class="mn-pop-row" onClick={() => { input.close(); open(issue.url) }}>
+                <span class="mn-kind" data-state={`issue-${issue.state}`} title={ctx.t(`state.${issue.state}`)}>
+                  <IssueGlyph closed={issue.state === "closed"} />
+                </span>
+                <span class="mn-pop-id">#{issue.number}</span>
+                <span class="mn-pop-title">{issue.title}</span>
+                <button class="mn-copy-link" type="button" title="Copy issue link" aria-label="Copy issue link" onClick={(event) => copyLink(event, issue.url)}><CopyGlyph /></button>
+              </div>
+            )}
+          </For>
+          <For each={chain.runs.slice(0, 3)}>
+            {(run) => {
+              const relatedPull = pullForRun(run, chain.prs)
+              return (
+                <div class="mn-pop-row" onClick={() => { input.close(); open(run.url) }}>
+                  <span class="mn-kind" data-state={run.status} title={ctx.t(`state.${run.status}`)}>
+                    {runGlyph(run.status)}
+                  </span>
+                  <span class="mn-pop-id">#{run.id}</span>
+                  <span class="mn-pop-title" title={relatedPull ? `${run.name} · associated with PR #${relatedPull.number}` : run.name}>
+                    {run.name}{relatedPull ? ` · PR #${relatedPull.number}` : ""}
+                  </span>
+                  <button class="mn-copy-link" type="button" title="Copy run link" aria-label="Copy run link" onClick={(event) => copyLink(event, run.url)}><CopyGlyph /></button>
                 </div>
-              </Show>
-            </div>
-          )}
-        </For>
-        <Show when={menuLead()}>
-        <div class="mn-pop-foot">
-          <div class="mn-pop-line">
-            <Show when={menuLead()}>
-              {(lead) => (
-                <label
-                  class="mn-pop-toggle"
-                  title={
-                    isArmed(lead().pull)
-                      ? `Merging when ready (${lead().pull.autoMerge ? "also on the forge" : "watched locally"}); ${mergeReady(lead().chain, lead().pull, waitForAllStatusChecks()) ? "merging on the next check (within ~30s)" : `waiting: ${mergeWhy(lead().chain, lead().pull, waitForAllStatusChecks())}`} — click to stop`
-                      : mergeReady(lead().chain, lead().pull, waitForAllStatusChecks())
-                        ? "green now — Muninn merges on its next check (within ~30s)"
-                        : `Muninn merges once checks pass and merge requirements are satisfied — now blocked: ${mergeWhy(lead().chain, lead().pull, waitForAllStatusChecks())}`
-                  }
-                >
-                  <input
-                    type="checkbox"
-                    checked={isArmed(lead().pull)}
-                    onChange={(event) => void armPull(lead().pull, event.currentTarget.checked)}
-                  />
-                  merge when ready
-                </label>
-              )}
-            </Show>
-            <select
-              title="Merge method"
-              value={ctx.stores.settings.value.mergeMethod}
-              onChange={(event) => {
-                const value = event.currentTarget.value
-                if (value === "squash" || value === "merge" || value === "rebase")
-                  ctx.stores.settings.update((draft) => { draft.mergeMethod = value })
+              )
+            }}
+          </For>
+          <Show when={chain.runs.length > 3}>
+            <div
+              class="mn-pop-more"
+              onClick={() => {
+                input.close()
+                if (input.session?.id) ctx.layout.open(`${ctx.id}:history`, input.session)
               }}
             >
-              <option value="squash">squash</option>
-              <option value="merge">merge commit</option>
-              <option value="rebase">rebase</option>
-            </select>
-          </div>
-          <label class="mn-pop-toggle">
-            <input
-              type="checkbox"
-              checked={ctx.stores.settings.value.deleteBranch}
-              onChange={(event) => ctx.stores.settings.update((draft) => { draft.deleteBranch = event.currentTarget.checked })}
-            />
-            delete tree + branch
-          </label>
-          <label class="mn-pop-toggle" title="Fetch and fast-forward only when the local base checkout is clean and can advance without a merge commit.">
-            <input
-              type="checkbox"
-              checked={ctx.stores.settings.value.fastForwardBase}
-              onChange={(event) => ctx.stores.settings.update((draft) => { draft.fastForwardBase = event.currentTarget.checked })}
-            />
-            fast-forward base branch
-          </label>
+              +{chain.runs.length - 3} runs in the sidebar
+            </div>
+          </Show>
         </div>
+  )
+
+  // This chain's merge-when-ready toggle: binds to its own first open PR.
+  // Shown per section in the condensed popover, next to the method select in
+  // the single-chain popover.
+  const pillChainToggle = (chain: Chain): JSX.Element => (
+    <Show when={menuLeadFor(chain)}>
+      {(entry) => (
+        <label
+          class="mn-pop-toggle"
+          title={
+            isArmed(entry().pull)
+              ? `Merging when ready (${entry().pull.autoMerge ? "also on the forge" : "watched locally"}); ${mergeReady(entry().chain, entry().pull, waitForAllStatusChecks()) ? "merging on the next check (within ~30s)" : `waiting: ${mergeWhy(entry().chain, entry().pull, waitForAllStatusChecks())}`} — click to stop`
+              : mergeReady(entry().chain, entry().pull, waitForAllStatusChecks())
+                ? "green now — Muninn merges on its next check (within ~30s)"
+                : `Muninn merges once checks pass and merge requirements are satisfied — now blocked: ${mergeWhy(entry().chain, entry().pull, waitForAllStatusChecks())}`
+          }
+        >
+          <input
+            type="checkbox"
+            checked={isArmed(entry().pull)}
+            onChange={(event) => void armPull(entry().pull, event.currentTarget.checked)}
+          />
+          merge when ready
+        </label>
+      )}
+    </Show>
+  )
+
+  // Global merge settings: method, tree cleanup, base fast-forward. Shown once
+  // per popover — the per-chain sections above carry only their own toggle.
+  const pillSettingsFoot = (): JSX.Element => (
+    <>
+      <div class="mn-pop-line">
+        <span class="mn-pop-more">Merge settings</span>
+        <select
+          title="Merge method"
+          value={ctx.stores.settings.value.mergeMethod}
+          onChange={(event) => {
+            const value = event.currentTarget.value
+            if (value === "squash" || value === "merge" || value === "rebase")
+              ctx.stores.settings.update((draft) => { draft.mergeMethod = value })
+          }}
+        >
+          <option value="squash">squash</option>
+          <option value="merge">merge commit</option>
+          <option value="rebase">rebase</option>
+        </select>
+      </div>
+      <label class="mn-pop-toggle">
+        <input
+          type="checkbox"
+          checked={ctx.stores.settings.value.deleteBranch}
+          onChange={(event) => ctx.stores.settings.update((draft) => { draft.deleteBranch = event.currentTarget.checked })}
+        />
+        delete tree + branch
+      </label>
+      <label class="mn-pop-toggle" title="Fetch and fast-forward only when the local base checkout is clean and can advance without a merge commit.">
+        <input
+          type="checkbox"
+          checked={ctx.stores.settings.value.fastForwardBase}
+          onChange={(event) => ctx.stores.settings.update((draft) => { draft.fastForwardBase = event.currentTarget.checked })}
+        />
+        fast-forward base branch
+      </label>
+    </>
+  )
+
+  // One chain's popover: the full chain picture with the merge controls the
+  // sidebar has, plus the merge-method/delete-branch choices. Reads the stores
+  // itself, so it stays live while open. Run ids live only here (pill grammar).
+  const pillMenuFor = (chain: Chain, input: ComposerPillMenuProps): JSX.Element => {
+    const lead = menuLeadFor(chain)
+    return (
+      <div class="mn-pop">
+        {pillChainRows(chain, input)}
+        <Show when={lead}>
+          <div class="mn-pop-foot">
+            <div class="mn-pop-line">
+              {pillChainToggle(chain)}
+              <select
+                title="Merge method"
+                value={ctx.stores.settings.value.mergeMethod}
+                onChange={(event) => {
+                  const value = event.currentTarget.value
+                  if (value === "squash" || value === "merge" || value === "rebase")
+                    ctx.stores.settings.update((draft) => { draft.mergeMethod = value })
+                }}
+              >
+                <option value="squash">squash</option>
+                <option value="merge">merge commit</option>
+                <option value="rebase">rebase</option>
+              </select>
+            </div>
+            <label class="mn-pop-toggle">
+              <input
+                type="checkbox"
+                checked={ctx.stores.settings.value.deleteBranch}
+                onChange={(event) => ctx.stores.settings.update((draft) => { draft.deleteBranch = event.currentTarget.checked })}
+              />
+              delete tree + branch
+            </label>
+            <label class="mn-pop-toggle" title="Fetch and fast-forward only when the local base checkout is clean and can advance without a merge commit.">
+              <input
+                type="checkbox"
+                checked={ctx.stores.settings.value.fastForwardBase}
+                onChange={(event) => ctx.stores.settings.update((draft) => { draft.fastForwardBase = event.currentTarget.checked })}
+              />
+              fast-forward base branch
+            </label>
+          </div>
         </Show>
       </div>
+    )
+  }
+
+  ctx.add(ComposerPill, {
+    id: "links",
+    order: 10,
+    show: (input) => {
+      if (!input.session || input.session.id !== meta.sessionID) return undefined
+      // Pinned chains bypass eligibility, so the gate is the picks alone: an
+      // empty eligible list with a pin must still show the pill.
+      return pillCondensedView()
+    },
+    // One condensed capsule, one stacked popover: every pick gets its own
+    // chain section in `pillPicks` order, so the dots and the popover agree.
+    // Per-chain merge toggles ride with their section; merge settings appear
+    // once at the bottom.
+    menu: (input) => {
+      const picks = pillState().picks
+      if (picks.length === 0) return <div class="mn-pop" />
+      if (picks.length === 1) return pillMenuFor(picks[0]!.chain, input)
+      const overflow = pillState().eligible.length - picks.length
+      return (
+        <div class="mn-pop">
+          <For each={picks}>
+            {(entry) => (
+              <>
+                <div class="mn-pop-head">
+                  #{leadOf(entry)?.number ?? entry.chain.prs[0]?.number} {leadOf(entry)?.title ?? entry.chain.key}
+                  {entry.reason === "pinned" ? ` · ${ctx.t("pill.pinned")}` : ""}
+                </div>
+                {pillChainRows(entry.chain, input)}
+                <Show when={menuLeadFor(entry.chain)}>
+                  <div class="mn-pop-foot">
+                    <div class="mn-pop-line">
+                      {pillChainToggle(entry.chain)}
+                    </div>
+                  </div>
+                </Show>
+              </>
+            )}
+          </For>
+          <Show when={overflow > 0}>
+            <div
+              class="mn-pop-more"
+              onClick={() => {
+                input.close()
+                if (input.session?.id) ctx.layout.open(`${ctx.id}:history`, input.session)
+              }}
+            >
+              +{overflow} more in the sidebar
+            </div>
+          </Show>
+          <div class="mn-pop-foot">
+            {pillSettingsFoot()}
+          </div>
+        </div>
       )
     },
   })
@@ -2073,6 +2267,7 @@ const STYLES = `
 .mn-pop-title { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--v2-text-text-base); }
 .mn-pop-more { padding: 4px 8px; font-size: 11px; color: var(--v2-text-text-faint); cursor: pointer; border-radius: 7px; }
 .mn-pop-more:hover { background: var(--v2-overlay-simple-overlay-hover); color: var(--v2-text-text-muted); }
+.mn-pop-head { padding: 2px 8px 0; font-family: var(--v2-font-family-code); font-size: 10.5px; color: var(--v2-text-text-faint); text-transform: uppercase; letter-spacing: .04em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mn-pop-foot {
   display: flex; flex-direction: column; align-items: stretch; gap: 7px;
   margin-top: 4px; padding: 8px 8px 4px;

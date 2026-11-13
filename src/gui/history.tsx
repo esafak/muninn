@@ -30,9 +30,9 @@ export interface HistoryProps {
   onArm: (pull: PullEntity, enable: boolean) => Promise<void>
   /** Whether the PR is armed — locally by Muninn, or already on the forge. */
   isArmed: (pull: PullEntity) => boolean
-  /** Whether this chain is the pill override. */
+  /** Whether this chain is the pinned pill. */
   isPinned: (chain: Chain) => boolean
-  /** Toggles the pill override for a chain (single pin; re-pin moves it). */
+  /** Toggles the pin leading the pills for a chain (single pin; re-pin moves it). */
   onPin: (chain: Chain) => void
   waitForAllStatusChecks: Accessor<boolean>
 }
