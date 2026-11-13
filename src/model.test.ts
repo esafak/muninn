@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import type { Chain, IssueEntity, PullEntity, RepoRef, RunEntity } from "./model"
-import { chainTone, mergeFailed, mergeReady, mergeWhy, pendingReviewNotice, armedTargets, staleHeadRetryEligible, staleHeadEvidenceUsable, sessionAttemptCurrent, targetRefreshConfirmed, pillPick, pillPicks, type ArmedEntry, pillEligible, pillHeadIdentity, pillLeadOf, rememberCreated, pullForRun, pullsForRun, jsonReady, prConflicted, isFreshBaseSession, menuChains, entityKey } from "./model"
+import { chainTone, mergeFailed, mergeReady, mergeWhy, pendingReviewNotice, armedTargets, staleHeadRetryEligible, staleHeadEvidenceUsable, sessionAttemptCurrent, targetRefreshConfirmed, pillPick, pillPicks, type ArmedEntry, pillEligible, pillHeadIdentity, pillLeadOf, rememberCreated, pullForRun, pullsForRun, jsonReady, prConflicted, isFreshBaseSession, entityKey } from "./model"
 import { associate } from "./associate"
 
 const repo = { host: "github.com", owner: "sst", repo: "opencode" }
@@ -916,25 +916,5 @@ describe("pinnedChain", () => {
     expect(mod.pinnedChain(chains, { repo: repoA, number: 42, kind: "run" })?.key).toBe(runChain.key)
     expect(mod.pinnedChain(chains, { repo: repoA, number: 42 })?.key).toBeUndefined()
     expect(mod.pinnedChain(chains, { repo: repoA, number: 42, kind: "issue", owner: "other-session" })?.key).toBe(issueChain.key)
-  })
-})
-
-describe("menuChains", () => {
-  const keys = (chains: readonly Chain[]): string[] => chains.map((chain) => chain.key)
-  const eligible = [chain({ key: "a" }), chain({ key: "b" }), chain({ key: "c" }), chain({ key: "d" })]
-
-  test("no pin lists the first three eligible chains", () => {
-    expect(keys(menuChains(undefined, eligible))).toEqual(["a", "b", "c"])
-    expect(keys(menuChains({ chain: chain({ key: "a" }), reason: "newest" }, eligible))).toEqual(["a", "b", "c"])
-    expect(keys(menuChains(undefined, [chain({ key: "a" })]))).toEqual(["a"])
-  })
-
-  test("an ineligible pin leads, filling the rest from eligible", () => {
-    expect(keys(menuChains({ chain: chain({ key: "x" }), reason: "pinned" }, eligible))).toEqual(["x", "a", "b"])
-  })
-
-  test("an eligible pin past the cap still leads once, deduplicated", () => {
-    expect(keys(menuChains({ chain: chain({ key: "d" }), reason: "pinned" }, eligible))).toEqual(["d", "a", "b"])
-    expect(keys(menuChains({ chain: chain({ key: "b" }), reason: "pinned" }, eligible))).toEqual(["b", "a", "c"])
   })
 })
