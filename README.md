@@ -24,23 +24,14 @@ OpenCode Desktop.
 
 ![Muninn settings](docs/screenshots/settings.png)
 
-## Decision backend keys
+## Decision models
 
-The decision backend needs its key, or judging falls back to heuristic keep-all. Set your backend's option in `opencode.json`, or provide the env var before OpenCode starts:
-
-| Backend | Plugin option | Env var |
-| --- | --- | --- |
-| Zen | `zenApiKey` | `OPENCODE_ZEN_API_KEY` |
-| OpenRouter | `openrouterApiKey` | `OPENROUTER_API_KEY` |
-| OpenAI | `openaiApiKey` | `OPENAI_API_KEY` |
-
-```jsonc
-{
-  "plugins": [{ "package": "muninn", "options": { "openaiApiKey": "sk-..." } }]
-}
-```
-
-Keys stay server-side; settings only hold provider and model.
+Conversation extraction can find references that were only mentioned in passing.
+When enabled, a decision model evaluates each candidate in context and estimates
+whether it is important enough to keep in Muninn's pill and sidebar; this helps
+filter incidental references without losing items that matter to the session.
+Select a backend and model in Muninn's settings. Requests use credentials
+already connected to OpenCode.
 
 ## Add the plugin
 
@@ -59,9 +50,5 @@ opencode plugin add github:esafak/muninn#docs/readme-screenshots-settings-audit
 ```
 
 Branches, tags, and full commit hashes all work.
-
-OpenCode watches configuration directories and may load the plugin automatically;
-if it does not appear, restart OpenCode Desktop. See the [plugin reload
-notes](https://opencode.ai/docs/plugins/#reload).
 
 For development and contributor guidance, see [CONTRIBUTORS.md](CONTRIBUTORS.md).
