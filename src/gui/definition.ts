@@ -136,7 +136,7 @@ export const definition = Plugin.define({
       }),
       { entries: [] },
     ),
-    /** Sidebar pin overriding the pill: single pinned PR (repo+number, survives
+    /** Sidebar pin leading the pills: single pinned PR (repo+number, survives
      * lead changes) or chain key for issue/run-only groups. Empty = unpinned.
      * `owner` is the session that pinned it: only that session may expire it,
      * so another session in the same repo can never erase a valid pin. */

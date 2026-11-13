@@ -101,15 +101,16 @@ describe("associate", () => {
     expect(pillPick(eligible)).toBeUndefined()
   })
 
-  test("distinct workflows remain separate; latest standalone failure still attracts attention", () => {
+  test("distinct workflows remain separate; standalone failures stay in the sidebar", () => {
     const passed = { ...run(18440, "same-head", 100), series: { key: "workflow-1", sequence: 1 } }
     const failed = { ...run(18441, "same-head", 110), status: "failed" as const, series: { key: "workflow-2", sequence: 2 } }
     const chains = associate([], [passed, failed])
     expect(chains).toHaveLength(2)
     const failedChain = chains.find((chain) => chain.runs[0]?.status === "failed")!
-    expect(pillEligible(failedChain)).toBe(true)
+    // Session-created-only pills: run-only chains never pill on their own.
+    expect(pillEligible(failedChain)).toBe(false)
     expect(chainTone(failedChain)).toBe("danger")
-    expect(pillPick(chains)?.chain).toBe(failedChain)
+    expect(chains.filter((chain) => pillEligible(chain))).toEqual([])
   })
 
   test("different repo/head and missing series metadata do not group", () => {
