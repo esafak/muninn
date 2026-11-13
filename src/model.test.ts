@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import type { Chain, IssueEntity, PullEntity, RepoRef, RunEntity } from "./model"
-import { chainTone, mergeFailed, mergeReady, mergeWhy, pendingReviewNotice, armedTargets, staleHeadRetryEligible, staleHeadEvidenceUsable, sessionAttemptCurrent, targetRefreshConfirmed, pillPick, pillPicks, type ArmedEntry, pillEligible, pullForRun, pullsForRun, jsonReady, prConflicted, isFreshBaseSession, menuChains, entityKey } from "./model"
+import { chainTone, mergeFailed, mergeReady, mergeWhy, pendingReviewNotice, armedTargets, staleHeadRetryEligible, staleHeadEvidenceUsable, sessionAttemptCurrent, targetRefreshConfirmed, pillPick, pillPicks, type ArmedEntry, pillEligible, pillHeadIdentity, pillLeadOf, rememberCreated, pullForRun, pullsForRun, jsonReady, prConflicted, isFreshBaseSession, menuChains, entityKey } from "./model"
 import { associate } from "./associate"
 
 const repo = { host: "github.com", owner: "sst", repo: "opencode" }
@@ -667,7 +667,7 @@ describe("pillEligible", () => {
   const elsewhere = "fix/other-session"
   const branched = (headBranch: string, over: Partial<PullEntity> = {}): Chain =>
     chain({ prs: [pull({ headBranch, ...over })] })
-  const ctx = (over: { sessionBranch?: string; sessionRepo?: RepoRef; sessionHeadSha?: string; armed?: { repo: RepoRef; number: number }[]; created?: ReadonlySet<string> } = {}) => ({
+  const ctx = (over: { sessionBranch?: string; sessionRepo?: RepoRef; sessionHeadSha?: string; created?: ReadonlySet<string> } = {}) => ({
     sessionBranch: own,
     sessionRepo: repo,
     ...over,
@@ -721,13 +721,12 @@ describe("pillEligible", () => {
     expect(pillEligible(chain({ prs: [pull({ headBranch: elsewhere })], runs: [oldFailure, latestSuccess] }), ctx())).toBe(false)
   })
 
-  test("an armed PR from another branch never pills on its own — arming is not creation", () => {
+  test("arming another branch's PR never pills it — arming is not creation", () => {
     const multi = chain({ prs: [pull({ headBranch: elsewhere, number: 1 }), pull({ headBranch: elsewhere, number: 2 })] })
-    expect(pillEligible(multi, ctx({ armed: [{ repo, number: 2 }] }))).toBe(false)
-    expect(pillEligible(multi, ctx({ armed: [{ repo, number: 99 }] }))).toBe(false)
-    // Same number, different repository: the armed entry must not recruit it.
+    expect(pillEligible(multi, ctx())).toBe(false)
+    // Same number, different repository: repo scoping still holds.
     const otherRepo = { host: "github.com", owner: "other", repo: "repo" }
-    expect(pillEligible(multi, ctx({ armed: [{ repo: otherRepo, number: 1 }] }))).toBe(false)
+    expect(pillEligible(chain({ prs: [pull({ headBranch: elsewhere, number: 1, repo: otherRepo })] }), ctx())).toBe(false)
   })
 
   test("issue-only chains and settled run-only chains stay in the sidebar", () => {
@@ -746,10 +745,10 @@ describe("pillEligible", () => {
   })
 
   test("without a session branch, only HEAD-SHA or created memory pills", () => {
-    const attention = { armed: [], sessionBranch: undefined }
-    expect(pillEligible(branched(own), attention)).toBe(false)
-    expect(pillEligible(chain({ runs: [run("failed")] }), attention)).toBe(false)
-    expect(pillEligible(branched(elsewhere), { armed: [{ repo, number: 4821 }], sessionBranch: undefined })).toBe(false)
+    const bare = { sessionBranch: undefined }
+    expect(pillEligible(branched(own), bare)).toBe(false)
+    expect(pillEligible(chain({ runs: [run("failed")] }), bare)).toBe(false)
+    expect(pillEligible(branched(elsewhere), bare)).toBe(false)
     const shaOwned = chain({ prs: [pull({ headBranch: elsewhere, headSha: "dd18b294" })] })
     expect(pillEligible(shaOwned, { sessionRepo: repo, sessionBranch: undefined, sessionHeadSha: "dd18b294" })).toBe(true)
   })
@@ -777,9 +776,67 @@ describe("pillEligible", () => {
     const chains = associate([recruited], [], own)
     expect(chains.length).toBe(1)
     const eligible = chains.filter((candidate) =>
-      pillEligible(candidate, { sessionBranch: own, sessionRepo: repo, armed: [] }),
+      pillEligible(candidate, { sessionBranch: own, sessionRepo: repo }),
     )
     expect(eligible).toEqual([])
+  })
+})
+
+describe("pillLeadOf", () => {
+  test("prefers the open PR, falling back to merged only for merged/pinned picks", () => {
+    const open = pull({ number: 1, state: "open" })
+    const merged = pull({ number: 2, state: "merged" })
+    const grouped = chain({ prs: [merged, open] })
+    expect(pillLeadOf(grouped, "newest")).toBe(open)
+    expect(pillLeadOf(grouped, "danger")).toBe(open)
+    expect(pillLeadOf(chain({ prs: [merged] }), "merged")).toBe(merged)
+    expect(pillLeadOf(chain({ prs: [merged] }), "pinned")).toBe(merged)
+    expect(pillLeadOf(chain({ prs: [merged] }), "newest")).toBeUndefined()
+    expect(pillLeadOf(chain({ prs: [merged] }), "danger")).toBeUndefined()
+  })
+
+  test("draft counts as a lead; pinned falls back to prs[0], others stay empty", () => {
+    const draft = pull({ number: 3, state: "draft" })
+    expect(pillLeadOf(chain({ prs: [draft] }), "newest")).toBe(draft)
+    const closed = pull({ state: "closed" })
+    expect(pillLeadOf(chain({ prs: [closed] }), "pinned")).toBe(closed)
+    expect(pillLeadOf(chain({ prs: [closed] }), "newest")).toBeUndefined()
+  })
+})
+
+describe("pillHeadIdentity", () => {
+  test("names PR leads, then issues, then runs, then the chain key", () => {
+    expect(pillHeadIdentity(chain({ key: "k", prs: [pull({ number: 7, title: "feat: thing" })] }), "newest")).toBe("#7 feat: thing")
+    expect(pillHeadIdentity(chain({ key: "k", prs: [], issues: [issue("open")] }), "pinned")).toBe("#1043 bug: thing")
+    const runChain = chain({ key: "k", prs: [], runs: [{ ...run("failed"), id: 99 }] })
+    expect(pillHeadIdentity(runChain, "pinned")).toBe("run #99")
+    expect(pillHeadIdentity(chain({ key: "lonely", prs: [], runs: [], issues: [] }), "pinned")).toBe("lonely")
+  })
+})
+
+describe("rememberCreated", () => {
+  test("accumulates owned keys per session without touching other sessions", () => {
+    const a = "sA\n/dir-a"
+    const b = "sB\n/dir-b"
+    const first = rememberCreated(new Map(), a, ["github.com/sst/opencode#pr1"])
+    expect(first.get(a)).toEqual(new Set(["github.com/sst/opencode#pr1"]))
+    const second = rememberCreated(first, b, ["github.com/sst/opencode#pr2"])
+    expect(second.get(a)).toEqual(new Set(["github.com/sst/opencode#pr1"]))
+    expect(second.get(b)).toEqual(new Set(["github.com/sst/opencode#pr2"]))
+    // No new keys: referential stability, so memos never recompute.
+    expect(rememberCreated(second, b, ["github.com/sst/opencode#pr2"])).toBe(second)
+    expect(rememberCreated(second, "sC\n/dir-c", [])).toBe(second)
+  })
+
+  test("evicts the least-recently-created session past the cap, never the writer", () => {
+    let map: ReadonlyMap<string, ReadonlySet<string>> = new Map()
+    map = rememberCreated(map, "s1\n/d1", ["k1"], 2)
+    map = rememberCreated(map, "s2\n/d2", ["k2"], 2)
+    map = rememberCreated(map, "s3\n/d3", ["k3"], 2)
+    expect([...map.keys()]).toEqual(["s2\n/d2", "s3\n/d3"])
+    // Re-touching the evicted session re-creates it, evicting the next oldest.
+    map = rememberCreated(map, "s1\n/d1", ["k1"], 2)
+    expect([...map.keys()]).toEqual(["s3\n/d3", "s1\n/d1"])
   })
 })
 

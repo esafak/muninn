@@ -286,7 +286,6 @@ export const pillEligible = (
     sessionBranch?: string
     sessionRepo?: RepoRef
     sessionHeadSha?: string
-    armed?: readonly { repo: RepoRef; number: number }[]
     created?: ReadonlySet<string>
   } = {},
 ): boolean => {
@@ -377,6 +376,10 @@ export const pinnedChain = (chains: readonly Chain[], pin: Pin): Chain | undefin
   return undefined
 }
 
+/** Why a chain earned its display slot: the `pillPick`/`pillPicks` verdict,
+ * plus `pinned` for the explicit pin override that leads them. */
+export type PillReason = "pinned" | "danger" | "newest" | "runs-only" | "merged"
+
 /** The pill's lead chain, among the eligible pool: the worst-toned PR chain
  * outranks recency (failing checks, conflicts, blocked merges, or a requested
  * review beat a calm newer one); otherwise the most recently updated open/draft PR chain; then
@@ -386,7 +389,7 @@ export const pinnedChain = (chains: readonly Chain[], pin: Pin): Chain | undefin
 export const pillPick = (
   chains: readonly Chain[],
   waitForAllStatusChecks = true,
-): { chain: Chain; reason: "danger" | "newest" | "runs-only" | "merged"; considered: number } | undefined => {
+): { chain: Chain; reason: PillReason; considered: number } | undefined => {
   const byNewest = (a: { updatedAt: number }, b: { updatedAt: number }): number => b.updatedAt - a.updatedAt
   const prChains = chains.filter((chain) => chain.prs.some((pull) => pull.state === "open" || pull.state === "draft")).toSorted(byNewest)
   const danger = prChains.find((chain) => chainTone(chain, waitForAllStatusChecks) === "danger")
@@ -418,11 +421,11 @@ export const pillPick = (
 export const pillPicks = (
   chains: readonly Chain[],
   waitForAllStatusChecks = true,
-): { chain: Chain; reason: "danger" | "newest" | "runs-only" | "merged" }[] => {
+): { chain: Chain; reason: PillReason }[] => {
   const byNewest = (a: { updatedAt: number }, b: { updatedAt: number }): number => b.updatedAt - a.updatedAt
   const seen = new Set<string>()
-  const out: { chain: Chain; reason: "danger" | "newest" | "runs-only" | "merged" }[] = []
-  const push = (chain: Chain, reason: "danger" | "newest" | "runs-only" | "merged"): void => {
+  const out: { chain: Chain; reason: PillReason }[] = []
+  const push = (chain: Chain, reason: PillReason): void => {
     if (seen.has(chain.key)) return
     seen.add(chain.key)
     out.push({ chain, reason })
@@ -446,6 +449,66 @@ export const pillPicks = (
   const runChains = chains.filter((chain) => chain.runs.length > 0).toSorted(byNewest)
   for (const chain of runChains) push(chain, "runs-only")
   return out
+}
+
+/**
+ * The lead PR a capsule or tooltip names for a pick: the worst-toned open PR
+ * (failing/conflicted/review-blocked beats calm), else the merged PR for
+ * terminal/override picks. Shared by the capsule and the debug footer so the
+ * two can never disagree about which PR a chain shows.
+ */
+export const pillLeadOf = (chain: Chain, reason: PillReason): PullEntity | undefined =>
+  chain.prs.find((pull) => pull.state === "open" || pull.state === "draft") ??
+  (reason === "merged" || reason === "pinned" ? chain.prs.find((pull) => pull.state === "merged") ?? chain.prs[0] : undefined)
+
+/**
+ * Kind-aware identity for a pick's section heading and title clauses: PRs
+ * show `#number title`, pinned issues `#number title`, pinned run-only groups
+ * `run #id`, anything else the chain key. The capsule label only ever shows
+ * PR leads; mixed picks fall back to a generic count there.
+ */
+export const pillHeadIdentity = (chain: Chain, reason: PillReason): string => {
+  const lead = pillLeadOf(chain, reason)
+  if (lead) return `#${lead.number} ${lead.title}`
+  const issue = chain.issues[0]
+  if (issue) return `#${issue.number} ${issue.title}`
+  const run = latestRun(chain.runs)
+  if (run) return `run #${run.id}`
+  return chain.key
+}
+
+/**
+ * Sticky session-created memory, keyed by session: merge this session's newly
+ * owned PR keys into its set, creating it on first use. Evicts the
+ * least-recently-created session's set past `cap` so routine multitasking
+ * (A→B→A) keeps every session's PRs without growing without bound. Pure —
+ * returns the previous map reference when nothing changed, so memoised
+ * consumers never recompute.
+ */
+export const rememberCreated = (
+  previous: ReadonlyMap<string, ReadonlySet<string>>,
+  key: string,
+  owned: readonly string[],
+  cap = 20,
+): ReadonlyMap<string, ReadonlySet<string>> => {
+  if (owned.length === 0) return previous
+  const current = previous.get(key)
+  let changed = current === undefined
+  const updated = new Set(current ?? [])
+  for (const item of owned)
+    if (!updated.has(item)) {
+      updated.add(item)
+      changed = true
+    }
+  if (!changed) return previous
+  const next = new Map(previous)
+  next.set(key, updated)
+  while (next.size > cap) {
+    const victim = [...next.keys()].find((candidate) => candidate !== key)
+    if (victim === undefined) break
+    next.delete(victim)
+  }
+  return next
 }
 
 /**

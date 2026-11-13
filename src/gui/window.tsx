@@ -15,8 +15,8 @@ import {
 } from "../providers/decision-catalog"
 import { CUSTOM_PROVIDER, mergeProviderOptions, resolveCustomCommit } from "./provider-options"
 import { validateModelSyntax } from "../candidates/model-id"
-import type { ArmedEntry, Chain, Entity, Pin, PullEntity, RepoRef, RunEntity, RunStatus } from "../model"
-import { chainTone, armedTargets, staleHeadRetryEligible, staleHeadEvidenceUsable, sessionAttemptCurrent, targetRefreshConfirmed, pillPick, pillPicks, pillEligible, pinnedChain, pinForChain, isFreshBaseSession, mergeReady, mergeWhy, pendingReviewNotice, latestRun, pullForRun, prConflicted, refKey, repoKey, entityKey } from "../model"
+import type { ArmedEntry, Chain, Entity, PillReason, Pin, PullEntity, RepoRef, RunEntity, RunStatus } from "../model"
+import { chainTone, armedTargets, staleHeadRetryEligible, staleHeadEvidenceUsable, sessionAttemptCurrent, targetRefreshConfirmed, pillPick, pillPicks, pillEligible, pillHeadIdentity, pillLeadOf, pinnedChain, pinForChain, rememberCreated, isFreshBaseSession, mergeReady, mergeWhy, pendingReviewNotice, latestRun, pullForRun, prConflicted, refKey, repoKey, entityKey } from "../model"
 import { githubLexicon } from "../providers/github/lexicon"
 import { baseCheckoutDecision, cleanFromCheck, cleanupDecision, cleanupResultMessage, cleanupSessionMatches, locateCheckout, safeFastForward, sessionMoveConfirmed, shouldFastForwardBase, shouldRecordCleanupFailure, worktreeOccupancyDecision } from "../local-cleanup"
 import type { CheckoutKind } from "../local-cleanup"
@@ -36,6 +36,10 @@ const HYDRATE_DEBOUNCE_MS = 600
  * windows, short enough that an open-after-merged (eventual consistency)
  * retries without a restart. */
 const MERGE_CONFIRM_GRACE_MS = 60_000
+
+/** Shared empty set for sessions with no created-PR memory yet: referential
+ * stability keeps the pill memo from recomputing on every read. */
+const EMPTY_CREATED: ReadonlySet<string> = new Set()
 
 export const setup: Plugin.Setup<typeof definition> = (ctx) => {
   injectStyles()
@@ -88,10 +92,14 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
   const [runs, setRuns] = createStore<Record<string, readonly RunEntity[]>>({})
   const [chains, setChains] = createSignal<readonly Chain[]>([])
   const [sessionReady, setSessionReady] = createSignal(false)
-  /** Sticky memory of PRs this session owned (branch/SHA matched while live):
+  /** Sticky memory of PRs each session owned (branch/SHA matched while live):
    * sequential multi-PR sessions keep every created PR pilled after moving to
-   * the next branch. Reset on session switch; keys are repo-scoped entity keys. */
-  const [createdKeys, setCreatedKeys] = createSignal<ReadonlySet<string>>(new Set())
+   * the next branch, and navigating away and back never drops them. Keyed by
+   * session identity + directory (the same key that reseeds the session);
+   * oldest sessions evicted past the cap. Keys are repo-scoped entity keys. */
+  const createdKeyFor = (): string => `${session()?.key ?? ""}\n${session()?.directory ?? ""}`
+  const [createdBySession, setCreatedBySession] = createSignal<ReadonlyMap<string, ReadonlySet<string>>>(new Map())
+  const createdKeys = (): ReadonlySet<string> => createdBySession().get(createdKeyFor()) ?? EMPTY_CREATED
   const mergeInFlight = new Set<string>()
   const serverBusyUntil = new Map<string, number>()
   const rejectedHeadByPR = new Map<string, string>()
@@ -305,12 +313,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
             owned.push(entityKey(pull))
         }
       if (owned.length > 0)
-        setCreatedKeys((previous) => {
-          let changed = false
-          for (const key of owned) if (!previous.has(key)) { changed = true; break }
-          if (!changed) return previous
-          return new Set([...previous, ...owned])
-        })
+        setCreatedBySession((previous) => rememberCreated(previous, createdKeyFor(), owned))
     }
     // Expiry: a pin whose chain is gone unpins so a stale override can't stick
     // the pill — but only in the session that owns it (legacy ownerless pins
@@ -594,8 +597,8 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       setEntities(cached())
       setRuns({})
       setChains([])
-      // Created-PR memory belongs to the session that earned it; never carry over.
-      setCreatedKeys(new Set<string>())
+      // Created-PR memory is keyed by session identity + directory, so arriving
+      // here needs no clearing: navigating back restores that session's set.
       // Verdicts belong to the session that produced them; never carry over.
       setVerdicts(undefined)
       setSessionReady(false)
@@ -711,10 +714,10 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
   // `debugLine`) — the same values everywhere, with no per-consumer filter for
   // the footer's census to drift away from (the failure mode the old
   // `live()`-counts-vs-`pillChains()`-pick split already produced). State-driven
-  // via `pillEligible`: the session's own PR (still shown after it merges — the
-  // pill is the session's work, and a newer PR outranks it through `pillPick`),
-  // CI needing attention, an armed merge pending. Mentions of other branches'
-  // work stay in the sidebar; settled history never pills.
+  // via `pillEligible`: only the session's own work pills — live branch/SHA
+  // match plus the sticky created set (merge-when-ready arming never recruits
+  // a pill on its own). Mentions of other branches' work stay in the sidebar;
+  // settled history never pills.
 
   const waitForAllStatusChecks = () => ctx.stores.settings.value.waitForAllStatusChecks !== false
   /** How many chains the single condensed pill covers: pinned first, then
@@ -723,13 +726,12 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
    * census, and the popover's overflow row. */
   const MAX_PILLS = 5
   const pillState = createMemo(() => {
-    if (fresh()) return { eligible: [] as Chain[], picked: undefined as { chain: Chain; reason: "pinned" | "danger" | "newest" | "runs-only" | "merged"; considered: number } | undefined, picks: [] as { chain: Chain; reason: "pinned" | "danger" | "newest" | "runs-only" | "merged" }[] }
+    if (fresh()) return { eligible: [] as Chain[], picked: undefined as { chain: Chain; reason: PillReason; considered: number } | undefined, picks: [] as { chain: Chain; reason: PillReason }[] }
     const eligible = chains().filter((chain) =>
       pillEligible(chain, {
         sessionBranch: meta.branch || undefined,
         sessionRepo: meta.repo || undefined,
         sessionHeadSha: meta.headSha || undefined,
-        armed: ctx.stores.armed.value.entries,
         created: createdKeys(),
       }),
     )
@@ -1077,17 +1079,16 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     // Every capsule in display order, then the lead's why: which rule won and
     // out of how many candidates, and how the chain chose its lead PR. Read
     // from the same memo the capsules use — eligibility and picks are never
-    // recomputed per consumer.
-    const lead = picked?.chain.prs.find((pull) => pull.state === "open" || pull.state === "draft") ??
-      (picked?.reason === "merged" ? picked.chain.prs.find((pull) => pull.state === "merged") : undefined)
+    // recomputed per consumer. Lead selection is the shared `pillLeadOf`
+    // policy, so the footer can never name a different PR than the capsule.
+    const lead = picked ? pillLeadOf(picked.chain, picked.reason) : undefined
     const pill = picks.length === 0
       ? eligible.length > 0
         ? "off: no eligible chains"
         : "off: nothing eligible"
       : picks
           .map(({ chain, reason }) => {
-            const chainLead = chain.prs.find((pull) => pull.state === "open" || pull.state === "draft") ??
-              (reason === "merged" || reason === "pinned" ? chain.prs.find((pull) => pull.state === "merged") ?? chain.prs[0] : undefined)
+            const chainLead = pillLeadOf(chain, reason)
             const chainRun = chainLead ? undefined : latestRun(chain.runs)
             if (chainLead) return `#${chainLead.number} ${chainLead.title.slice(0, 36)}${chainLead.state === "merged" ? " · merged" : ""}`
             if (chainRun) return `run #${chainRun.id}`
@@ -1365,9 +1366,8 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
   // (no single merge state to encode); tone is the worst chain tone. The
   // popover stacks one section per chain in `pillPicks` order.
   const short = (title: string): string => (title.length > 24 ? `${title.slice(0, 24)}…` : title)
-  const leadOf = (entry: { chain: Chain; reason: "pinned" | "danger" | "newest" | "runs-only" | "merged" }): PullEntity | undefined =>
-    entry.chain.prs.find((pull) => pull.state === "open" || pull.state === "draft") ??
-    (entry.reason === "merged" || entry.reason === "pinned" ? entry.chain.prs.find((pull) => pull.state === "merged") ?? entry.chain.prs[0] : undefined)
+  const leadOf = (entry: { chain: Chain; reason: PillReason }): PullEntity | undefined =>
+    pillLeadOf(entry.chain, entry.reason)
   const worstTone = (entries: readonly { chain: Chain }[]): "success" | "warning" | "danger" | undefined => {
     let seen: "success" | "warning" | "danger" | undefined
     for (const entry of entries) {
@@ -1420,26 +1420,29 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     })
     const dots = "●".repeat(Math.min(picks.length, 5))
     const pinnedSuffix = picks.some((entry) => entry.reason === "pinned") ? ` · ${ctx.t("pill.pinned")}` : ""
+    const allPr = picks.every((entry) => leadOf(entry) !== undefined)
     const title = picks
       .map((entry) => {
         const pull = leadOf(entry)
-        if (!pull) {
-          const run = latestRun(entry.chain.runs)
-          return run ? `run #${run.id} ${run.status}` : undefined
+        if (pull) {
+          return pull.state === "merged"
+            ? `#${pull.number} ${pull.title} · merged`
+            : pull.state === "open"
+              ? `#${pull.number} ${pull.title} · merge ${pull.mergeState ?? "unknown"}${pull.reviewState ? ` · reviews ${pull.reviewState}` : ""}`
+              : `#${pull.number} ${pull.title} · ${pull.state}`
         }
-        return pull.state === "merged"
-          ? `#${pull.number} ${pull.title} · merged`
-          : pull.state === "open"
-            ? `#${pull.number} ${pull.title} · merge ${pull.mergeState ?? "unknown"}${pull.reviewState ? ` · reviews ${pull.reviewState}` : ""}`
-            : `#${pull.number} ${pull.title} · ${pull.state}`
+        const issue = entry.chain.issues[0]
+        if (issue) return `${pillHeadIdentity(entry.chain, entry.reason)} · issue ${issue.state}`
+        const run = latestRun(entry.chain.runs)
+        if (run) return `${pillHeadIdentity(entry.chain, entry.reason)} · ${run.status}`
+        return entry.chain.key
       })
-      .filter((clause): clause is string => clause !== undefined)
       .join(" · ")
     return {
       icon,
       label: lead
         ? `${armed ? `${SPIN_FRAMES[spin()]} ` : ""}#${lead.number} ${short(lead.title)} ${dots} +${picks.length - 1} ▾`
-        : `${armed ? `${SPIN_FRAMES[spin()]} ` : ""}${picks.length} PRs ${dots} ▾`,
+        : `${armed ? `${SPIN_FRAMES[spin()]} ` : ""}${picks.length} ${allPr ? "PRs" : "items"} ${dots} ▾`,
       tone,
       title: `${title}${pinnedSuffix}`,
     }
@@ -1556,7 +1559,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
   const pillSettingsFoot = (): JSX.Element => (
     <>
       <div class="mn-pop-line">
-        <span class="mn-pop-more">Merge settings</span>
+        <span class="mn-pop-label">Merge settings</span>
         <select
           title="Merge method"
           value={ctx.stores.settings.value.mergeMethod}
@@ -1650,49 +1653,62 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     // One condensed capsule, one stacked popover: every pick gets its own
     // chain section in `pillPicks` order, so the dots and the popover agree.
     // Per-chain merge toggles ride with their section; merge settings appear
-    // once at the bottom.
-    menu: (input) => {
-      const picks = pillState().picks
-      if (picks.length === 0) return <div class="mn-pop" />
-      if (picks.length === 1) return pillMenuFor(picks[0]!.chain, input)
-      const overflow = pillState().eligible.length - picks.length
-      return (
-        <div class="mn-pop">
-          <For each={picks}>
-            {(entry) => (
-              <>
-                <div class="mn-pop-head">
-                  #{leadOf(entry)?.number ?? entry.chain.prs[0]?.number} {leadOf(entry)?.title ?? entry.chain.key}
-                  {entry.reason === "pinned" ? ` · ${ctx.t("pill.pinned")}` : ""}
-                </div>
-                {pillChainRows(entry.chain, input)}
-                <Show when={menuLeadFor(entry.chain)}>
-                  <div class="mn-pop-foot">
-                    <div class="mn-pop-line">
-                      {pillChainToggle(entry.chain)}
+    // once at the bottom. The list reads `pillState()` through `Show`/`For`
+    // so membership tracks refreshes while the popover is open (one→many,
+    // open→merged); per-row statuses were already store-reactive.
+    // Eligible chains beyond the cap surface as the overflow row.
+    menu: (input) => (
+      <Show
+        when={pillState().picks.length > 0}
+        fallback={<div class="mn-pop" />}
+      >
+        <Show
+          when={pillState().picks.length === 1}
+          fallback={
+            <div class="mn-pop">
+              <For each={pillState().picks}>
+                {(entry) => (
+                  <>
+                    <div class="mn-pop-head">
+                      {pillHeadIdentity(entry.chain, entry.reason)}
+                      {entry.reason === "pinned" ? ` · ${ctx.t("pill.pinned")}` : ""}
                     </div>
-                  </div>
-                </Show>
-              </>
-            )}
-          </For>
-          <Show when={overflow > 0}>
-            <div
-              class="mn-pop-more"
-              onClick={() => {
-                input.close()
-                if (input.session?.id) ctx.layout.open(`${ctx.id}:history`, input.session)
-              }}
-            >
-              +{overflow} more in the sidebar
+                    {pillChainRows(entry.chain, input)}
+                    <Show when={menuLeadFor(entry.chain)}>
+                      <div class="mn-pop-foot">
+                        <div class="mn-pop-line">
+                          {pillChainToggle(entry.chain)}
+                        </div>
+                      </div>
+                    </Show>
+                  </>
+                )}
+              </For>
+              <Show
+                when={pillState().eligible.filter((chain) => !pillState().picks.some((entry) => entry.chain.key === chain.key)).length > 0}
+              >
+                <div
+                  class="mn-pop-more"
+                  onClick={() => {
+                    input.close()
+                    if (input.session?.id) ctx.layout.open(`${ctx.id}:history`, input.session)
+                  }}
+                >
+                  +{pillState().eligible.filter((chain) => !pillState().picks.some((entry) => entry.chain.key === chain.key)).length} more in the sidebar
+                </div>
+              </Show>
+              <div class="mn-pop-foot">
+                {pillSettingsFoot()}
+              </div>
             </div>
+          }
+        >
+          <Show when={pillState().picks[0]}>
+            {(entry) => pillMenuFor(entry().chain, input)}
           </Show>
-          <div class="mn-pop-foot">
-            {pillSettingsFoot()}
-          </div>
-        </div>
-      )
-    },
+        </Show>
+      </Show>
+    ),
   })
 
   // Launcher: the side region's + menu lists Muninn so the tab can be opened.
@@ -2267,6 +2283,7 @@ const STYLES = `
 .mn-pop-title { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--v2-text-text-base); }
 .mn-pop-more { padding: 4px 8px; font-size: 11px; color: var(--v2-text-text-faint); cursor: pointer; border-radius: 7px; }
 .mn-pop-more:hover { background: var(--v2-overlay-simple-overlay-hover); color: var(--v2-text-text-muted); }
+.mn-pop-label { padding: 4px 8px 4px 0; font-size: 11px; color: var(--v2-text-text-faint); }
 .mn-pop-head { padding: 2px 8px 0; font-family: var(--v2-font-family-code); font-size: 10.5px; color: var(--v2-text-text-faint); text-transform: uppercase; letter-spacing: .04em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mn-pop-foot {
   display: flex; flex-direction: column; align-items: stretch; gap: 7px;
