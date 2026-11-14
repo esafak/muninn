@@ -409,12 +409,38 @@ describe("runEntity", () => {
     expect((await run(3, "skipped")).status).toBe("succeeded")
     expect((await run(4, "cancelled")).status).toBe("cancelled")
   })
+
+  test("treats pending runs as queued, never failed", async () => {
+    const repo = { host: "github.com", owner: "octo", repo: "repo" }
+    const entity = await runEntity(repo, {
+      id: 5,
+      workflow_id: 777,
+      name: "build",
+      display_title: "build",
+      status: "pending",
+      conclusion: null,
+      head_branch: "feat",
+      head_sha: "abc",
+      html_url: "https://github.com/octo/repo/actions/runs/5",
+      updated_at: "2026-11-10T00:00:00Z",
+      pull_requests: [],
+    }, async () => undefined, false)
+    expect(entity.status).toBe("queued")
+  })
 })
 
 describe("checkStatus", () => {
   test("treats skipped jobs as succeeded and cancelled jobs as cancelled", () => {
     expect(checkStatus({ status: "completed", conclusion: "skipped" })).toBe("succeeded")
     expect(checkStatus({ status: "completed", conclusion: "cancelled" })).toBe("cancelled")
+  })
+
+  test("treats non-completed jobs as in flight, never failed", () => {
+    expect(checkStatus({ status: "pending", conclusion: null })).toBe("queued")
+    expect(checkStatus({ status: "waiting", conclusion: null })).toBe("queued")
+    expect(checkStatus({ status: "queued", conclusion: null })).toBe("queued")
+    expect(checkStatus({ status: "in_progress", conclusion: null })).toBe("running")
+    expect(checkStatus({ status: "completed", conclusion: null })).toBe("failed")
   })
 })
 

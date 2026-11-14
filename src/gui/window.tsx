@@ -27,6 +27,7 @@ import { CancelledGlyph, CheckGlyph, CopyGlyph, CrossGlyph, IssueGlyph, MergeGly
 import { pillIcon } from "./marks"
 import { pillStatusIcon, pillStatusTone } from "./pill-status"
 import { pillPullDiagnostics } from "./pill-diagnostics"
+import { refreshKeyFor, shouldClearActiveRefresh, shouldRunAutoRefresh } from "./refresh-guard"
 
 const POLL_MS = 30_000
 /** Debounce for scan → hydrate while a message streams in. */
@@ -97,7 +98,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
    * the next branch, and navigating away and back never drops them. Keyed by
    * session identity + directory (the same key that reseeds the session);
    * oldest sessions evicted past the cap. Keys are repo-scoped entity keys. */
-  const createdKeyFor = (): string => `${session()?.key ?? ""}\n${session()?.directory ?? ""}`
+  const createdKeyFor = (): string => `${session()?.key ?? session()?.id ?? ""}\n${session()?.directory ?? ""}`
   const [createdBySession, setCreatedBySession] = createSignal<ReadonlyMap<string, ReadonlySet<string>>>(new Map())
   const createdKeys = (): ReadonlySet<string> => createdBySession().get(createdKeyFor()) ?? EMPTY_CREATED
   const mergeInFlight = new Set<string>()
@@ -117,6 +118,11 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
   }
   const refreshedPullByPR = new Map<string, PullEntity>()
   let refreshGeneration = 0
+  /** Coalescing for automatic recovery refreshes: an identical auto refresh
+   * already pending skips instead of overlapping (each start resets meta.repo,
+   * so overlap can keep discovery permanently uncommitted). */
+  let refreshActiveKey: string | undefined
+  let refreshActiveGeneration = 0
   let branchRunsBranch: string | undefined
   let resumePendingBranch: string | undefined
   let resumeInFlightBranch: string | undefined
@@ -441,6 +447,10 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     const current = session()
     if (!current) return false
     const generation = ++refreshGeneration
+    const key = refreshKeyFor(current.id, current.directory)
+    refreshActiveKey = key
+    refreshActiveGeneration = generation
+    try {
     // Operation epoch shared with the message debounce: whichever pipeline
     // starts last owns the next judgment. Captured before any network I/O so
     // a slow refresh can never overwrite a newer debounce judgment.
@@ -586,11 +596,26 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     setMeta("debug", dbg ? `srv ${dbg.server}` : "srv ?")
     if (!currentRefresh()) return false
     return refreshed
+    } finally {
+      if (shouldClearActiveRefresh(refreshActiveKey, refreshActiveGeneration, key, generation))
+        refreshActiveKey = undefined
+    }
+  }
+
+  /** Automatic recovery refresh: skips when the identical refresh is already
+   * pending, so slow repository discovery cannot be wedged by overlapping
+   * polls. Session changes and explicit targeted refreshes call refresh()
+   * directly and supersede via the generation guard. */
+  const requestAutoRefresh = (): void => {
+    const current = session()
+    if (!current) return
+    if (!shouldRunAutoRefresh(refreshActiveKey, refreshKeyFor(current.id, current.directory))) return
+    void refresh()
   }
 
   // Session (or its directory) changed: re-read everything.
   createKeyed(
-    () => `${session()?.key ?? ""}\n${session()?.directory ?? ""}`,
+    () => createdKeyFor(),
     () => {
       // Entities persist across sessions (they are repo-keyed): reseed from the
       // durable cache rather than clearing.
@@ -634,7 +659,17 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       rechain()
       return
     }
-    if (!meta.repo || found.length === 0) return
+    if (found.length === 0) return
+    const active = session()
+    if (!active) return
+    // Bootstrap without the sidebar: the pill gate needs meta.sessionID from
+    // refresh(). If the session changed without createKeyed firing (cold
+    // start, key collapse), start the refresh here (coalesced when pending).
+    if (active.id !== meta.sessionID) {
+      requestAutoRefresh()
+      return
+    }
+    if (!meta.repo) return
     if (found.length > 0 && isFreshBaseSession(meta.branch, 0) && branchRunsBranch !== meta.branch && resumePendingBranch !== meta.branch && resumeInFlightBranch !== meta.branch) {
       const generationAtSchedule = refreshGeneration
       resumePendingBranch = meta.branch
@@ -654,7 +689,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
         }
         resumePendingBranch = undefined
         resumeInFlightBranch = meta.branch
-        void refresh()
+        requestAutoRefresh()
       }, HYDRATE_DEBOUNCE_MS)
       return
     }
@@ -690,6 +725,9 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
 
   // CI state changes upstream: poll while this session has anything to show.
   // Branch moves off base must also leave the fresh state without restart.
+  // The extra arms below let a cold start self-heal without the sidebar:
+  // a gate mismatch (refresh never started for this session), a missing repo
+  // after a failed refresh, or candidates with no chains yet all retry.
   const poll = setInterval(() => {
     const current = session()
     if (!current) return
@@ -697,11 +735,17 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       .get({ location: { directory: current.directory } })
       .then((vcs) => {
         const branch = vcs?.data?.branch?.current ?? ""
-        if (branch !== meta.branch && (meta.branch !== "" || branchLoaded)) void refresh()
-        else if (chains().length > 0) void refresh()
+        if (current.id !== meta.sessionID) requestAutoRefresh()
+        else if (meta.repo === null) requestAutoRefresh()
+        else if (meta.error !== null) requestAutoRefresh()
+        else if (branch !== meta.branch && (meta.branch !== "" || branchLoaded)) requestAutoRefresh()
+        else if (chains().length > 0) requestAutoRefresh()
+        else if (refs().length > 0) requestAutoRefresh()
       })
       .catch(() => {
-        if (chains().length > 0) void refresh()
+        if (current.id !== meta.sessionID) requestAutoRefresh()
+        else if (chains().length > 0) requestAutoRefresh()
+        else if (refs().length > 0) requestAutoRefresh()
       })
   }, POLL_MS)
   onCleanup(() => {
