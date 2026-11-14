@@ -22,4 +22,10 @@ export interface Lexicon {
   urls: readonly UrlPattern[]
   /** Supports `owner/repo#123` shorthand; the regex captures (owner, repo, number). */
   shorthand?: { re: RegExp }
+  /**
+   * Matches a successful creation command's invocation (anchored at the start,
+   * so `view …; pr create` and `echo pr create` never count). The GUI uses this
+   * to treat the command's output URL as creation evidence instead of a mention.
+   */
+  creationCommand?: RegExp
 }
