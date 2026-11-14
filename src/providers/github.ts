@@ -55,7 +55,9 @@ interface RunJson {
   workflow_id?: number | null
   name: string
   display_title: string
-  status: "queued" | "in_progress" | "completed"
+  // GitHub also returns "pending" (and "waiting") for runs that have not
+  // started yet — keep this open so unknown non-completed states warn.
+  status: string
   conclusion:
     | "success"
     | "failure"
@@ -86,7 +88,8 @@ interface CommitStatusJson {
 interface CheckRunJson {
   id: number
   name: string
-  status: "queued" | "in_progress" | "completed"
+  // Same forward-compat as runs: only "completed" is terminal for tone.
+  status: string
   conclusion: string | null
   app?: { id: number } | null
 }
@@ -166,8 +169,9 @@ const closingIssues = (body: string | null): number[] => {
 }
 
 const runStatus = (run: RunJson): RunEntity["status"] => {
-  if (run.status === "queued") return "queued"
-  if (run.status === "in_progress") return "running"
+  // Only "completed" is terminal: pending/waiting/queued/in_progress and any
+  // future non-completed state mean still in flight (warning, never danger).
+  if (run.status !== "completed") return run.status === "in_progress" ? "running" : "queued"
   if (run.conclusion === "success") return "succeeded"
   if (run.conclusion === "skipped") return "succeeded"
   if (run.conclusion === "cancelled") return "cancelled"
@@ -175,8 +179,7 @@ const runStatus = (run: RunJson): RunEntity["status"] => {
 }
 
 export const checkStatus = (job: { status: string; conclusion: string | null }): RunEntity["status"] => {
-  if (job.status === "queued") return "queued"
-  if (job.status === "in_progress") return "running"
+  if (job.status !== "completed") return job.status === "in_progress" ? "running" : "queued"
   if (job.conclusion === "success") return "succeeded"
   if (job.conclusion === "skipped") return "succeeded"
   if (job.conclusion === "cancelled") return "cancelled"
@@ -190,9 +193,8 @@ const statusContextStatus = (state: string): RunEntity["status"] => {
 }
 
 const checkRunStatus = (check: CheckRunJson): RunEntity["status"] => {
-  if (check.status === "queued") return "queued"
-  if (check.status === "in_progress") return "running"
-  return check.status === "completed" && ["success", "neutral", "skipped"].includes(check.conclusion ?? "") ? "succeeded" : "failed"
+  if (check.status !== "completed") return check.status === "in_progress" ? "running" : "queued"
+  return ["success", "neutral", "skipped"].includes(check.conclusion ?? "") ? "succeeded" : "failed"
 }
 
 const statusPageHasMore = (count: number): boolean => count === 100
