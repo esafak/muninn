@@ -1,0 +1,20 @@
+src/gui/refresh-guard.test.ts
+  h_ea91e2db23540f 1-35
+src/gui/refresh-guard.ts
+  h_ea91e2db23540f 1-31
+src/gui/window.tsx
+  h_ea91e2db23540f 30,101,121-125,450-453,599-613,618,662-672,692,728-730,738-743,746-748
+src/providers/github.ts
+  h_ea91e2db23540f 504-505,507-509,541-545,672-686,717-728,747-748,752-759
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0f34b6730742c0f5c0d4c90a71e5d0c394113b6a",
+  "prompts": {},
+  "humans": {
+    "h_ea91e2db23540f": {
+      "author": "Emre Şafak <3928300+esafak@users.noreply.github.com>"
+    }
+  }
+}
