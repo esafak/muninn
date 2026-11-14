@@ -615,7 +615,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
 
   // Session (or its directory) changed: re-read everything.
   createKeyed(
-    () => `${session()?.key ?? session()?.id ?? ""}\n${session()?.directory ?? ""}`,
+    () => createdKeyFor(),
     () => {
       // Entities persist across sessions (they are repo-keyed): reseed from the
       // durable cache rather than clearing.
