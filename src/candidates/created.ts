@@ -8,9 +8,10 @@
  *
  * Generic over providers: each lexicon declares its own `creationCommand`, and
  * this scans only with the matching lexicon(s). Pure and GUI-safe: no Node, no
- * network. Conservative by construction: a failure ("already exists", error
- * prose) never seeds, and an output naming anything but exactly one PR never
- * seeds, so compound commands and listings can't recruit unrelated work.
+ * network. Conservative by construction: anything but exactly one bare URL
+ * never seeds, so failures, compounds, and listings can't recruit unrelated
+ * work. Attribution is shape-based (command anchor + single-URL output), never
+ * prose-based, so no natural-language sniffing is involved.
  */
 
 import { scanDetailed } from "../extract"
@@ -18,11 +19,8 @@ import type { Buckets } from "../extract"
 import type { Ref } from "../model"
 import type { Lexicon } from "../providers/lexicon"
 
-/** Failure prose that must never count as creation, even when it names a URL. */
-const FAILURE_MARKERS =
-  /already exists|already open|failed|error|aborted|not created|could not|no pull request/i
-
-/** Modes that never create, even though they match the create prefix. */
+/** Modes that never create, even though they match the create prefix. Flags are
+ * CLI identifiers, not localized prose. */
 const NON_CREATION_FLAGS = /(?:\s|^)(?:--help|-h|--dry-run)\b/
 
 /**
@@ -94,9 +92,10 @@ export const prCreateRefs = (
     if (hasUnquotedSeparator(output.command)) continue
     const matching = lexicons.filter((lexicon) => lexicon.creationCommand?.test(output.command!))
     if (matching.length === 0) continue
-    if (output.texts.some((text) => FAILURE_MARKERS.test(text))) continue
     // Successful creates print exactly one bare URL. JSON (`{"url": …}`),
-    // help text plus a URL, or multi-line prose never seed.
+    // help text plus a URL, failure prose, or multi-line output never seed —
+    // the shape gate subsumes prose sniffing (and never false-negatives on
+    // owner/repo names containing words like "error").
     const nonEmpty = output.texts.map((text) => text.trim()).filter((text) => text.length > 0)
     if (nonEmpty.length !== 1 || !PLAIN_URL_ONLY.test(nonEmpty[0]!)) continue
     const found = new Map<string, Ref>()
