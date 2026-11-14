@@ -26,6 +26,8 @@ export interface Lexicon {
    * Matches a successful creation command's invocation (anchored at the start,
    * so `view …; pr create` and `echo pr create` never count). The GUI uses this
    * to treat the command's output URL as creation evidence instead of a mention.
+   * Must stay non-global: it is consumed with `.test()`, which is stateful on
+   * `/g` regexes (`lastIndex` advances and matching turns intermittent).
    */
   creationCommand?: RegExp
 }

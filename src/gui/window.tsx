@@ -325,14 +325,14 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
         (ref) => ref.repo && repoKey(ref.repo) === repoKey(repo),
       )
       if (createdViaCli.length > 0) {
-        const createdKeys = new Set(
+        const createdViaCliKeys = new Set(
           createdViaCli.map((ref) => `${repoKey(ref.repo!)}#pr${ref.number}`),
         )
         for (const chain of next)
           for (const pull of chain.prs) {
             if (pull.state === "closed") continue
             if (repoKey(pull.repo) !== repoKey(repo)) continue
-            if (createdKeys.has(entityKey(pull)) && !owned.includes(entityKey(pull)))
+            if (createdViaCliKeys.has(entityKey(pull)) && !owned.includes(entityKey(pull)))
               owned.push(entityKey(pull))
           }
       }
