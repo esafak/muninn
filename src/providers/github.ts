@@ -501,9 +501,12 @@ const hydratePull = async (repo: RepoRef, number: number, auth: Auth): Promise<P
   const pull = await request<PullJson>(`/repos/${repo.owner}/${repo.repo}/pulls/${number}`, auth)
   if (!pull) return undefined
   const entity = toPullEntity(repo, pull)
-  // Reviews and commit statuses are extra reads per PR; only hydrated detail carries them.
+  // Reviews and commit statuses are extra reads per PR; a failing detail read
+  // must not lose the PR itself, or one flaky endpoint hides the pill.
   const [reviews, statusChecks] = await Promise.all([
-    request<ReviewJson[]>(`/repos/${repo.owner}/${repo.repo}/pulls/${number}/reviews?per_page=30`, auth),
+    request<ReviewJson[]>(`/repos/${repo.owner}/${repo.repo}/pulls/${number}/reviews?per_page=30`, auth).catch(
+      () => undefined,
+    ),
     shouldLoadStatusChecks(entity) ? loadStatusChecks(repo, pull.head.sha, auth) : Promise.resolve(undefined),
   ])
   return { ...entity, reviewState: reviewState(reviews), ...(statusChecks ? { statusChecks } : {}) }
@@ -535,7 +538,11 @@ const pullsForBranch = async (repo: RepoRef, branch: string, auth: Auth, retries
 export const runEntity = async (repo: RepoRef, run: RunJson, auth: Auth, withChecks: boolean): Promise<RunEntity> => {
   let checks: RunEntity["checks"] = []
   if (withChecks) {
-    const jobs = await request<JobsJson>(`/repos/${repo.owner}/${repo.repo}/actions/runs/${run.id}/jobs?per_page=20`, auth)
+    // Jobs are detail, not identity: a failing jobs read must not lose the run.
+    const jobs = await request<JobsJson>(
+      `/repos/${repo.owner}/${repo.repo}/actions/runs/${run.id}/jobs?per_page=20`,
+      auth,
+    ).catch(() => undefined)
     checks = (jobs?.jobs ?? []).slice(0, 12).map((job) => ({ name: job.name, status: checkStatus(job) }))
   }
   return {
@@ -662,12 +669,21 @@ export const github: SourceProvider = {
     for (const ref of unique.values()) epochs.set(repositoryCacheKey(ref.repo), repositoryEpoch(ref.repo))
 
     const results = await Promise.all(
-      [...unique.values()].map(async (ref) => ({
-        ref,
-        entity: await cached(`${repositoryCacheKey(ref.repo)}#${ref.kind ?? "any"}${ref.number}`, ref.repo, () =>
-          hydrateOne(ref, auth),
-        ),
-      })),
+      [...unique.values()].map(async (ref) => {
+        try {
+          const entity = await cached(
+            `${repositoryCacheKey(ref.repo)}#${ref.kind ?? "any"}${ref.number}`,
+            ref.repo,
+            () => hydrateOne(ref, auth),
+          )
+          return { ref, entity }
+        } catch {
+          // One failing ref (transient 502, rate limit) must not wedge the
+          // whole batch: it becomes unresolved while the rest still hydrate,
+          // so a PR pill survives a bad run ref.
+          return { ref, entity: undefined }
+        }
+      }),
     )
 
     const entities: Entity[] = []
@@ -698,9 +714,18 @@ export const github: SourceProvider = {
       }
     }
     const relatedEntities = await Promise.all(
-      [...related.values()].map(async (ref) => ({
-        entity: await cached(`${repositoryCacheKey(ref.repo)}#pr${ref.number}`, ref.repo, () => hydratePull(ref.repo, ref.number, auth)),
-      })),
+      [...related.values()].map(async (ref) => {
+        try {
+          const entity = await cached(
+            `${repositoryCacheKey(ref.repo)}#pr${ref.number}`,
+            ref.repo,
+            () => hydratePull(ref.repo, ref.number, auth),
+          )
+          return { entity }
+        } catch {
+          return { entity: undefined }
+        }
+      }),
     )
     entities.push(...relatedEntities.filter((result) => result.entity !== undefined).map((result) => result.entity!))
 
@@ -719,11 +744,19 @@ export const github: SourceProvider = {
   branchRuns: async (repo, branch, auth) => {
     const load = async (retries: number): Promise<{ runs: RunEntity[]; prs: PullEntity[] }> => {
       const epoch = repositoryEpoch(repo)
+      // Runs and PRs are independent: a failing runs list must not lose the
+      // branch PRs (the pill), and vice versa.
       const runs = await request<{ workflow_runs: readonly RunJson[] }>(
         `/repos/${repo.owner}/${repo.repo}/actions/runs?branch=${encodeURIComponent(branch)}&per_page=8`,
         auth,
-      )
-      const runEntities = await Promise.all((runs?.workflow_runs ?? []).map((run) => runEntity(repo, run, auth, true)))
+      ).catch(() => undefined)
+      const runEntities = (
+        await Promise.all(
+          (runs?.workflow_runs ?? []).map((run) =>
+            runEntity(repo, run, auth, true).catch(() => undefined),
+          ),
+        )
+      ).filter((entity): entity is RunEntity => entity !== undefined)
       // Branch runs are push-triggered: their pull_requests array comes back empty,
       // so query the branch's open PRs and let the GUI associate by head SHA.
       const pulls = await pullsForBranch(repo, branch, auth).catch(() => [] as PullEntity[])
