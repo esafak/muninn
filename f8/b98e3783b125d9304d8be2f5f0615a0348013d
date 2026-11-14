@@ -1,0 +1,16 @@
+src/gui/window.tsx
+  h_ea91e2db23540f 328,335
+src/providers/lexicon.ts
+  h_ea91e2db23540f 29-30
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f8b98e3783b125d9304d8be2f5f0615a0348013d",
+  "prompts": {},
+  "humans": {
+    "h_ea91e2db23540f": {
+      "author": "Emre Şafak <3928300+esafak@users.noreply.github.com>"
+    }
+  }
+}
