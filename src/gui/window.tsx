@@ -18,6 +18,7 @@ import { validateModelSyntax } from "../candidates/model-id"
 import type { ArmedEntry, Chain, Entity, PillReason, Pin, PullEntity, RepoRef, RunEntity, RunStatus } from "../model"
 import { chainTone, armedTargets, staleHeadRetryEligible, staleHeadEvidenceUsable, sessionAttemptCurrent, targetRefreshConfirmed, pillPick, pillPicks, pillEligible, pillHeadIdentity, pillLeadOf, pinnedChain, pinForChain, rememberCreated, isFreshBaseSession, mergeReady, mergeWhy, pendingReviewNotice, latestRun, pullForRun, prConflicted, refKey, repoKey, entityKey } from "../model"
 import { githubLexicon } from "../providers/github/lexicon"
+import { prCreateRefs } from "../candidates/created"
 import { baseCheckoutDecision, cleanFromCheck, cleanupDecision, cleanupResultMessage, cleanupSessionMatches, locateCheckout, safeFastForward, sessionMoveConfirmed, shouldFastForwardBase, shouldRecordCleanupFailure, worktreeOccupancyDecision } from "../local-cleanup"
 import type { CheckoutKind } from "../local-cleanup"
 import { Muninn } from "../rpc"
@@ -305,7 +306,9 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     setChains(next)
     // Remember PRs this session owns right now (branch/SHA match): the sticky
     // session-created set behind multi-pill sessions. Later branch switches
-    // must not drop earlier created PRs from the pills.
+    // must not drop earlier created PRs from the pills. A detached-HEAD
+    // `gh pr create --head` never matches branch/SHA, so its output URL also
+    // seeds created-memory: creation evidence, not a mention.
     if (repo) {
       const owned: string[] = []
       for (const chain of next)
@@ -318,6 +321,21 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
           )
             owned.push(entityKey(pull))
         }
+      const createdViaCli = prCreateRefs(buckets(), [githubLexicon]).filter(
+        (ref) => ref.repo && repoKey(ref.repo) === repoKey(repo),
+      )
+      if (createdViaCli.length > 0) {
+        const createdViaCliKeys = new Set(
+          createdViaCli.map((ref) => `${repoKey(ref.repo!)}#pr${ref.number}`),
+        )
+        for (const chain of next)
+          for (const pull of chain.prs) {
+            if (pull.state === "closed") continue
+            if (repoKey(pull.repo) !== repoKey(repo)) continue
+            if (createdViaCliKeys.has(entityKey(pull)) && !owned.includes(entityKey(pull)))
+              owned.push(entityKey(pull))
+          }
+      }
       if (owned.length > 0)
         setCreatedBySession((previous) => rememberCreated(previous, createdKeyFor(), owned))
     }

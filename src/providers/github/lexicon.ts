@@ -41,4 +41,7 @@ export const githubLexicon: Lexicon = {
     },
   ],
   shorthand: { re: new RegExp(String.raw`(?<![\w@/])(${OWNER})/(${REPO})#(\d+)\b`, "g") },
+  // Successful `gh pr create` prints the new PR's URL. Anchored so compound
+  // commands (`view …; pr create`) and echoes never count as creation.
+  creationCommand: /^\s*(gh\s+)?pr\s+create\b/i,
 }
