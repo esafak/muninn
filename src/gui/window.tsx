@@ -26,7 +26,7 @@ import type { definition } from "./definition"
 import { History, MergeButton } from "./history"
 import { CancelledGlyph, CheckGlyph, CopyGlyph, CrossGlyph, IssueGlyph, MergeGlyph, MergedGlyph, PullConflictGlyph, PullGlyph, QueuedGlyph, UnknownGlyph } from "./icons"
 import { pillIcon } from "./marks"
-import { pillStatusIcon, pillStatusTone } from "./pill-status"
+import { pillStatusIcon, pillStatusTone, aggregateStatusIcon } from "./pill-status"
 import { pillPullDiagnostics } from "./pill-diagnostics"
 import { refreshKeyFor, shouldClearActiveRefresh, shouldRunAutoRefresh } from "./refresh-guard"
 
@@ -1421,16 +1421,17 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
   // every created PR (still shown after merging). Mentions of other branches'
   // work stay in the sidebar; settled history never pills.
   //
-  // Condensing (option E): a single capsule leads with the worst-toned PR's
-  // identity plus one dot per extra PR and an overflow count —
-  // `#2730 title ●●● +2 ▾`. One PR renders exactly like the old single pill.
-  // The capsule icon is the forge mark whenever several PRs share the pill
-  // (no single merge state to encode); tone is the worst chain tone. The
-  // popover stacks one section per chain in `pillPicks` order.
+  // Condensing (option E): a single capsule leads with picks[0]'s identity
+  // (pinned-first, not necessarily the worst-toned pick) plus one dot per
+  // extra PR and an overflow count — `#2730 title ●●● +2 ▾`. One PR renders
+  // exactly like the old single pill. The capsule icon is the aggregate
+  // status circle for the worst tone across picks (it summarizes the group;
+  // the label identifies the lead). The popover stacks one section per chain
+  // in `pillPicks` order.
   const short = (title: string): string => (title.length > 24 ? `${title.slice(0, 24)}…` : title)
   const leadOf = (entry: { chain: Chain; reason: PillReason }): PullEntity | undefined =>
     pillLeadOf(entry.chain, entry.reason)
-  const worstTone = (entries: readonly { chain: Chain }[]): "success" | "warning" | "danger" | undefined => {
+  const worstTone = (entries: readonly { chain: Chain }[]): "success" | "warning" | "danger" => {
     let seen: "success" | "warning" | "danger" | undefined
     for (const entry of entries) {
       const tone = chainTone(entry.chain, waitForAllStatusChecks())
@@ -1438,7 +1439,9 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       if (tone === "warning") seen = "warning"
       else if (tone === "success" && seen === undefined) seen = "success"
     }
-    return seen
+    // Picks only exist when there is something to show, so default to warning
+    // rather than leaving the capsule untinted.
+    return seen ?? "warning"
   }
   const pillCondensedView = () => {
     const picks = pillState().picks
@@ -1450,8 +1453,8 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       const run = latestRun(entry.chain.runs)
       if (!lead && !run) return undefined
       const tone = pillStatusTone(lead?.state, chainTone(entry.chain, waitForAllStatusChecks()))
-      const mergeStatus = lead?.state === "open" ? lead.mergeState : undefined
-      const circle = pillStatusIcon(lead?.state, mergeStatus, tone, pillIcon(meta.provider))
+      const mergeStatus = lead?.state === "open" || lead?.state === "draft" ? lead.mergeState : undefined
+      const circle = pillStatusIcon(lead?.state, mergeStatus, tone)
       const pending = lead?.state === "open" ? isArmed(lead) : false
       const pinnedSuffix = entry.reason === "pinned" ? ` · ${ctx.t("pill.pinned")}` : ""
       return {
@@ -1469,13 +1472,14 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
           : `${ctx.t("pill.title")}${pinnedSuffix}`,
       }
     }
-    // Several PRs, one capsule: lead identity + one dot per pill + overflow.
-    // The icon stays the forge mark — several merge states share this pill,
-    // so no single status circle can lead it.
+    // Several PRs, one capsule: picks[0] identity + one dot per pill +
+    // overflow. The icon is the aggregate status circle for the worst tone
+    // (summarizes the group; label identifies the lead), so shape can never
+    // contradict color the way a lead-derived circle would.
     const leadEntry = picks[0]!
     const lead = leadOf(leadEntry)
     const tone = pillStatusTone(lead?.state, worstTone(picks))
-    const icon = pillIcon(meta.provider)
+    const icon = aggregateStatusIcon(tone)
     const armed = picks.some((entry) => {
       const pull = leadOf(entry)
       return pull?.state === "open" ? isArmed(pull) : false
@@ -1530,7 +1534,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
                   data-armed={isArmed(pull) ? "" : undefined}
                   title={`merge: ${pull.state === "merged" ? "merged" : pull.mergeState ?? "unknown"}${pull.reviewState ? ` · reviews: ${pull.reviewState}` : ""}${isArmed(pull) ? " · Muninn is watching" : ""}`}
                 >
-                  {pull.state === "open" && pull.mergeState == null ? <UnknownGlyph /> : <MergeGlyph />}
+                  {(pull.state === "open" || pull.state === "draft") && pull.mergeState == null ? <UnknownGlyph /> : <MergeGlyph />}
                 </span>
                 <span class="mn-pop-id">#{pull.number}</span>
                 <span class="mn-pop-title">{pull.title}</span>
@@ -1655,6 +1659,62 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     </>
   )
 
+  // Accordion expansion preserved by chain.key across live refreshes.
+  // `<For>` remounts sections when `pillState()` rebuilds entry objects, so
+  // native `<details>` state alone would reset to first-open and steal focus
+  // from an expanded merge control. First-open is only the untouched default.
+  const [accOpen, setAccOpen] = createSignal<ReadonlySet<string>>(new Set())
+  const [accTouched, setAccTouched] = createSignal(false)
+  const accIsOpen = (key: string, index: number): boolean =>
+    accTouched() ? accOpen().has(key) : index === 0
+  const onAccToggle = (key: string, open: boolean): void => {
+    setAccTouched(true)
+    setAccOpen((previous) => {
+      const next = new Set(previous)
+      if (open) next.add(key)
+      else next.delete(key)
+      return next
+    })
+  }
+
+  // One chain's accordion section for the condensed multi-chain popover.
+  // Native <details>/<summary>: first pick open, the rest collapsed, so PR
+  // groups never get cut off — the popover stays within its max-height and
+  // scrolls, and each group expands in place. Tone dot mirrors chainTone so
+  // the header never renders the host default (black).
+  const pillAccordionSection = (entry: { chain: Chain; reason: PillReason }, index: number, input: ComposerPillMenuProps): JSX.Element => {
+    const tone = (): "success" | "warning" | "danger" | undefined =>
+      chainTone(entry.chain, waitForAllStatusChecks())
+    return (
+      <details
+        class="mn-acc"
+        data-tone={tone() ?? "warning"}
+        open={accIsOpen(entry.chain.key, index) ? true : undefined}
+        onToggle={(event) => onAccToggle(entry.chain.key, event.currentTarget.open)}
+      >
+        <summary
+          class="mn-acc-head"
+          title={`${pillHeadIdentity(entry.chain, entry.reason)} · ${entry.reason}`}
+        >
+          <span class="mn-acc-caret" aria-hidden="true">▸</span>
+          <span class="mn-acc-dot" data-tone={tone() ?? "warning"} aria-hidden="true">●</span>
+          <span class="mn-acc-title">{pillHeadIdentity(entry.chain, entry.reason)}</span>
+          {entry.reason === "pinned" ? <span class="mn-acc-pin"> · {ctx.t("pill.pinned")}</span> : null}
+        </summary>
+        <div class="mn-acc-body">
+          {pillChainRows(entry.chain, input)}
+          <Show when={menuLeadFor(entry.chain)}>
+            <div class="mn-pop-foot">
+              <div class="mn-pop-line">
+                {pillChainToggle(entry.chain)}
+              </div>
+            </div>
+          </Show>
+        </div>
+      </details>
+    )
+  }
+
   // One chain's popover: the full chain picture with the merge controls the
   // sidebar has, plus the merge-method/delete-branch choices. Reads the stores
   // itself, so it stays live while open. Run ids live only here (pill grammar).
@@ -1712,13 +1772,14 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       // empty eligible list with a pin must still show the pill.
       return pillCondensedView()
     },
-    // One condensed capsule, one stacked popover: every pick gets its own
-    // chain section in `pillPicks` order, so the dots and the popover agree.
-    // Per-chain merge toggles ride with their section; merge settings appear
-    // once at the bottom. The list reads `pillState()` through `Show`/`For`
-    // so membership tracks refreshes while the popover is open (one→many,
-    // open→merged); per-row statuses were already store-reactive.
-    // Eligible chains beyond the cap surface as the overflow row.
+    // One condensed capsule, one accordion popover: every pick gets its own
+    // collapsible chain section in `pillPicks` order, so the dots and the
+    // popover agree. First section open, the rest collapsed — PR groups fit
+    // without cutoff. Per-chain merge toggles ride with their section; merge
+    // settings appear once at the bottom. The list reads `pillState()`
+    // through `Show`/`For` so membership tracks refreshes while the popover
+    // is open (one→many, open→merged); per-row statuses were already
+    // store-reactive. Eligible chains beyond the cap surface as the overflow row.
     menu: (input) => (
       <Show
         when={pillState().picks.length > 0}
@@ -1729,22 +1790,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
           fallback={
             <div class="mn-pop">
               <For each={pillState().picks}>
-                {(entry) => (
-                  <>
-                    <div class="mn-pop-head">
-                      {pillHeadIdentity(entry.chain, entry.reason)}
-                      {entry.reason === "pinned" ? ` · ${ctx.t("pill.pinned")}` : ""}
-                    </div>
-                    {pillChainRows(entry.chain, input)}
-                    <Show when={menuLeadFor(entry.chain)}>
-                      <div class="mn-pop-foot">
-                        <div class="mn-pop-line">
-                          {pillChainToggle(entry.chain)}
-                        </div>
-                      </div>
-                    </Show>
-                  </>
-                )}
+                {(entry, index) => pillAccordionSection(entry, index(), input)}
               </For>
               <Show
                 when={pillState().eligible.filter((chain) => !pillState().picks.some((entry) => entry.chain.key === chain.key)).length > 0}
@@ -2274,7 +2320,7 @@ const STYLES = `
 .mn-chain[data-tone="warning"] .mn-kind[data-state="pr-merged"], .mn-pop-chain[data-tone="warning"] .mn-kind[data-state="pr-merged"] { color: var(--v2-state-fg-warning); }
 .mn-chain[data-tone="danger"] .mn-kind[data-state="pr-merged"], .mn-pop-chain[data-tone="danger"] .mn-kind[data-state="pr-merged"] { color: var(--v2-state-fg-danger); }
 .mn-kind[data-state="pr-closed"] { color: var(--v2-state-fg-danger); }
-.mn-kind[data-state="pr-conflict"] { color: var(--v2-icon-icon-muted); }
+.mn-kind[data-state="pr-conflict"] { color: var(--v2-state-fg-danger, #cf222e); }
 .mn-id { font-family: var(--v2-font-family-code); font-size: 11.5px; font-weight: 600; flex: none; cursor: copy; }
 .mn-id.copied { color: var(--v2-state-fg-success); }
 .mn-chain[data-stale="true"] { opacity: .55; }
@@ -2335,6 +2381,24 @@ const STYLES = `
 
 /* Pill dropdown (custom popover content; the host owns the popover chrome). */
 .mn-pop { display: flex; flex-direction: column; gap: 2px; min-width: 300px; max-width: 380px; max-height: 440px; overflow-y: auto; }
+/* Accordion sections: one per PR group so long lists fit without cutoff.
+ * First section open by default; the rest expand in place. Native details
+ * keeps keyboard semantics; the caret rotates when open. */
+.mn-acc { border-radius: 8px; box-shadow: inset 0 0 0 .5px var(--v2-border-border-muted); overflow: hidden; flex: none; }
+.mn-acc + .mn-acc { margin-top: 4px; }
+.mn-acc[data-tone="danger"] { box-shadow: inset 0 0 0 .5px var(--v2-state-border-danger); }
+.mn-acc-head { display: flex; align-items: center; gap: 7px; padding: 7px 10px; cursor: pointer; list-style: none; min-width: 0; font-size: 11.5px; }
+.mn-acc-head::-webkit-details-marker { display: none; }
+.mn-acc-head:hover { background: var(--v2-overlay-simple-overlay-hover); }
+.mn-acc-caret { flex: none; font-size: 10px; color: var(--v2-text-text-faint); transition: transform .15s ease; }
+.mn-acc[open] .mn-acc-caret { transform: rotate(90deg); }
+.mn-acc-dot { flex: none; font-size: 9px; line-height: 1; }
+.mn-acc-dot[data-tone="success"] { color: var(--v2-state-fg-success, #1a7f37); }
+.mn-acc-dot[data-tone="warning"] { color: var(--v2-state-fg-warning, #9a6700); }
+.mn-acc-dot[data-tone="danger"] { color: var(--v2-state-fg-danger, #cf222e); }
+.mn-acc-title { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: var(--v2-font-family-code); color: var(--v2-text-text-base); }
+.mn-acc-pin { flex: none; font-size: 10.5px; color: var(--v2-text-text-faint); }
+.mn-acc-body { padding: 2px 2px 4px; border-top: 1px solid var(--v2-border-border-muted); }
 .mn-pop-chain { display: flex; flex-direction: column; gap: 1px; }
 .mn-pop-chain + .mn-pop-chain { margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--v2-border-border-muted); }
 .mn-pop-row { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: 7px; font-size: 12px; min-width: 0; }
@@ -2346,7 +2410,6 @@ const STYLES = `
 .mn-pop-more { padding: 4px 8px; font-size: 11px; color: var(--v2-text-text-faint); cursor: pointer; border-radius: 7px; }
 .mn-pop-more:hover { background: var(--v2-overlay-simple-overlay-hover); color: var(--v2-text-text-muted); }
 .mn-pop-label { padding: 4px 8px 4px 0; font-size: 11px; color: var(--v2-text-text-faint); }
-.mn-pop-head { padding: 2px 8px 0; font-family: var(--v2-font-family-code); font-size: 10.5px; color: var(--v2-text-text-faint); text-transform: uppercase; letter-spacing: .04em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mn-pop-foot {
   display: flex; flex-direction: column; align-items: stretch; gap: 7px;
   margin-top: 4px; padding: 8px 8px 4px;
@@ -2421,13 +2484,15 @@ const STYLES = `
   animation-duration: 1.1s;
 }
 
-/* Merge-status glyph: GitHub's circle-dot, colored by merge state. */
+/* Merge-status glyph: GitHub's circle-dot, colored by merge state. Unknown
+ * (no mergeability yet) is in-flight amber — never the muted default, which
+ * renders as black and matches no status color. Conflict is danger. */
 .mn-merge-state { color: var(--v2-icon-icon-muted); flex: none; display: inline-flex; }
 .mn-merge-state[data-state="ready"] { color: var(--v2-state-fg-success, #1a7f37); }
 .mn-merge-state[data-state="pending"] { color: var(--v2-state-fg-warning, #9a6700); }
 .mn-merge-state[data-state="blocked"] { color: var(--v2-state-fg-danger, #cf222e); }
-.mn-merge-state[data-state="unknown"] { color: var(--v2-icon-icon-muted); }
-.mn-merge-state[data-state="conflict"] { color: var(--v2-icon-icon-muted); }
+.mn-merge-state[data-state="unknown"] { color: var(--v2-state-fg-warning, #9a6700); }
+.mn-merge-state[data-state="conflict"] { color: var(--v2-state-fg-danger, #cf222e); }
 .mn-merge-state[data-state="merged"] { color: #8250df; }
 /* GitHub's merged purple needs its dark-mode pair. Placed after every merged
  * light declaration so it wins those ties; the armed rule below stays last so

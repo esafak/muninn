@@ -325,10 +325,10 @@ describe("chainTone", () => {
   test("historical runs neither block the tone nor fabricate success", () => {
     const staleFailedRun = { ...run("failed"), headSha: "previous-head" }
     const staleQueuedRun = { ...run("queued"), headSha: "previous-head" }
-    // No current-head evidence and no merge state: calm/unknown — historical
-    // runs read as neither danger/warning nor a green chain (no evidence, no merge).
-    expect(chainTone(chain({ runs: [staleFailedRun] }))).toBeUndefined()
-    expect(chainTone(chain({ runs: [staleQueuedRun] }))).toBeUndefined()
+    // No current-head evidence on an open PR is still waiting — amber, never
+    // the host default (black). Historical runs stay ignored.
+    expect(chainTone(chain({ runs: [staleFailedRun] }))).toBe("warning")
+    expect(chainTone(chain({ runs: [staleQueuedRun] }))).toBe("warning")
     expect(chainTone(chain({ runs: [run("failed")] }))).toBe("danger")
     expect(chainTone(chain({ runs: [run("running")] }))).toBe("warning")
   })
@@ -341,7 +341,7 @@ describe("chainTone", () => {
   test("blocked is danger even while checks run, but only for open PRs", () => {
     expect(chainTone(chain({ prs: [pull({ mergeState: "blocked" })], runs: [] }))).toBe("danger")
     expect(chainTone(chain({ prs: [pull({ mergeState: "blocked" })], runs: [run("running")] }))).toBe("danger")
-    expect(chainTone(chain({ prs: [pull({ state: "draft", mergeState: "blocked" })] }))).toBeUndefined()
+    expect(chainTone(chain({ prs: [pull({ state: "draft", mergeState: "blocked" })] }))).toBe("warning")
     expect(chainTone(chain({ prs: [pull({ state: "closed", mergeState: "blocked" })] }))).toBeUndefined()
     expect(chainTone(chain({ prs: [pull({ state: "merged", mergeState: "blocked" })] }))).toBe("success")
   })
@@ -361,7 +361,7 @@ describe("chainTone", () => {
 
   test("status-check policy controls green tone without hiding actual danger", () => {
     const waiting = chain({ prs: [pull({ statusChecks: { headSha: "abc123", state: "available", contexts: [{ name: "gate", status: "running" }] } })] })
-    expect(chainTone(waiting)).toBeUndefined()
+    expect(chainTone(waiting)).toBe("warning")
     expect(chainTone(waiting, false)).toBe("success")
     expect(pillPick([waiting])?.reason).toBe("newest")
     expect(pillPick([waiting], false)?.reason).toBe("newest")
