@@ -1,0 +1,16 @@
+src/gui/pill-status.test.ts
+  h_ea91e2db23540f 9,17-35
+src/gui/pill-status.ts
+  h_ea91e2db23540f 15-23,27-28,37,41-43
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5be324a663d49a251efc85edc631d005072f229d",
+  "prompts": {},
+  "humans": {
+    "h_ea91e2db23540f": {
+      "author": "Emre Şafak <3928300+esafak@users.noreply.github.com>"
+    }
+  }
+}
