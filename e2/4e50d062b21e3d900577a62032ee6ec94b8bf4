@@ -1,0 +1,29 @@
+src/gui/pill-status.test.ts
+  s_b280eafd98bb27::t_345a1840c28d44 2,54-64
+src/gui/pill-status.ts
+  s_2a49bbb7f839da::t_6c6881ed4fec3b 29-40
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e24e50d062b21e3d900577a62032ee6ec94b8bf4",
+  "prompts": {},
+  "sessions": {
+    "s_2a49bbb7f839da": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_e201bd813ffeHZrAdFyk4COW1V",
+        "model": "unknown"
+      },
+      "human_author": "Emre Şafak <3928300+esafak@users.noreply.github.com>"
+    },
+    "s_b280eafd98bb27": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_e1f2b9e22ffdBckjKG7JqnnjEg",
+        "model": "unknown"
+      },
+      "human_author": "Emre Şafak <3928300+esafak@users.noreply.github.com>"
+    }
+  }
+}
