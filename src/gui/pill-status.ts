@@ -12,13 +12,21 @@ export const pillStatusIcon = (
   if (state === "merged") return "branch"
   if (state === "closed") return "circle-xmark"
   if (state === "open" || state === "draft") {
+    // Adverse chain evidence overrides optimistic merge-state glyphs: a lone
+    // ready PR with failed runs / change requests (tone danger) must not
+    // render a red check, and warning must not stay a green check. Blocked /
+    // conflict stays xmark even under warning (more severe wins).
+    if (tone === "danger") return "circle-xmark"
+    if (tone === "warning") {
+      if (mergeState === "blocked" || mergeState === "conflict") return "circle-xmark"
+      return "circle-exclamation"
+    }
     if (mergeState === "ready") return "circle-check"
     if (mergeState === "pending") return "circle-exclamation"
     if (mergeState === "blocked" || mergeState === "conflict") return "circle-xmark"
-    // Unknown merge state on an open/draft PR is still in-flight: tone wins
-    // when present, otherwise default to the pending mark.
+    // Unknown merge state with success tone (or undefined fallback) resolves
+    // to the pending mark unless tone already proved green.
     if (tone === "success") return "circle-check"
-    if (tone === "danger") return "circle-xmark"
     return "circle-exclamation"
   }
   if (tone === "success") return "circle-check"
@@ -26,11 +34,13 @@ export const pillStatusIcon = (
   return "circle-exclamation"
 }
 
-// Aggregate icon for multi-pick capsules: the icon summarizes the group,
+// Aggregate icon for multi-pick capsules only: the icon summarizes the group,
 // the label identifies its lead (picks[0], pinned-first). A per-pick circle
 // would contradict the aggregate tone (e.g. a ready lead's check in danger
 // red when a sibling fails), and chainTone can report danger while that same
-// PR's mergeState stays ready — so shape must derive from tone alone.
+// PR's mergeState stays ready — so multi-pick shape derives from tone alone.
+// Single-pick capsules keep per-PR mergeState detail via pillStatusIcon,
+// which applies the same adverse-evidence override when tone diverges.
 export const aggregateStatusIcon = (
   tone: NonNullable<ComposerPillTone>,
 ): IconName => {

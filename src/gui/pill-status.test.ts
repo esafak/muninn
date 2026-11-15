@@ -6,7 +6,7 @@ describe("pillStatusIcon", () => {
     expect(pillStatusIcon("merged", "ready", undefined)).toBe("branch")
   })
 
-  test("maps open pull request merge states to status icons", () => {
+  test("maps open pull request merge states to status icons when tone is consistent", () => {
     const cases = [
       ["ready", "circle-check"],
       ["pending", "circle-exclamation"],
@@ -14,7 +14,25 @@ describe("pillStatusIcon", () => {
       ["conflict", "circle-xmark"],
     ] as const
     for (const [mergeState, icon] of cases)
-      expect(pillStatusIcon("open", mergeState, "danger")).toBe(icon)
+      expect(pillStatusIcon("open", mergeState, "success")).toBe(icon)
+  })
+
+  test("adverse chain evidence overrides optimistic merge-state glyphs (open and draft)", () => {
+    const cases = [
+      ["open", "ready", "danger", "circle-xmark"],
+      ["open", "ready", "warning", "circle-exclamation"],
+      ["open", "pending", "danger", "circle-xmark"],
+      ["open", "blocked", "warning", "circle-xmark"],
+      ["open", "conflict", "warning", "circle-xmark"],
+      ["draft", "ready", "danger", "circle-xmark"],
+      ["draft", "ready", "warning", "circle-exclamation"],
+      ["draft", "pending", "danger", "circle-xmark"],
+      ["open", "ready", undefined, "circle-check"],
+      ["draft", "ready", undefined, "circle-check"],
+      ["open", undefined, undefined, "circle-exclamation"],
+    ] as const
+    for (const [state, mergeState, tone, icon] of cases)
+      expect(pillStatusIcon(state, mergeState, tone)).toBe(icon)
   })
 
   test("unknown open merge state uses tone, never a provider fallback", () => {
