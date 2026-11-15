@@ -2,10 +2,8 @@ import { describe, expect, test } from "bun:test"
 import { pillStatusIcon, pillStatusTone } from "./pill-status"
 
 describe("pillStatusIcon", () => {
-  const fallback = "github"
-
   test("uses a distinct branch icon for merged PRs", () => {
-    expect(pillStatusIcon("merged", "ready", undefined, fallback)).toBe("branch")
+    expect(pillStatusIcon("merged", "ready", undefined)).toBe("branch")
   })
 
   test("maps open pull request merge states to status icons", () => {
@@ -16,19 +14,23 @@ describe("pillStatusIcon", () => {
       ["conflict", "circle-xmark"],
     ] as const
     for (const [mergeState, icon] of cases)
-      expect(pillStatusIcon("open", mergeState, "danger", fallback)).toBe(icon)
+      expect(pillStatusIcon("open", mergeState, "danger")).toBe(icon)
   })
 
-  test("falls back to chain tone for unknown open merge state", () => {
-    expect(pillStatusIcon("open", null, "warning", fallback)).toBe("circle-exclamation")
-    expect(pillStatusIcon("open", undefined, undefined, fallback)).toBe(fallback)
+  test("unknown open merge state uses tone, never a provider fallback", () => {
+    expect(pillStatusIcon("open", null, "warning")).toBe("circle-exclamation")
+    expect(pillStatusIcon("open", undefined, undefined)).toBe("circle-exclamation")
+    expect(pillStatusIcon("open", null, "success")).toBe("circle-check")
+    expect(pillStatusIcon("open", null, "danger")).toBe("circle-xmark")
+    expect(pillStatusIcon("draft", undefined, undefined)).toBe("circle-exclamation")
   })
 
-  test("preserves tone and provider fallback for draft, closed, and run-only pills", () => {
-    expect(pillStatusIcon("draft", undefined, "danger", fallback)).toBe("circle-xmark")
-    expect(pillStatusIcon("closed", undefined, undefined, fallback)).toBe(fallback)
-    expect(pillStatusIcon(undefined, undefined, "success", fallback)).toBe("circle-check")
-    expect(pillStatusIcon(undefined, undefined, undefined, fallback)).toBe(fallback)
+  test("closed and run-only pills are status circles, never a fallback", () => {
+    expect(pillStatusIcon("draft", undefined, "danger")).toBe("circle-xmark")
+    expect(pillStatusIcon("draft", "ready", undefined)).toBe("circle-check")
+    expect(pillStatusIcon("closed", undefined, undefined)).toBe("circle-xmark")
+    expect(pillStatusIcon(undefined, undefined, "success")).toBe("circle-check")
+    expect(pillStatusIcon(undefined, undefined, undefined)).toBe("circle-exclamation")
   })
 })
 
@@ -38,10 +40,14 @@ describe("pillStatusTone", () => {
     expect(pillStatusTone("merged", "success")).toBe("success")
   })
 
-  test("preserves warning and danger tones and leaves other states unchanged", () => {
+  test("is total: every rendered pill gets a status tone", () => {
     expect(pillStatusTone("merged", "warning")).toBe("warning")
     expect(pillStatusTone("merged", "danger")).toBe("danger")
     expect(pillStatusTone("open", "success")).toBe("success")
-    expect(pillStatusTone(undefined, undefined)).toBeUndefined()
+    expect(pillStatusTone("open", undefined)).toBe("warning")
+    expect(pillStatusTone("draft", undefined)).toBe("warning")
+    expect(pillStatusTone("closed", undefined)).toBe("danger")
+    expect(pillStatusTone(undefined, undefined)).toBe("warning")
+    expect(pillStatusTone(undefined, "danger")).toBe("danger")
   })
 })

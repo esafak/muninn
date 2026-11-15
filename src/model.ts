@@ -587,7 +587,10 @@ export const armedTargets = (
 /**
  * Worst-state helper for pill and history tones: failing runs, conflicts,
  * requested changes, and blocked merges are danger; pending and in-flight work
- * are warning; a fully green chain reads as success.
+ * are warning; a fully green chain reads as success. Open/draft PRs never
+ * return undefined (they fall back to warning so pills never render the
+ * host default black, which matches no status color); only settled
+ * (closed/issue-only/run-settled) chains stay undefined.
  */
 export const chainTone = (chain: Chain, waitForAllStatusChecks = true): "success" | "warning" | "danger" | undefined => {
   const lead = chain.prs.find((pull) => pull.state === "open" || pull.state === "draft") ?? chain.prs[0]
@@ -604,6 +607,9 @@ export const chainTone = (chain: Chain, waitForAllStatusChecks = true): "success
   if (lead?.state === "open" && mergeReady(chain, lead, waitForAllStatusChecks)) return "success"
   if (lead?.state === "merged") return "success"
   if (chain.prs.length === 0 && relevantRuns.some((run) => run.status === "succeeded")) return "success"
+  // Open/draft work with no evidence yet (unknown merge state, no current
+  // runs, unavailable snapshots) is still waiting — amber, never undefined.
+  if (lead?.state === "open" || lead?.state === "draft") return "warning"
   return undefined
 }
 

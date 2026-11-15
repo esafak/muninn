@@ -257,7 +257,7 @@ export const History = (props: HistoryProps) => {
                       >
                         {pull.state === "merged" ? <MergedGlyph /> : prConflicted(pull) ? <PullConflictGlyph /> : <PullGlyph />}
                       </span>
-                      <Show when={pull.state === "open" || pull.state === "merged" || audit() !== undefined}>
+                      <Show when={pull.state === "open" || pull.state === "draft" || pull.state === "merged" || audit() !== undefined}>
                         <span
                           class="mn-merge-state"
                           data-state={pull.state === "merged" ? "merged" : pull.mergeState ?? "unknown"}
@@ -267,7 +267,11 @@ export const History = (props: HistoryProps) => {
                             `merge: ${pull.state === "merged" ? "merged" : pull.mergeState ?? "unknown"}${pull.reviewState ? ` · reviews: ${pull.reviewState}` : ""}${props.isArmed(pull) ? " · Muninn is watching" : ""}`
                           }
                         >
-                          {pull.state === "open" && pull.mergeState == null ? <UnknownGlyph /> : <MergeGlyph />}
+                          {pull.state === "open" || pull.state === "draft" ? (
+                            pull.mergeState == null ? <UnknownGlyph /> : <MergeGlyph />
+                          ) : (
+                            <MergeGlyph />
+                          )}
                         </span>
                       </Show>
                       <span
