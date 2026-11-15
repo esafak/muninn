@@ -24,8 +24,8 @@ export const pillStatusIcon = (
     if (mergeState === "ready") return "circle-check"
     if (mergeState === "pending") return "circle-exclamation"
     if (mergeState === "blocked" || mergeState === "conflict") return "circle-xmark"
-    // Unknown merge state with success tone (or undefined fallback) resolves
-    // to the pending mark unless tone already proved green.
+    // Unknown merge state is still in-flight: success tone proved green,
+    // everything else (including no tone) keeps the pending mark.
     if (tone === "success") return "circle-check"
     return "circle-exclamation"
   }
