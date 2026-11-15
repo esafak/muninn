@@ -1,0 +1,24 @@
+src/gui/history.tsx
+  h_ea91e2db23540f 260,270-274
+src/gui/pill-status.test.ts
+  h_ea91e2db23540f 6,17,20-25,28-33,43,47-51
+src/gui/pill-status.ts
+  h_ea91e2db23540f 4-6,13-14,18-22,26,29-32,36-42
+src/gui/window.tsx
+  h_ea91e2db23540f 1433,1441-1443,1455-1456,1475-1476,1480-1481,1536,1661-1716,1774-1781,1792,2322,2383-2400,2487-2489,2494-2495
+src/model.test.ts
+  h_ea91e2db23540f 328-331,344,364
+src/model.ts
+  h_ea91e2db23540f 590-593,610-612
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "27f2778af86f2f465055dc26c95d4fcb9344affa",
+  "prompts": {},
+  "humans": {
+    "h_ea91e2db23540f": {
+      "author": "Emre Şafak <3928300+esafak@users.noreply.github.com>"
+    }
+  }
+}
