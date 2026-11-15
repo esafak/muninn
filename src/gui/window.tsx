@@ -26,7 +26,7 @@ import type { definition } from "./definition"
 import { History, MergeButton } from "./history"
 import { CancelledGlyph, CheckGlyph, CopyGlyph, CrossGlyph, IssueGlyph, MergeGlyph, MergedGlyph, PullConflictGlyph, PullGlyph, QueuedGlyph, UnknownGlyph } from "./icons"
 import { pillIcon } from "./marks"
-import { pillStatusIcon, pillStatusTone } from "./pill-status"
+import { pillStatusIcon, pillStatusTone, aggregateStatusIcon } from "./pill-status"
 import { pillPullDiagnostics } from "./pill-diagnostics"
 import { refreshKeyFor, shouldClearActiveRefresh, shouldRunAutoRefresh } from "./refresh-guard"
 
@@ -1421,12 +1421,13 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
   // every created PR (still shown after merging). Mentions of other branches'
   // work stay in the sidebar; settled history never pills.
   //
-  // Condensing (option E): a single capsule leads with the worst-toned PR's
-  // identity plus one dot per extra PR and an overflow count —
-  // `#2730 title ●●● +2 ▾`. One PR renders exactly like the old single pill.
-  // The capsule icon is the forge mark whenever several PRs share the pill
-  // (no single merge state to encode); tone is the worst chain tone. The
-  // popover stacks one section per chain in `pillPicks` order.
+  // Condensing (option E): a single capsule leads with picks[0]'s identity
+  // (pinned-first, not necessarily the worst-toned pick) plus one dot per
+  // extra PR and an overflow count — `#2730 title ●●● +2 ▾`. One PR renders
+  // exactly like the old single pill. The capsule icon is the aggregate
+  // status circle for the worst tone across picks (it summarizes the group;
+  // the label identifies the lead). The popover stacks one section per chain
+  // in `pillPicks` order.
   const short = (title: string): string => (title.length > 24 ? `${title.slice(0, 24)}…` : title)
   const leadOf = (entry: { chain: Chain; reason: PillReason }): PullEntity | undefined =>
     pillLeadOf(entry.chain, entry.reason)
@@ -1471,14 +1472,14 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
           : `${ctx.t("pill.title")}${pinnedSuffix}`,
       }
     }
-    // Several PRs, one capsule: lead identity + one dot per pill + overflow.
-    // The icon is the lead's status circle — we already know there are PRs,
-    // so no provider fallback. Tone is the worst across picks.
+    // Several PRs, one capsule: picks[0] identity + one dot per pill +
+    // overflow. The icon is the aggregate status circle for the worst tone
+    // (summarizes the group; label identifies the lead), so shape can never
+    // contradict color the way a lead-derived circle would.
     const leadEntry = picks[0]!
     const lead = leadOf(leadEntry)
     const tone = pillStatusTone(lead?.state, worstTone(picks))
-    const leadMerge = lead?.state === "open" || lead?.state === "draft" ? lead.mergeState : undefined
-    const icon = pillStatusIcon(lead?.state, leadMerge, tone)
+    const icon = aggregateStatusIcon(tone)
     const armed = picks.some((entry) => {
       const pull = leadOf(entry)
       return pull?.state === "open" ? isArmed(pull) : false
@@ -2409,7 +2410,6 @@ const STYLES = `
 .mn-pop-more { padding: 4px 8px; font-size: 11px; color: var(--v2-text-text-faint); cursor: pointer; border-radius: 7px; }
 .mn-pop-more:hover { background: var(--v2-overlay-simple-overlay-hover); color: var(--v2-text-text-muted); }
 .mn-pop-label { padding: 4px 8px 4px 0; font-size: 11px; color: var(--v2-text-text-faint); }
-.mn-pop-head { padding: 2px 8px 0; font-family: var(--v2-font-family-code); font-size: 10.5px; color: var(--v2-text-text-faint); text-transform: uppercase; letter-spacing: .04em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mn-pop-foot {
   display: flex; flex-direction: column; align-items: stretch; gap: 7px;
   margin-top: 4px; padding: 8px 8px 4px;
