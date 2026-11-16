@@ -1,0 +1,47 @@
+src/candidates/candidates.test.ts
+  s_4d5b822d6ecb67::t_fd353f47a40839 28-45
+src/candidates/created.test.ts
+  s_11f2c1b7b2e8a1::t_c6c296d1cf8ee4 2,80-171
+src/candidates/created.ts
+  s_11f2c1b7b2e8a1::t_610802f6577651 17,19-20,128-308
+src/gui/window.tsx
+  s_11f2c1b7b2e8a1::t_da1123c9750d37 19-21,181-200,322-340,379-391,569,578-584,783-784,840-845,854-868,873,875,877,1207,1247-1257,1260
+src/model.ts
+  s_11f2c1b7b2e8a1::t_e1e738c96af536 269-305,309,312,317,320-331,340-352,355-358,461,494-510
+src/providers/github/lexicon.ts
+  s_4d5b822d6ecb67::t_974f9b442c56af 47-54
+src/providers/lexicon.ts
+  s_8a13da22490f4f::t_a3a3097081cf8d 18-31,47-52
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "91e9976ffbffa563676e0c8507286a1c7b006477",
+  "prompts": {},
+  "sessions": {
+    "s_11f2c1b7b2e8a1": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_e1b236635ffeeUTutNDEOOretm",
+        "model": "unknown"
+      },
+      "human_author": "Emre Şafak <3928300+esafak@users.noreply.github.com>"
+    },
+    "s_4d5b822d6ecb67": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_e19efb96fffeMISjOUPh8WhATi",
+        "model": "unknown"
+      },
+      "human_author": "Emre Şafak <3928300+esafak@users.noreply.github.com>"
+    },
+    "s_8a13da22490f4f": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_e1aa81450ffeZCNLtEPNsQEm8Y",
+        "model": "unknown"
+      },
+      "human_author": "Emre Şafak <3928300+esafak@users.noreply.github.com>"
+    }
+  }
+}
