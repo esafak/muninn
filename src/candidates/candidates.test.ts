@@ -25,6 +25,24 @@ describe("heuristic strict matches deliberateRefs", () => {
     expect(strict.snippets.size).toBe(1)
   })
 
+  test("CLI-only command refs recruit at command tier in strict and permissive, with snippets", () => {
+    const buckets = messageBuckets([assistant([toolPart({ command: "gh pr view 3670" }, "all green")])])
+    for (const mode of ["strict", "permissive"] as const) {
+      const { refs, snippets } = heuristicExtract(buckets, repo, [githubLexicon], mode)
+      expect(refs, mode).toEqual([{ kind: "pr", number: 3670, repo, tier: "command" }])
+      expect(snippets.get("github.com/sst/opencode#pr3670"), mode).toEqual({ text: "gh pr view 3670" })
+    }
+  })
+
+  test("a command invocation never shadows output prose for the snippet", () => {
+    const buckets = messageBuckets([assistant([toolPart({ command: "gh pr view 3670" }, "PR 3670 is open")])])
+    const { snippets } = heuristicExtract(buckets, repo, [githubLexicon], "strict")
+    expect(snippets.get("github.com/sst/opencode#pr3670")).toEqual({
+      text: "PR 3670 is open",
+      command: "gh pr view 3670",
+    })
+  })
+
   test("snippet keeps the output's own command, not a neighbor's", () => {
     const buckets = messageBuckets([
       assistant([toolPart({ command: "gh pr list" }, "PR 100 x"), toolPart({ command: "gh pr view 3670" }, "PR 3670 is open")]),

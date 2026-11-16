@@ -16,9 +16,10 @@ import {
 import { CUSTOM_PROVIDER, mergeProviderOptions, resolveCustomCommit } from "./provider-options"
 import { validateModelSyntax } from "../candidates/model-id"
 import type { ArmedEntry, Chain, Entity, PillReason, Pin, PullEntity, RepoRef, RunEntity, RunStatus } from "../model"
-import { chainTone, armedTargets, staleHeadRetryEligible, staleHeadEvidenceUsable, sessionAttemptCurrent, targetRefreshConfirmed, pillPick, pillPicks, pillEligible, pillHeadIdentity, pillLeadOf, pinnedChain, pinForChain, rememberCreated, isFreshBaseSession, mergeReady, mergeWhy, pendingReviewNotice, latestRun, pullForRun, prConflicted, refKey, repoKey, entityKey } from "../model"
+import { chainTone, armedTargets, staleHeadRetryEligible, staleHeadEvidenceUsable, sessionAttemptCurrent, targetRefreshConfirmed, pillPick, pillPicks, pillDisplay, pillEligible, eligibilityProvenances, pillHeadIdentity, pillLeadOf, pinnedChain, pinForChain, rememberCreated, isFreshBaseSession, mergeReady, mergeWhy, pendingReviewNotice, latestRun, pullForRun, prConflicted, refKey, repoKey, entityKey } from "../model"
+import { mentionEvidence } from "../candidates/mention-evidence"
+import { prCreateBranchLinks, prCreateRefs, validateCreateLinks } from "../candidates/created"
 import { githubLexicon } from "../providers/github/lexicon"
-import { prCreateRefs } from "../candidates/created"
 import { baseCheckoutDecision, cleanFromCheck, cleanupDecision, cleanupResultMessage, cleanupSessionMatches, locateCheckout, safeFastForward, sessionMoveConfirmed, shouldFastForwardBase, shouldRecordCleanupFailure, worktreeOccupancyDecision } from "../local-cleanup"
 import type { CheckoutKind } from "../local-cleanup"
 import { Muninn } from "../rpc"
@@ -178,6 +179,26 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
   const snippets = () => extracted().snippets
 
   /**
+   * Dedicated creation candidates: branch-linked `push && pr create`
+   * compounds hydrate their PR for branch validation even when ordinary
+   * extraction drops the output URL. Command-tier evidence (the invocation
+   * names the branch); deduped against the base refs by entity key.
+   */
+  const creationRequests = (base: readonly TieredRef[]): TieredRef[] => {
+    const have = new Set(base.map((ref) => refKey(ref)))
+    const extra: TieredRef[] = []
+    for (const link of prCreateBranchLinks(buckets(), [githubLexicon])) {
+      const candidate: TieredRef = { repo: link.repo, number: link.number, kind: "pr", tier: "command" }
+      const key = refKey(candidate)
+      if (!have.has(key)) {
+        have.add(key)
+        extra.push(candidate)
+      }
+    }
+    return extra
+  }
+
+  /**
    * Per-ref keep/drop verdicts, scoped to the session + directory + provider +
    * model that produced them. `undefined` (or a scope mismatch) means heuristic
    * keep-all: verdicts never leak across sessions, models, or provider switches.
@@ -298,6 +319,25 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
           related.push(candidate)
       }
     }
+    // Branch-linked creates hydrate through the dedicated path even when
+    // ordinary extraction drops their URL: admit validated PRs so they
+    // chain, and the owned block below seeds created-memory from the same
+    // links. Validation (repo + number + headBranch, still open) runs
+    // against hydrated entities, never against transcript prose.
+    if (repo) {
+      const links = prCreateBranchLinks(buckets(), [githubLexicon]).filter(
+        (link) => repoKey(link.repo) === repoKey(repo),
+      )
+      if (links.length > 0) {
+        const prs = Object.values(entities).filter(
+          (entity): entity is PullEntity => entity.kind === "pr",
+        )
+        for (const key of validateCreateLinks(links, prs)) {
+          const pull = entities[key]
+          if (pull && !relevant.includes(pull) && !related.includes(pull)) related.push(pull)
+        }
+      }
+    }
     if (isFreshBaseSession(meta.branch, refs().length)) {
       setChains([])
       return
@@ -335,6 +375,19 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
             if (createdViaCliKeys.has(entityKey(pull)) && !owned.includes(entityKey(pull)))
               owned.push(entityKey(pull))
           }
+      }
+      // Branch-linked compound creates (`git push … && gh pr create --head B`):
+      // seed only after hydration confirms the PR's head branch equals `--head`
+      // (same-repo; closed work drops out in the validator).
+      const branchLinks = prCreateBranchLinks(buckets(), [githubLexicon]).filter(
+        (link) => repoKey(link.repo) === repoKey(repo),
+      )
+      if (branchLinks.length > 0) {
+        const linkKeys = validateCreateLinks(
+          branchLinks,
+          next.flatMap((chain) => chain.prs),
+        )
+        for (const key of linkKeys) if (!owned.includes(key)) owned.push(key)
       }
       if (owned.length > 0)
         setCreatedBySession((previous) => rememberCreated(previous, createdKeyFor(), owned))
@@ -513,7 +566,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
         const recoveryKeys = new Set(recoveryTargets.map((entry) => mergeKey(entry.repo, entry.number)))
         for (const key of recoveryKeys) refreshedPullByPR.delete(key)
         const recoveredPulls = new Map<string, PullEntity>()
-        const requested = [
+        const requestedBase: TieredRef[] = [
           ...found,
           ...recoveryTargets.map((entry) => ({
             repo: entry.repo,
@@ -522,6 +575,13 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
             tier: "user" as const,
           })),
         ]
+        // Dedicated creation path: branch-linked `push && pr create`
+        // compounds hydrate their PR for branch validation even when
+        // ordinary extraction drops the output URL (listing, judge drop).
+        // Creation evidence is not a mention, so this bypasses mention-drop
+        // filtering by design; the URL still only seeds on a head-branch
+        // match in rechain.
+        const requested = [...requestedBase, ...creationRequests(requestedBase)]
         let targetPull: PullEntity | undefined
         let targetUnresolved = false
         if (requested.length > 0) {
@@ -720,7 +780,8 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       if (!current) return
       // Same shared epoch: a debounce that fires later wins over an older refresh.
       const epoch = ++judgeEpoch
-      const wire = wireRefs(refs())
+      const base = refs()
+      const wire = wireRefs([...base, ...creationRequests(base)])
       void ctx.client
         .rpc(Muninn)
         .hydrate({ directory: current.directory, refs: wire.refs })
@@ -776,10 +837,12 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
   // `debugLine`) — the same values everywhere, with no per-consumer filter for
   // the footer's census to drift away from (the failure mode the old
   // `live()`-counts-vs-`pillChains()`-pick split already produced). State-driven
-  // via `pillEligible`: only the session's own work pills — live branch/SHA
-  // match plus the sticky created set (merge-when-ready arming never recruits
-  // a pill on its own). Mentions of other branches' work stay in the sidebar;
-  // settled history never pills.
+  // via `pillEligible`: the session's own work pills — live branch/SHA match,
+  // the sticky created set (including branch-linked `push && pr create`
+  // compounds), or a deliberate same-repo mention (user/command/prose tiers;
+  // output-tier never recruits) — plus the explicit pin override (merge-when-
+  // ready arming never recruits a pill on its own). Cross-repo mentions stay
+  // in the sidebar; settled history never pills.
 
   const waitForAllStatusChecks = () => ctx.stores.settings.value.waitForAllStatusChecks !== false
   /** How many chains the single condensed pill covers: pinned first, then
@@ -788,26 +851,30 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
    * census, and the popover's overflow row. */
   const MAX_PILLS = 5
   const pillState = createMemo(() => {
-    if (fresh()) return { eligible: [] as Chain[], picked: undefined as { chain: Chain; reason: PillReason; considered: number } | undefined, picks: [] as { chain: Chain; reason: PillReason }[] }
-    const eligible = chains().filter((chain) =>
-      pillEligible(chain, {
-        sessionBranch: meta.branch || undefined,
-        sessionRepo: meta.repo || undefined,
-        sessionHeadSha: meta.headSha || undefined,
-        created: createdKeys(),
-      }),
-    )
+    if (fresh()) return { eligible: [] as Chain[], picked: undefined as { chain: Chain; reason: PillReason; considered: number } | undefined, picks: [] as { chain: Chain; reason: PillReason }[], provenance: new Map<string, string[]>() as Map<string, string[]> }
+    // Deliberate same-repo mention evidence for the dots: user/command/prose
+    // survivors mapped to hydrated PRs (output-tier never enters; explicit
+    // PR-kind drops excluded in the helper). Shared with the pill filter —
+    // the footer reads the same provenance map, never a second filter.
+    const mentioned = mentionEvidence(filteredRefs(), entities, verdictsForSession())
+    const eligibilityCtx = {
+      sessionBranch: meta.branch || undefined,
+      sessionRepo: meta.repo || undefined,
+      sessionHeadSha: meta.headSha || undefined,
+      created: createdKeys(),
+      mentioned,
+    }
+    const eligible = chains().filter((chain) => pillEligible(chain, eligibilityCtx))
+    const provenance = new Map(chains().map((chain) => [chain.key, eligibilityProvenances(chain, eligibilityCtx)] as const))
     const normal = pillPick(eligible, waitForAllStatusChecks())
     // Single-pin override: pull identity (or chain key) bypasses eligibility.
     // Expiry is disappearance: a pinned chain that's gone unpins on next rechain.
     const pinned = pinnedChain(chains(), ctx.stores.pinned.value)
+    const picks = pillDisplay(eligible, pinned, waitForAllStatusChecks(), MAX_PILLS)
     if (pinned) {
-      const ordered = pillPicks(eligible, waitForAllStatusChecks()).filter((entry) => entry.chain.key !== pinned.key)
-      const picks = [{ chain: pinned, reason: "pinned" as const }, ...ordered].slice(0, MAX_PILLS)
-      return { eligible, picked: { chain: pinned, reason: "pinned" as const, considered: eligible.length + 1 }, picks }
+      return { eligible, picked: { chain: pinned, reason: "pinned" as const, considered: eligible.length + 1 }, picks, provenance }
     }
-    const picks = pillPicks(eligible, waitForAllStatusChecks()).slice(0, MAX_PILLS)
-    return { eligible, picked: normal, picks }
+    return { eligible, picked: normal, picks, provenance }
   })
 
   const isPinned = (chain: Chain): boolean => {
@@ -1137,7 +1204,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
   const debugLine = () => {
     const current = session()
     const gate = current?.id === meta.sessionID ? "✓" : "✗"
-    const { eligible, picked, picks } = pillState()
+    const { eligible, picked, picks, provenance } = pillState()
     // Every capsule in display order, then the lead's why: which rule won and
     // out of how many candidates, and how the chain chose its lead PR. Read
     // from the same memo the capsules use — eligibility and picks are never
@@ -1177,9 +1244,20 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       : `pick: ${picked.reason}${picked.considered > 1 ? ` of ${picked.considered}` : ""} · lead ${
           picked.chain.prs[0] ? (picked.chain.prs[0].headBranch === meta.branch ? "branch match" : "newest") : "—"
         }`
+    // Per-dot eligibility provenance from the same memo the capsules use:
+    // every applicable rule joined (`branch+mention`), with the explicit
+    // pin override listed first when it applies (`pinned+created`).
+    const via = picks.length === 0 ? "" : ` · via ${picks
+      .map(({ chain, reason }) => {
+        const lead = pillLeadOf(chain, reason)
+        const rules = provenance.get(chain.key) ?? []
+        const shown = isPinned(chain) ? ["pinned", ...rules] : rules.length > 0 ? rules : ["none"]
+        return `#${lead?.number ?? "?"}:${shown.join("+")}`
+      })
+      .join(", ")}`
     const error = meta.error ? ` · err ${meta.error.slice(0, 200)}` : ""
     const pullEvidence = pillPullDiagnostics(lead)
-    return `mn gui ${__MN_BUILD__}${meta.debug ? ` · ${meta.debug}` : " · srv ?"} · gate ${gate} ${current?.id ?? "?"} · chains ${chains().length} · eligible ${eligible.length} · pill: ${pill} · ${pick}${pullEvidence ? ` · ${pullEvidence}` : ""} · refs ${refList.length} (user ${tiers.user} cmd ${tiers.command} prose ${tiers.prose} out ${tiers.output}) → hits ${hits}/${Object.keys(entities).length} ents${error}${meta.stats ? ` · ${meta.stats}` : ""}`
+    return `mn gui ${__MN_BUILD__}${meta.debug ? ` · ${meta.debug}` : " · srv ?"} · gate ${gate} ${current?.id ?? "?"} · chains ${chains().length} · eligible ${eligible.length} · pill: ${pill} · ${pick}${via}${pullEvidence ? ` · ${pullEvidence}` : ""} · refs ${refList.length} (user ${tiers.user} cmd ${tiers.command} prose ${tiers.prose} out ${tiers.output}) → hits ${hits}/${Object.keys(entities).length} ents${error}${meta.stats ? ` · ${meta.stats}` : ""}`
   }
 
   /** The braille spinner frames for the pill's pending-merge indicator. The host
