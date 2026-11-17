@@ -1616,15 +1616,28 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       const previous = expected.get(key)
       expected.set(key, { label: view.label, title: view.title, count: (previous?.count ?? 0) + 1 })
     }
-    for (const button of Array.from(document.querySelectorAll('button[data-slot="session-plugin-pill"]'))) {
+    // Two-pass grouping: a key marks its button only when exactly one pick
+    // produced it AND exactly one capsule carries it. A second capsule with
+    // byte-identical label + title (another plugin echoing our strings, or two
+    // same-numbered/same-titled merged picks across repos) marks nothing —
+    // visual and routing both fail closed on ambiguity.
+    const buttons = Array.from(document.querySelectorAll('button[data-slot="session-plugin-pill"]'))
+    const byKey = new Map<string, Element[]>()
+    const buttonKey = new Map<Element, string | undefined>()
+    for (const button of buttons) {
       const label = button.getAttribute("aria-label")
-      const text = button.textContent ?? ""
-      if (!label) {
-        button.classList.remove(PIN_CLASS)
-        continue
-      }
-      const match = expected.get(`${text}\n${label}`)
-      button.classList.toggle(PIN_CLASS, match !== undefined && match.count === 1)
+      const key = label === null ? undefined : `${button.textContent ?? ""}\n${label}`
+      buttonKey.set(button, key)
+      if (key === undefined) continue
+      const group = byKey.get(key)
+      if (group) group.push(button)
+      else byKey.set(key, [button])
+    }
+    for (const button of buttons) {
+      const key = buttonKey.get(button)
+      const match = key === undefined ? undefined : expected.get(key)
+      const unique = key !== undefined && match !== undefined && match.count === 1 && byKey.get(key)?.length === 1
+      button.classList.toggle(PIN_CLASS, unique)
     }
   }
   if (typeof document !== "undefined" && typeof MutationObserver !== "undefined") {
