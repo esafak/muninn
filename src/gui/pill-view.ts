@@ -1,4 +1,4 @@
-import type { IconName } from "@opencode/plugin/gui"
+import type { ComposerPillTone, IconName } from "@opencode/plugin/gui"
 import { chainTone, latestRun, pillLeadOf, type Chain, type PillReason } from "../model"
 import { pillStatusIcon, pillStatusTone } from "./pill-status"
 
@@ -16,32 +16,18 @@ export interface PillViewOptions {
   spinFrame: string
   /** Locale lookup, e.g. `ctx.t`. */
   t: (key: string) => string
-  /** Ticker step for truncated names; short names ignore it and stay static. */
-  marqueeOffset?: number
 }
 
 export interface PillView {
   icon: IconName
   label: string
-  tone: NonNullable<import("@opencode/plugin/gui").ComposerPillTone>
+  tone: NonNullable<ComposerPillTone>
   title: string
 }
 
 const SHORT_LEN = 24
 
 const short = (title: string): string => (title.length > SHORT_LEN ? `${title.slice(0, SHORT_LEN)}…` : title)
-
-/**
- * Ticker window for a truncated name: scrolls a `SHORT_LEN` window around
- * `title + gap` so the full name drifts past. Short names stay static.
- * Offset 0 matches `short` (static truncated form, no jump on first paint).
- */
-export const marquee = (title: string, offset = 0): string => {
-  if (title.length <= SHORT_LEN || offset <= 0) return short(title)
-  const loop = `${title}   `
-  const start = offset % loop.length
-  return (loop + loop).slice(start, start + SHORT_LEN)
-}
 
 /**
  * Collapsed-pill view for exactly one pick: its own icon, tone, visible
@@ -57,12 +43,13 @@ export const pillViewForPick = (entry: PillViewEntry, opts: PillViewOptions): Pi
   const icon = pillStatusIcon(lead?.state, mergeStatus, tone)
   const pinnedSuffix = entry.reason === "pinned" ? ` · ${opts.t("pill.pinned")}` : ""
   const prefix = lead?.state === "open" && opts.armed ? `${opts.spinFrame} ` : ""
-  const name = (title: string): string => marquee(title, opts.marqueeOffset)
   if (lead) {
+    // Merged pills keep the "merged" tag but drop the PR title: the collapsed
+    // label is just `#number · merged`. The full title stays in the heading.
     const label =
       lead.state === "merged"
-        ? `${prefix}#${lead.number} ${name(lead.title)} · ${opts.t("state.merged")} ▾`
-        : `${prefix}#${lead.number} ${name(lead.title)} ▾`
+        ? `${prefix}#${lead.number} · ${opts.t("state.merged")} ▾`
+        : `${prefix}#${lead.number} ${short(lead.title)} ▾`
     const title =
       lead.state === "merged"
         ? `#${lead.number} ${lead.title} · merged${
@@ -79,7 +66,7 @@ export const pillViewForPick = (entry: PillViewEntry, opts: PillViewOptions): Pi
   if (issue) {
     return {
       icon,
-      label: `#${issue.number} ${name(issue.title)} ▾`,
+      label: `#${issue.number} ${short(issue.title)} ▾`,
       tone,
       title: `#${issue.number} ${issue.title} · issue ${issue.state}${pinnedSuffix}`,
     }
@@ -124,16 +111,3 @@ export const applyDismissal = (
   picks: readonly PillViewEntry[],
   dismissed: ReadonlySet<string>,
 ): PillViewEntry[] => picks.filter((entry) => entry.reason === "pinned" || !dismissed.has(entry.chain.key))
-
-/** Stable signature of the displayed picks: keys, freshness, and reason. */
-export const marqueeFingerprint = (
-  picks: readonly { chain: Pick<Chain, "key" | "updatedAt">; reason: PillReason }[],
-): string => picks.map((entry) => `${entry.chain.key}@${entry.chain.updatedAt}@${entry.reason}`).join("|")
-
-/**
- * Tick count for one full pass over the longest truncated name (gap
- * included), or `undefined` when nothing scrolls. Completion parks back at
- * step 0 — the static truncated form, never a shifted frame.
- */
-export const marqueeTotal = (longest: number): number | undefined =>
-  longest <= SHORT_LEN ? undefined : longest - SHORT_LEN + 3

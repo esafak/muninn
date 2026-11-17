@@ -25,9 +25,9 @@ import type { CheckoutKind } from "../local-cleanup"
 import { Muninn } from "../rpc"
 import type { definition } from "./definition"
 import { History, MergeButton } from "./history"
-import { CancelledGlyph, CheckGlyph, CopyGlyph, CrossGlyph, IssueGlyph, MergeGlyph, MergedGlyph, PinGlyph, PullConflictGlyph, PullGlyph, QueuedGlyph, UnknownGlyph } from "./icons"
+import { CancelledGlyph, CheckGlyph, CopyGlyph, CrossGlyph, IssueGlyph, MergeGlyph, MergedGlyph, PullConflictGlyph, PullGlyph, QueuedGlyph, UnknownGlyph } from "./icons"
 import { pillIcon } from "./marks"
-import { applyDismissal, marqueeFingerprint, marqueeTotal, overflowCount, pickableChains, pillViewForPick } from "./pill-view"
+import { applyDismissal, overflowCount, pickableChains, pillViewForPick } from "./pill-view"
 import { pillPullDiagnostics } from "./pill-diagnostics"
 import { refreshKeyFor, shouldClearActiveRefresh, shouldRunAutoRefresh } from "./refresh-guard"
 
@@ -1534,55 +1534,6 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
   /** Displayed picks: dismissal-filtered (pinned entries always survive). */
   const visiblePicks = (): readonly { chain: Chain; reason: PillReason }[] =>
     applyDismissal(pillState().picks, dismissedKeys())
-  /** Ticker step for truncated pill names: `show` reads it, so the host
-   * re-renders each slot's label while the pass runs. The pill contract
-   * exposes no hover state, so instead of hover-gating, every change to the
-   * displayed picks replays one full pass for the longest truncated name,
-   * then parks on the static form. Short names ignore the step entirely. */
-  const MARQUEE_MS = 400
-  const [marqueeStep, setMarqueeStep] = createSignal(0)
-  let marqueeTimer: ReturnType<typeof setInterval> | undefined
-  onCleanup(() => {
-    if (marqueeTimer !== undefined) clearInterval(marqueeTimer)
-  })
-  let lastMarqueeFingerprint: string | undefined
-  createEffect(() => {
-    // Gate replay on the displayed picks alone: unrelated chain refreshes
-    // rebuild entry objects without changing this signature, so an unchanged
-    // refresh never restarts the pass.
-    const fingerprint = marqueeFingerprint(visiblePicks())
-    if (fingerprint === lastMarqueeFingerprint) return
-    lastMarqueeFingerprint = fingerprint
-    const picks = visiblePicks()
-    setMarqueeStep(0)
-    if (marqueeTimer !== undefined) {
-      clearInterval(marqueeTimer)
-      marqueeTimer = undefined
-    }
-    const longest = Math.max(
-      0,
-      ...picks.map((entry) => {
-        const lead = pillLeadOf(entry.chain, entry.reason)
-        return (lead?.title ?? entry.chain.issues[0]?.title ?? "").length
-      }),
-    )
-    const total = marqueeTotal(longest)
-    if (total === undefined) return
-    let n = 0
-    marqueeTimer = setInterval(() => {
-      n += 1
-      if (n >= total) {
-        if (marqueeTimer !== undefined) {
-          clearInterval(marqueeTimer)
-          marqueeTimer = undefined
-        }
-        // Park back on the static truncated form, never a shifted frame.
-        setMarqueeStep(0)
-        return
-      }
-      setMarqueeStep(n)
-    }, MARQUEE_MS)
-  })
   const pillSlotView = (index: number) => {
     // Pinned chains bypass eligibility and dismissal, so the gate is the
     // visible picks alone: an empty eligible list with a pin must still show
@@ -1595,7 +1546,6 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       waitForAllStatusChecks: waitForAllStatusChecks(),
       armed,
       spinFrame: SPIN_FRAMES[spin() % SPIN_FRAMES.length] ?? "",
-      marqueeOffset: marqueeStep(),
       t: (key) => ctx.t(key),
     })
   }
@@ -1710,28 +1660,16 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
   // One chain's popover: the full chain picture with the merge controls the
   // sidebar has, plus the merge-method/delete-branch choices. Reads the stores
   // itself, so it stays live while open. Run ids live only here (pill grammar).
+  // Pinning lives in the sidebar only: the dropdown shows a chain that is
+  // already visible, so a pin row here would be noise.
   const pillMenuFor = (
     chain: Chain,
     input: ComposerPillMenuProps,
     extra?: JSX.Element,
   ): JSX.Element => {
     const lead = menuLeadFor(chain)
-    const pinned = () => isPinned(chain)
     return (
       <div class="mn-pop">
-        <div
-          class="mn-pop-row"
-          onClick={() => togglePin(chain)}
-          title={ctx.t(pinned() ? "chain.unpin" : "chain.pin")}
-        >
-          <span class="mn-kind" data-state={pinned() ? "open" : "unknown"}>
-            <PinGlyph solid={pinned()} />
-          </span>
-          <span class="mn-pop-title">
-            {ctx.t(pinned() ? "chain.unpin" : "chain.pin")}
-            {pinned() ? ` · ${ctx.t("pill.pinned")}` : ""}
-          </span>
-        </div>
         {pillChainRows(chain, input)}
         <Show when={lead}>
           <div class="mn-pop-foot">
