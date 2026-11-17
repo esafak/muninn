@@ -1,0 +1,19 @@
+src/gui/pill-view.test.ts
+  s_11f2c1b7b2e8a1::t_3889da06573673 106-127
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "742a57c6f1b0302df3ff3602100c3f9b11d23304",
+  "prompts": {},
+  "sessions": {
+    "s_11f2c1b7b2e8a1": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_e1b236635ffeeUTutNDEOOretm",
+        "model": "unknown"
+      },
+      "human_author": "Emre Şafak <3928300+esafak@users.noreply.github.com>"
+    }
+  }
+}
