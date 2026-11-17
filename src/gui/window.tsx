@@ -3,8 +3,25 @@ import type { JSX } from "solid-js"
 import { createStore } from "solid-js/store"
 import { ComposerPill, MenuItem, Panel, SettingsPage, createKeyed, usePlugin, type ComposerPillMenuProps, type IconName, type Plugin } from "@opencode/plugin/gui"
 import { associate } from "../associate"
-import { messageBuckets, wireRefs } from "../extract"
+import { messageBuckets, WIRE_REF_CAP, wireRefs } from "../extract"
 import type { TieredRef } from "../extract"
+import {
+  armedMergeEligible,
+  commitDiscovery,
+  createDiscoveryLedger,
+  excludeCoveredRefs,
+  freshKeyFor,
+  freshKeysFor,
+  isOperationCurrent,
+  partitionRefs,
+  planDiscovery,
+  releaseReservations,
+  safetyRefs,
+  shouldSettle,
+  type DiscoveryLedger,
+  type DiscoveryPlan,
+  type FreshSafety,
+} from "./hydration-policy"
 import { heuristicExtract } from "../candidates/heuristic"
 import { bareKindKept, bareSurvives } from "../candidates/filtering"
 import {
@@ -109,6 +126,44 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
    * sidebar pin re-adds the pill. */
   const [dismissedBySession, setDismissedBySession] = createSignal<ReadonlyMap<string, ReadonlySet<string>>>(new Map())
   const dismissedKeys = (): ReadonlySet<string> => dismissedBySession().get(createdKeyFor()) ?? EMPTY_CREATED
+  /** Output-tier discovery ledgers, keyed like created memory (session identity
+   * + directory). Plain Maps — ledger reads/writes never need reactivity, and
+   * entries are scoped per session so navigating away can never poison another
+   * session's backoff. Capped like created memory. */
+  const discoveryLedgers = new Map<string, DiscoveryLedger>()
+  const discoveryLedger = (): DiscoveryLedger => {
+    const key = createdKeyFor()
+    let ledger = discoveryLedgers.get(key)
+    if (!ledger) {
+      ledger = createDiscoveryLedger()
+      discoveryLedgers.set(key, ledger)
+      while (discoveryLedgers.size > 20) {
+        const victim = [...discoveryLedgers.keys()].find((candidate) => candidate !== key)
+        if (victim === undefined) break
+        discoveryLedgers.delete(victim)
+      }
+    }
+    return ledger
+  }
+  /** Distinct hydrate-operation sequence shared by refresh and the debounce:
+   * concurrent executions must not share reservation ownership, and freshness
+   * evidence is keyed by operation — never by the refresh generation both
+   * pipelines can share. Monotonic: only increasing op ids publish. */
+  let hydrateOp = 0
+  /** Op id of the latest hydrate execution that sent requests (for the gate:
+   * evidence is actionable only while no newer operation has started). */
+  let lastSentOp = 0
+  /** Freshness evidence for the latest accepted hydrate operation: kind-qualified
+   * PR/run keys observed by that operation, for this session only. Armed-merge
+   * driving requires membership here — a snapshot that merely matches the head
+   * is not proof it was just observed. */
+  let freshSafety: FreshSafety | undefined
+  /** Publish accepted evidence once per completed operation. Monotonic: an older
+   * completion racing a newer one never overwrites fresher evidence. */
+  const publishFreshSafety = (op: number, keys: ReadonlySet<string>): void => {
+    if (freshSafety !== undefined && op <= freshSafety.op) return
+    freshSafety = { op, sessionKey: createdKeyFor(), keys }
+  }
   const mergeInFlight = new Set<string>()
   const serverBusyUntil = new Map<string, number>()
   const rejectedHeadByPR = new Map<string, string>()
@@ -519,8 +574,13 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     return `${labels.join(", ")}${more}`
   }
 
-  /** Re-reads repository coordinates, then hydrates and re-chains. Cheap when cached. */
-  const refresh = async (target?: { repo: RepoRef; number: number }): Promise<boolean> => {
+  /** Re-reads repository coordinates, then hydrates and re-chains. Cheap when cached.
+   * Explicit refreshes (session change, user actions) hydrate the full discovery
+   * set; polls and targeted retries hydrate only new live refs plus due retries —
+   * output-tier discovery otherwise stays frozen (see hydration-policy). */
+  const refresh = async (input?: { target?: { repo: RepoRef; number: number }; full?: boolean }): Promise<boolean> => {
+    const target = input?.target
+    const full = input?.full ?? false
     const current = session()
     if (!current) return false
     const generation = ++refreshGeneration
@@ -587,39 +647,86 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
         // Creation evidence is not a mention, so this bypasses mention-drop
         // filtering by design; the URL still only seeds on a head-branch
         // match in rechain.
-        const requested = [...requestedBase, ...creationRequests(requestedBase)]
+        const creation = creationRequests(requestedBase)
+        const requested = [...requestedBase, ...creation]
+        // One shared admission boundary (see admitHydration): safety always
+        // rides along, discovery is budgeted, reservations are op-scoped.
+        const creationRefs = creation
+        const admission = admitHydration({
+          requested,
+          recovery: recoveryTargets,
+          creation: creationRefs,
+          ...(target ? { target: { repo: target.repo, number: target.number } } : {}),
+          full,
+          gen: generation,
+          sessionRepo: repo,
+        })
+        const { sendList, batches, plan, ledger, opId, invalid: invalidDropped } = admission
+        // Locally accumulated evidence for this operation only. Published once,
+        // after every hydration stage below accepts it — branch results extend
+        // the same set rather than overwriting hydrate's.
+        const freshKeys = new Set<string>()
         let targetPull: PullEntity | undefined
         let targetUnresolved = false
-        if (requested.length > 0) {
-          const wire = wireRefs(requested)
-          const result = await stage("hydrate", () => client.rpc(Muninn).hydrate({ directory: current.directory, refs: wire.refs }))
-          if (!currentRefresh()) {
-            resumeInFlightBranch = undefined
-            return false
+        const allEntities: Entity[] = []
+        const allUnresolved: { number: number; repo?: RepoRef }[] = []
+        if (sendList.length > 0) {
+          let results
+          try {
+            results = await stage("hydrate", () =>
+              Promise.all(batches.map((refs) => client.rpc(Muninn).hydrate({ directory: current.directory, refs }))),
+            )
+          } catch (error) {
+            releaseReservations(ledger, opId)
+            throw error
           }
-          merge(result.entities)
-          for (const pull of result.entities.filter((entity): entity is PullEntity => entity.kind === "pr")) {
+          const completed = settleHydration({
+            admission,
+            results,
+            sessionRepo: repo,
+            isCurrent: currentRefresh,
+            latestOp: lastSentOp,
+            onStale: () => {
+              resumeInFlightBranch = undefined
+            },
+          })
+          if (!completed) return false
+          allEntities.push(...completed.entities)
+          allUnresolved.push(...completed.unresolved)
+          for (const key of freshKeysFor(allEntities)) freshKeys.add(key)
+          merge(allEntities)
+          for (const pull of allEntities.filter((entity): entity is PullEntity => entity.kind === "pr")) {
             const key = mergeKey(pull.repo, pull.number)
             if (recoveryKeys.has(key)) recoveredPulls.set(key, pull)
           }
-          targetPull = result.entities.find(
+          targetPull = allEntities.find(
             (entity): entity is PullEntity => entity.kind === "pr" && targetKey === mergeKey(entity.repo, entity.number),
           )
-          targetUnresolved = !!target && result.unresolved.some(
+          targetUnresolved = !!target && allUnresolved.some(
             (ref) => ref.number === target.number && ref.repo !== undefined && repoKey(ref.repo) === repoKey(target.repo),
           )
-          setMeta("unresolved", result.unresolved.length)
+        }
+        // Diagnostics split attempted/deferred/frozen/unresolved every refresh,
+        // even when nothing was sent (all discovery frozen or backing off).
+        {
+          const totalUnresolved = allUnresolved.length + plan.awaitingRetry
+          setMeta("unresolved", totalUnresolved)
           const byKind = new Map<string, number>()
-          for (const entity of result.entities) byKind.set(entity.kind, (byKind.get(entity.kind) ?? 0) + 1)
+          for (const entity of allEntities) byKind.set(entity.kind, (byKind.get(entity.kind) ?? 0) + 1)
           const breakdown = [...byKind].map(([kind, count]) => `${count} ${kind}`).join(", ") || "none"
-          const sent = wire.capped || wire.dropped > 0 ? `${wire.refs.length}/${requested.length}` : `${wire.refs.length}`
-          const dropped = wire.dropped > 0 ? ` · ${wire.dropped} invalid dropped` : ""
-          const unresolved = result.unresolved.length > 0 ? ` · ${result.unresolved.length} unresolved (${unresolvedLabel(result.unresolved, repo)})` : ` · ${result.unresolved.length} unresolved`
-          setMeta("stats", `${sent} refs → ${result.entities.length} hydrated (${breakdown})${unresolved}${dropped}`)
+          const batched = batches.length > 1 ? ` in ${batches.length} calls` : ""
+          const unresolved = totalUnresolved > 0 ? ` · ${totalUnresolved} unresolved (${unresolvedLabel(allUnresolved, repo)})` : " · 0 unresolved"
+          const deferred = plan.deferred > 0 ? ` · ${plan.deferred} deferred` : ""
+          const frozen = plan.frozen > 0 ? ` · ${plan.frozen} up-to-date` : ""
+          const dropped = invalidDropped > 0 ? ` · ${invalidDropped} invalid dropped` : ""
+          setMeta("stats", `${sendList.length} refs${batched} → ${allEntities.length} hydrated (${breakdown})${unresolved}${deferred}${frozen}${dropped}`)
         }
         if (branch && !isFreshBaseSession(branch ?? "", found.length)) {
           const { runs: branchRuns, prs } = await stage("branch-runs", () => client.rpc(Muninn).branchRuns({ directory: current.directory, branch }))
-          if (!currentRefresh()) {
+          // Combined generation/session/operation check: an older branch
+          // response must not overwrite a newer operation's accepted runs and
+          // PRs, even within the same refresh generation.
+          if (!isOperationCurrent(sessionAttemptCurrent(current, session()), generation, refreshGeneration, opId, lastSentOp)) {
             resumeInFlightBranch = undefined
             return false
           }
@@ -627,6 +734,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
           branchRunsBranch = branch
           if (resumeInFlightBranch === branch) resumeInFlightBranch = undefined
           merge(prs)
+          for (const key of freshKeysFor([...prs, ...branchRuns])) freshKeys.add(key)
           for (const pull of prs) {
             const key = mergeKey(pull.repo, pull.number)
             if (recoveryKeys.has(key)) recoveredPulls.set(key, pull)
@@ -637,13 +745,26 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
             targetUnresolved = false
           }
         }
-        if (!currentRefresh()) {
+        // Single publication point: accepted evidence for this operation, after
+        // judgment and the final combined currency check below. Later stages
+        // (rechain, armed merges) run only on accepted evidence, so a
+        // superseded operation can never publish over — or act on — a newer
+        // one's evidence.
+        if (!isOperationCurrent(sessionAttemptCurrent(current, session()), generation, refreshGeneration, opId, lastSentOp)) {
           resumeInFlightBranch = undefined
           return false
         }
         for (const [key, pull] of recoveredPulls) refreshedPullByPR.set(key, pull)
         setMeta("error", null)
         await judgeFound(current.id, current.directory, found, epoch)
+        // Re-verify after the async judgment (operation token included): a newer
+        // hydrate operation may have started while judging. Publish this
+        // operation's evidence only now, immediately before accepted
+        // rechaining, so a failed judgment can never leave an incomplete
+        // operation marked fresh. Never rechain or drive merges on superseded
+        // evidence.
+        if (!isOperationCurrent(sessionAttemptCurrent(current, session()), generation, refreshGeneration, opId, lastSentOp)) return false
+        publishFreshSafety(opId, freshKeys)
         rechain()
         if (isFreshBaseSession(branch ?? "", found.length) && resumeInFlightBranch === branch) resumeInFlightBranch = undefined
         const knownPulls = Object.values(entities).filter((entity): entity is PullEntity =>
@@ -670,6 +791,8 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
           targetUnresolved,
         })
       } catch (error) {
+        // Reservation release already happened at the hydrate site (same op
+        // token, idempotent); anything else failing here holds no reservations.
         resumeInFlightBranch = undefined
         setMeta("error", error instanceof Error ? error.message : String(error))
         return false
@@ -715,7 +838,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       resumePendingBranch = undefined
       resumeInFlightBranch = undefined
       branchLoaded = false
-      void refresh()
+      void refresh({ full: true })
     },
   )
 
@@ -778,7 +901,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       return
     }
     const generationAtSchedule = refreshGeneration
-    timer = setTimeout(() => {
+    timer = setTimeout(async () => {
       timer = undefined
       if (generationAtSchedule !== refreshGeneration) return
       if (isFreshBaseSession(meta.branch, refs().length)) return
@@ -787,24 +910,56 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       // Same shared epoch: a debounce that fires later wins over an older refresh.
       const epoch = ++judgeEpoch
       const base = refs()
-      const wire = wireRefs([...base, ...creationRequests(base)])
-      void ctx.client
-        .rpc(Muninn)
-        .hydrate({ directory: current.directory, refs: wire.refs })
-        .then(async ({ entities: hydrated, unresolved }) => {
-          if (generationAtSchedule !== refreshGeneration) return
-          // Reject stale callbacks before touching shared state: a session that
-          // moved directories must not merge the old directory's entities.
-          if (!sessionAttemptCurrent(current, session())) return
-          if (isFreshBaseSession(meta.branch, refs().length)) return
-          merge(hydrated)
-          setMeta("unresolved", unresolved.length)
-          // Same policy as refresh: judge before chaining, so the message
-          // path never bypasses model filtering.
-          await judgeFound(current.id, current.directory, refs(), epoch)
+      const creation = creationRequests(base)
+      const admission = admitHydration({
+        requested: [...base, ...creation],
+        recovery: [],
+        creation,
+        full: false,
+        gen: generationAtSchedule,
+        sessionRepo: meta.repo ?? undefined,
+      })
+      const { sendList, batches, plan, ledger, opId } = admission
+      const isDebounceCurrent = (): boolean =>
+        generationAtSchedule === refreshGeneration && sessionAttemptCurrent(current, session()) && !isFreshBaseSession(meta.branch, refs().length)
+      // Skip the network request when nothing is admitted, but still judge
+      // and rechain below: provider/model/settings changes flow through this
+      // effect and must not be dropped with frozen discovery.
+      if (sendList.length === 0) {
+        void judgeFound(current.id, current.directory, refs(), epoch).then(() => {
+          if (!isDebounceCurrent() || opId !== lastSentOp) return
           rechain()
         })
-        .catch(() => undefined)
+        return
+      }
+      let results
+      try {
+        results = await Promise.all(batches.map((refs) => ctx.client.rpc(Muninn).hydrate({ directory: current.directory, refs })))
+      } catch {
+        releaseReservations(ledger, opId)
+        return
+      }
+      const completed = settleHydration({
+        admission,
+        results,
+        sessionRepo: meta.repo ?? undefined,
+        isCurrent: isDebounceCurrent,
+        latestOp: lastSentOp,
+        onStale: () => undefined,
+      })
+      if (!completed) return
+      merge(completed.entities)
+      setMeta("unresolved", completed.unresolved.length + plan.awaitingRetry)
+      // Same policy as refresh: judge before chaining, so the message
+      // path never bypasses model filtering.
+      await judgeFound(current.id, current.directory, refs(), epoch)
+      // Re-verify after the async judgment (operation token included): a newer
+      // hydrate operation may have completed while judging. Publish this
+      // operation's evidence only now, immediately before accepted rechaining,
+      // so a failed judgment can never leave an incomplete operation marked fresh.
+      if (!isDebounceCurrent() || opId !== lastSentOp) return
+      publishFreshSafety(opId, freshKeysFor(completed.entities))
+      rechain()
     }, HYDRATE_DEBOUNCE_MS)
   })
 
@@ -855,20 +1010,123 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
    * then `pillDisplay` order. Anything beyond the cap stays in the sidebar,
    * the debug census, and the last slot's overflow row. */
   const MAX_PILLS = 5
-  const pillState = createMemo(() => {
-    if (fresh()) return { eligible: [] as Chain[], pickable: [] as Chain[], picked: undefined as { chain: Chain; reason: PillReason; considered: number } | undefined, picks: [] as { chain: Chain; reason: PillReason }[], provenance: new Map<string, string[]>() as Map<string, string[]> }
-    // Deliberate same-repo mention evidence for the pills: user/command/prose
-    // survivors mapped to hydrated PRs (output-tier never enters; explicit
-    // PR-kind drops excluded in the helper). Shared with the pill filter —
-    // the footer reads the same provenance map, never a second filter.
+  /** The single eligibility context behind pills, pins, and hydration
+   * protection alike: deliberate same-repo mention evidence plus the live
+   * session coordinates. Refresh computes the same context so hydration can
+   * protect exactly the chains the pill filter would keep. */
+  const eligibilityContext = () => {
     const mentioned = mentionEvidence(filteredRefs(), entities, verdictsForSession())
-    const eligibilityCtx = {
+    return {
       sessionBranch: meta.branch || undefined,
       sessionRepo: meta.repo || undefined,
       sessionHeadSha: meta.headSha || undefined,
       created: createdKeys(),
       mentioned,
     }
+  }
+  /** Concrete safety refs for this refresh: every identity the freshness gate
+   * may require, synthesized explicitly because marking identities protected
+   * never sends anything. Armed PRs and their same-repo/current-head runs,
+   * recovery targets, creation links, the explicit target, and pinned plus
+   * pill-eligible members (including beyond-cap overflow). */
+  const safetyRefsFor = (input: {
+    recovery: readonly { repo: RepoRef; number: number }[]
+    creation: readonly TieredRef[]
+    target?: { repo: RepoRef; number: number }
+  }): TieredRef[] =>
+    safetyRefs({
+      chains: chains(),
+      eligibleKeys: new Set(pillState().eligible.map((chain) => chain.key)),
+      pinnedKey: pinnedChain(chains(), ctx.stores.pinned.value)?.key,
+      armed: ctx.stores.armed.value.entries,
+      recovery: input.recovery,
+      creation: input.creation,
+      target: input.target,
+    })
+  /** Repos whose output-tier run refs ride the live lane (armed PR repos). */
+  const armedHydrationRepos = (): Set<string> =>
+    new Set(ctx.stores.armed.value.entries.map((entry) => repoKey(entry.repo)))
+  /**
+   * One hydrate admission, shared by refresh and the message debounce so the
+   * two pipelines can never diverge on partition, budget, chunking, or
+   * reservation semantics. Assigns the operation token, plans discovery
+   * against the session ledger, and chunks the send list within this
+   * operation. Callers own the RPC invocation, the completion check, and
+   * post-completion work — only `settleHydration` may consume a plan.
+   */
+  const admitHydration = (input: {
+    requested: readonly TieredRef[]
+    recovery: readonly { repo: RepoRef; number: number }[]
+    creation: readonly TieredRef[]
+    target?: { repo: RepoRef; number: number }
+    full: boolean
+    gen: number
+    sessionRepo: RepoRef | undefined
+  }): {
+    sendList: TieredRef[]
+    batches: TieredRef[][]
+    plan: DiscoveryPlan
+    ledger: DiscoveryLedger
+    opId: number
+    invalid: number
+  } => {
+    const safety = safetyRefsFor({ recovery: input.recovery, creation: input.creation, target: input.target })
+    const valid = input.requested.filter((ref) => Number.isSafeInteger(ref.number) && ref.number > 0)
+    const invalid = input.requested.length - valid.length
+    // Kind-aware coverage dedup: transcript refs whose payload a safety ref
+    // already carries ride along inside it (see excludeCoveredRefs).
+    const { kept: uncovered } = excludeCoveredRefs(valid, safety, input.sessionRepo)
+    const { live, discovery } = partitionRefs(uncovered, input.sessionRepo, armedHydrationRepos())
+    const ledger = discoveryLedger()
+    const opId = ++hydrateOp
+    lastSentOp = opId
+    const discoveryBudget = Math.max(0, WIRE_REF_CAP - safety.length - live.length)
+    const plan = planDiscovery(discovery, input.sessionRepo, ledger, input.gen, Date.now(), input.full, discoveryBudget, opId)
+    const sendList = [...safety, ...live, ...plan.admit]
+    const batches: TieredRef[][] = []
+    for (let i = 0; i < sendList.length; i += WIRE_REF_CAP) batches.push(sendList.slice(i, i + WIRE_REF_CAP))
+    return { sendList, batches, plan, ledger, opId, invalid }
+  }
+  /**
+   * Shared completion: currency-guarded commit of one operation's results.
+   * Stale completions release their reservations and merge nothing; RPC
+   * failures release via the caller's catch (same op token — idempotent).
+   * Returns the merged entity/unresolved sets for the caller to publish,
+   * diagnose, and rechain from, or undefined when superseded.
+   */
+  const settleHydration = (input: {
+    admission: { ledger: DiscoveryLedger; opId: number; plan: DiscoveryPlan }
+    results: readonly { entities: readonly Entity[]; unresolved: readonly { number: number; repo?: RepoRef }[] }[]
+    sessionRepo: RepoRef | undefined
+    isCurrent: () => boolean
+    /** Latest sent operation at settle time: only the newest sent op may commit. */
+    latestOp: number
+    onStale: () => void
+  }): { entities: Entity[]; unresolved: { number: number; repo?: RepoRef }[] } | undefined => {
+    // Op recency first: a superseded operation releases its own reservations
+    // and merges nothing, even when the shared generation/session checks
+    // would still pass (two debounce fires can share one generation).
+    if (!shouldSettle(input.admission.opId, input.latestOp, input.isCurrent())) {
+      releaseReservations(input.admission.ledger, input.admission.opId)
+      input.onStale()
+      return undefined
+    }
+    const entities: Entity[] = []
+    const unresolved: { number: number; repo?: RepoRef }[] = []
+    for (const result of input.results) {
+      entities.push(...result.entities)
+      unresolved.push(...result.unresolved)
+    }
+    commitDiscovery(input.admission.ledger, input.admission.plan.admit, unresolved, input.sessionRepo, Date.now())
+    return { entities, unresolved }
+  }
+  const pillState = createMemo(() => {
+    if (fresh()) return { eligible: [] as Chain[], pickable: [] as Chain[], picked: undefined as { chain: Chain; reason: PillReason; considered: number } | undefined, picks: [] as { chain: Chain; reason: PillReason }[], provenance: new Map<string, string[]>() as Map<string, string[]> }
+    // Deliberate same-repo mention evidence for the pills: user/command/prose
+    // survivors mapped to hydrated PRs (output-tier never enters; explicit
+    // PR-kind drops excluded in the helper). Shared with the pill filter —
+    // the footer reads the same provenance map, never a second filter.
+    const eligibilityCtx = eligibilityContext()
     const eligible = chains().filter((chain) => pillEligible(chain, eligibilityCtx))
     const provenance = new Map(chains().map((chain) => [chain.key, eligibilityProvenances(chain, eligibilityCtx)] as const))
     // Dismissed chains leave the pool before ranking/capping (the pinned
@@ -1089,7 +1347,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     })
     if (!ok) return
     await fireMerge(pull, method, "manual")
-    void refresh()
+    void refresh({ full: true })
   }
 
   /** Arms or disarms merge-when-ready. Arming is local — Muninn watches the chain
@@ -1121,7 +1379,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
         if (!draft.entries.some((entry) => repoKey(entry.repo) === repoKey(pull.repo) && entry.number === pull.number))
           draft.entries.push({ repo: pull.repo, number: pull.number, method, armID: crypto.randomUUID() })
       })
-      void refresh()
+      void refresh({ full: true })
       return
     }
     // Disarm: drop our entry; also cancel an arm the user made on the forge.
@@ -1134,14 +1392,22 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
         .rpc(Muninn)
         .autoMerge({ directory: current.directory, number: pull.number, enable: false, method: pull.autoMerge })
         .catch((error: unknown) => console.error("[muninn] forge disarm failed", error))
-    void refresh()
+    void refresh({ full: true })
   }
 
   /** Fires ready armed entries once per PR. A stale head stays armed but is
    * blocked until a successful refresh observes a different head SHA. */
   const driveArmedMerges = () => {
-    for (const { pull, method } of armedTargets(ctx.stores.armed.value.entries, chains(), waitForAllStatusChecks())) {
+    for (const { pull, chain, method } of armedTargets(ctx.stores.armed.value.entries, chains(), waitForAllStatusChecks())) {
       const key = mergeKey(pull.repo, pull.number)
+      // Freshness gate: the armed PR and every current-head run the merge
+      // decision will read must be fresh in the latest accepted operation.
+      // Evidence from a superseded operation — or none at all — fails closed
+      // here and retries on the next successful hydration.
+      const requiredRuns = chain.runs
+        .filter((run) => repoKey(run.repo) === repoKey(pull.repo) && run.headSha === pull.headSha)
+        .map((run) => freshKeyFor(run.repo, "run", run.id))
+      if (!armedMergeEligible(freshSafety, createdKeyFor(), lastSentOp, [freshKeyFor(pull.repo, "pr", pull.number), ...requiredRuns])) continue
       if (
         mergeInFlight.has(key) ||
         mergeAwaiting(key) ||
@@ -1195,7 +1461,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
           return
         }
 
-        const refreshed = await refresh(pull)
+        const refreshed = await refresh({ target: pull })
         mergeInFlight.delete(key)
         if (!sessionAttemptCurrent(attemptSession, session())) return
 
