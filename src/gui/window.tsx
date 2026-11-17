@@ -27,7 +27,7 @@ import type { definition } from "./definition"
 import { History, MergeButton } from "./history"
 import { CancelledGlyph, CheckGlyph, CopyGlyph, CrossGlyph, IssueGlyph, MergeGlyph, MergedGlyph, PullConflictGlyph, PullGlyph, QueuedGlyph, UnknownGlyph } from "./icons"
 import { pillIcon } from "./marks"
-import { applyDismissal, overflowCount, pickableChains, pillViewForPick } from "./pill-view"
+import { applyDismissal, lastMenuIndex, mergedActionView, overflowCount, overflowLabel, pickableChains, pillViewForPick, type PillView } from "./pill-view"
 import { pillPullDiagnostics } from "./pill-diagnostics"
 import { refreshKeyFor, shouldClearActiveRefresh, shouldRunAutoRefresh } from "./refresh-guard"
 
@@ -943,6 +943,23 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
   const menuLeadFor = (chain: Chain): { chain: Chain; pull: PullEntity } | undefined =>
     chain.prs.filter((pull) => pull.state === "open").map((pull) => ({ chain, pull }))[0]
 
+  /** Removes a merged pick from the composer row without opening its popover:
+   * unpins a pinned chain (which also dismisses it); otherwise records a
+   * dismissal. The chain stays in the sidebar either way — only the pill goes. */
+  const removeMergedPick = (chain: Chain): void => {
+    if (isPinned(chain)) {
+      togglePin(chain)
+      return
+    }
+    const key = createdKeyFor()
+    setDismissedBySession((previous) => {
+      if ((previous.get(key) ?? EMPTY_CREATED).has(chain.key)) return previous
+      const updated = new Set(previous.get(key) ?? [])
+      updated.add(chain.key)
+      return new Map(previous).set(key, updated)
+    })
+  }
+
   /** Whether a PR is armed for Muninn-driven merge-when-ready — ours, or already
    * armed on the forge's side (shown the same; cancel handles both). */
   const isArmed = (pull: PullEntity): boolean =>
@@ -1537,9 +1554,12 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
   const pillSlotView = (index: number) => {
     // Pinned chains bypass eligibility and dismissal, so the gate is the
     // visible picks alone: an empty eligible list with a pin must still show
-    // the pill.
+    // the pill. Menu pills never show merged picks — those render through the
+    // action-only contribution below, so a merged chain can never open a
+    // dropdown.
     const entry = visiblePicks()[index]
     if (!entry) return undefined
+    if (pillLeadOf(entry.chain, entry.reason)?.state === "merged") return undefined
     const pull = pillLeadOf(entry.chain, entry.reason)
     const armed = pull?.state === "open" ? isArmed(pull) : false
     return pillViewForPick(entry, {
@@ -1548,6 +1568,94 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       spinFrame: SPIN_FRAMES[spin() % SPIN_FRAMES.length] ?? "",
       t: (key) => ctx.t(key),
     })
+  }
+  /** Final action-pill view for a visible slot: the shared merged-action view plus the all-merged overflow suffix and the host-routed run. The single computation behind both the contribution and the pin marker's expected title (markMergedPins reads this, never a divergent copy), so appending the suffix can never desync the hover pin. The visible label is untouched, so the capsule width holds. */
+  const mergedActionViewFor = (index: number): (PillView & { run: () => void }) | undefined => {
+    const picks = visiblePicks()
+    const entry = picks[index]
+    if (!entry || pillLeadOf(entry.chain, entry.reason)?.state !== "merged") return undefined
+    const view = mergedActionView(entry, (key) => ctx.t(key), waitForAllStatusChecks())
+    if (!view) return undefined
+    // Overflow's visible row lives on the last menu pill; with zero menu pills
+    // (every pick merged) the count survives only here, in the accessible name
+    // of the last capsule. Explicitly accepted product tradeoff: no popover
+    // host exists by construction, and the unpin run must not also open history.
+    const overflow = pillSlotOverflow()
+    const title =
+      index === picks.length - 1 && lastMenuIndex(picks) === -1 && overflow > 0
+        ? `${view.title} · ${overflowLabel(overflow)}`
+        : view.title
+    return { ...view, title, run: () => removeMergedPick(entry.chain) }
+  }
+  /** Action-only view for merged picks: no dropdown chevron, the title names
+   * the click action (unpin vs dismiss), and `run` removes the pill. The host
+   * routes the click to this contribution's `run`, so no capture-phase
+   * interception — and no wrong-pill risk — is needed. */
+  const mergedPillSlotView = (index: number) => mergedActionViewFor(index)
+  // Hover pin marker for verified merged-action capsules only. The host owns
+  // the capsule DOM and exposes no contribution identity, so scope by exact
+  // full label + accessible title match against our own merged picks (fail
+  // closed: zero or ambiguous matches mark nothing). Never substring-match
+  // user-controlled PR titles — an open PR titled `· merged` must not restyle.
+  const PIN_CLASS = "mn-merged-unpin"
+  const markMergedPins = (): void => {
+    if (typeof document === "undefined") return
+    const picks = visiblePicks()
+    const merged = picks.filter((entry) => pillLeadOf(entry.chain, entry.reason)?.state === "merged")
+    if (merged.length === 0) {
+      for (const button of Array.from(document.querySelectorAll(`button[data-slot="session-plugin-pill"].${PIN_CLASS}`)))
+        button.classList.remove(PIN_CLASS)
+      return
+    }
+    const expected = new Map<string, { label: string; title: string; count: number }>()
+    for (let index = 0; index < picks.length; index++) {
+      const view = mergedActionViewFor(index)
+      if (!view) continue
+      const key = `${view.label}\n${view.title}`
+      const previous = expected.get(key)
+      expected.set(key, { label: view.label, title: view.title, count: (previous?.count ?? 0) + 1 })
+    }
+    // Two-pass grouping: a key marks its button only when exactly one pick
+    // produced it AND exactly one capsule carries it. A second capsule with
+    // byte-identical label + title (another plugin echoing our strings, or two
+    // same-numbered/same-titled merged picks across repos) marks nothing —
+    // visual and routing both fail closed on ambiguity.
+    const buttons = Array.from(document.querySelectorAll('button[data-slot="session-plugin-pill"]'))
+    const byKey = new Map<string, Element[]>()
+    const buttonKey = new Map<Element, string | undefined>()
+    for (const button of buttons) {
+      const label = button.getAttribute("aria-label")
+      const key = label === null ? undefined : `${button.textContent ?? ""}\n${label}`
+      buttonKey.set(button, key)
+      if (key === undefined) continue
+      const group = byKey.get(key)
+      if (group) group.push(button)
+      else byKey.set(key, [button])
+    }
+    for (const button of buttons) {
+      const key = buttonKey.get(button)
+      const match = key === undefined ? undefined : expected.get(key)
+      const unique = key !== undefined && match !== undefined && match.count === 1 && byKey.get(key)?.length === 1
+      button.classList.toggle(PIN_CLASS, unique)
+    }
+  }
+  if (typeof document !== "undefined" && typeof MutationObserver !== "undefined") {
+    createEffect(() => {
+      visiblePicks()
+      waitForAllStatusChecks()
+      // Read locale reactively so translated titles re-mark after a switch.
+      void ctx.t("state.merged")
+      queueMicrotask(markMergedPins)
+    })
+    const pinsObserver = new MutationObserver((mutations) => {
+      if (!mutations.some((mutation) =>
+        mutation.type === "childList" ||
+        (mutation.type === "attributes" && mutation.attributeName !== "class")
+      )) return
+      queueMicrotask(markMergedPins)
+    })
+    pinsObserver.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["aria-label"] })
+    onCleanup(() => pinsObserver.disconnect())
   }
   /** Filtered-pool chains absent from the displayed picks (an ineligible pin consuming a slot shrinks the displayed-eligible count by one; dismissed chains never inflate it). */
   const pillSlotOverflow = (): number => overflowCount(pillState().pickable, pillState().picks)
@@ -1720,20 +1828,29 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
   const SlotMenu = (props: { index: number; input: ComposerPillMenuProps }): JSX.Element => {
     const initial = visiblePicks()[props.index]?.chain.key
     createEffect(() => {
-      const current = visiblePicks()[props.index]?.chain.key
-      if (current !== initial) props.input.close()
+      const current = visiblePicks()[props.index]
+      // Close when the slot reassigns or its pick merges (merged picks live
+      // on the action-only contribution, which has no popover).
+      if (!current || current.chain.key !== initial || pillLeadOf(current.chain, current.reason)?.state === "merged")
+        props.input.close()
     })
-    const entry = () => visiblePicks()[props.index]
+    const entry = () => {
+      const current = visiblePicks()[props.index]
+      if (!current || pillLeadOf(current.chain, current.reason)?.state === "merged") return undefined
+      return current
+    }
     return (
       <Show when={entry()} fallback={<div class="mn-pop" />}>
         {(live) => {
-          const isLast = () => props.index === visiblePicks().length - 1
+          // Overflow has a visible host only on the last menu pill: trailing
+          // merged picks render action-only capsules with no popover.
+          const hostsOverflow = () => lastMenuIndex(visiblePicks()) === props.index
           return (
             <>
               {pillMenuFor(
                 live().chain,
                 props.input,
-                isLast() && pillSlotOverflow() > 0 ? (
+                hostsOverflow() && pillSlotOverflow() > 0 ? (
                   <div
                     class="mn-pop-more"
                     onClick={() => {
@@ -1741,7 +1858,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
                       if (props.input.session?.id) ctx.layout.open(`${ctx.id}:history`, props.input.session)
                     }}
                   >
-                    +{pillSlotOverflow()} more in the sidebar
+                    {overflowLabel(pillSlotOverflow())}
                   </div>
                 ) : undefined,
               )}
@@ -1752,9 +1869,12 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     )
   }
 
-  // One contribution per pick slot (links-0..MAX_PILLS-1, ascending order):
-  // each slot reads its own pick reactively, withdraws when empty, and opens
-  // that pick's own chain. The last visible slot surfaces the overflow count.
+  // Two contributions per pick slot: menu pills for live work and action-only
+  // pills for merged picks (host-routed `run`, no popover). Each slot shows
+  // at most one — the views are mutually exclusive on merged state — so the
+  // row still holds one pill per pick in display order. The last menu slot
+  // surfaces the overflow count; with zero menu pills the count survives only
+  // in the last action pill's accessible title (explicitly accepted tradeoff).
   for (let slot = 0; slot < MAX_PILLS; slot++) {
     const index = slot
     ctx.add(ComposerPill, {
@@ -1765,6 +1885,14 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
         return pillSlotView(index)
       },
       menu: (input) => <SlotMenu index={index} input={input} />,
+    })
+    ctx.add(ComposerPill, {
+      id: `links-${index}-merged`,
+      order: 10 + index,
+      show: (input) => {
+        if (!input.session || input.session.id !== meta.sessionID) return undefined
+        return mergedPillSlotView(index)
+      },
     })
   }
 
@@ -2453,6 +2581,46 @@ const STYLES = `
 /* Armed: Muninn is watching — the dot pulses until the merge fires. */
 .mn-merge-state[data-armed] { color: var(--v2-state-fg-warning, #9a6700); animation: mn-pulse 1.6s ease-in-out infinite; }
 @keyframes mn-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
+
+/* Merged action pills: hover swaps the green branch for an active pin whose
+ * click unpins/dismisses via the contribution's host-routed \`run\` (no popover,
+ * no capture interception). The \`.mn-merged-unpin\` marker is applied by JS
+ * only to verified owned capsules (exact label + title match, fail closed),
+ * never by accessible-text substring — an open PR titled \`· merged\` restyles
+ * nothing. The icon box is fixed at 14px in both states so the swap never
+ * resizes the capsule; the label is identical either way, so pill width holds. */
+button[data-slot="session-plugin-pill"].mn-merged-unpin > svg[data-slot="icon-svg"] {
+  width: 14px; height: 14px; flex: none;
+}
+@media (hover: hover) {
+  button[data-slot="session-plugin-pill"].mn-merged-unpin:hover > svg[data-slot="icon-svg"] {
+    display: none;
+  }
+  button[data-slot="session-plugin-pill"].mn-merged-unpin:hover::before {
+    content: "";
+    width: 14px; height: 14px; flex: none;
+    background-color: var(--v2-text-text-accent, #0969da);
+    -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='m11.294.984 3.722 3.722a1.75 1.75 0 0 1-.504 2.826l-1.327.613a3.089 3.089 0 0 0-1.707 2.084l-.584 2.454c-.317 1.332-1.972 1.8-2.94.832L5.75 11.311 1.78 15.28a.749.749 0 1 1-1.06-1.06l3.969-3.97-2.204-2.204c-.968-.968-.5-2.623.832-2.94l2.454-.584a3.08 3.08 0 0 0 2.084-1.707l.613-1.327a1.75 1.75 0 0 1 2.826-.504Z'/%3E%3C/svg%3E");
+    mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='m11.294.984 3.722 3.722a1.75 1.75 0 0 1-.504 2.826l-1.327.613a3.089 3.089 0 0 0-1.707 2.084l-.584 2.454c-.317 1.332-1.972 1.8-2.94.832L5.75 11.311 1.78 15.28a.749.749 0 1 1-1.06-1.06l3.969-3.97-2.204-2.204c-.968-.968-.5-2.623.832-2.94l2.454-.584a3.08 3.08 0 0 0 2.084-1.707l.613-1.327a1.75 1.75 0 0 1 2.826-.504Z'/%3E%3C/svg%3E");
+    -webkit-mask-size: contain; mask-size: contain;
+    -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
+    -webkit-mask-position: center; mask-position: center;
+  }
+}
+/* Keyboard focus shows the same pin so the unpin target stays discoverable. */
+button[data-slot="session-plugin-pill"].mn-merged-unpin:focus-visible > svg[data-slot="icon-svg"] {
+  display: none;
+}
+button[data-slot="session-plugin-pill"].mn-merged-unpin:focus-visible::before {
+  content: "";
+  width: 14px; height: 14px; flex: none;
+  background-color: var(--v2-text-text-accent, #0969da);
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='m11.294.984 3.722 3.722a1.75 1.75 0 0 1-.504 2.826l-1.327.613a3.089 3.089 0 0 0-1.707 2.084l-.584 2.454c-.317 1.332-1.972 1.8-2.94.832L5.75 11.311 1.78 15.28a.749.749 0 1 1-1.06-1.06l3.969-3.97-2.204-2.204c-.968-.968-.5-2.623.832-2.94l2.454-.584a3.08 3.08 0 0 0 2.084-1.707l.613-1.327a1.75 1.75 0 0 1 2.826-.504Z'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='m11.294.984 3.722 3.722a1.75 1.75 0 0 1-.504 2.826l-1.327.613a3.089 3.089 0 0 0-1.707 2.084l-.584 2.454c-.317 1.332-1.972 1.8-2.94.832L5.75 11.311 1.78 15.28a.749.749 0 1 1-1.06-1.06l3.969-3.97-2.204-2.204c-.968-.968-.5-2.623.832-2.94l2.454-.584a3.08 3.08 0 0 0 2.084-1.707l.613-1.327a1.75 1.75 0 0 1 2.826-.504Z'/%3E%3C/svg%3E");
+  -webkit-mask-size: contain; mask-size: contain;
+  -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
+  -webkit-mask-position: center; mask-position: center;
+}
 `
 
 let injected = false

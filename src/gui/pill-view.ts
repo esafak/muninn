@@ -16,6 +16,10 @@ export interface PillViewOptions {
   spinFrame: string
   /** Locale lookup, e.g. `ctx.t`. */
   t: (key: string) => string
+  /** Whether the pill opens a dropdown. Action-only pills (merged unpin /
+   * dismiss) omit the `▾` chevron and name their action in the title instead
+   * of describing a popover that never opens. Defaults to true. */
+  dropdown?: boolean
 }
 
 export interface PillView {
@@ -43,7 +47,22 @@ export const pillViewForPick = (entry: PillViewEntry, opts: PillViewOptions): Pi
   const icon = pillStatusIcon(lead?.state, mergeStatus, tone)
   const pinnedSuffix = entry.reason === "pinned" ? ` · ${opts.t("pill.pinned")}` : ""
   const prefix = lead?.state === "open" && opts.armed ? `${opts.spinFrame} ` : ""
+  // Action-only pills have no dropdown: the chevron goes and the title names
+  // the click action (unpin for pinned chains, dismiss otherwise) instead of
+  // the popover heading. The pinned suffix is subsumed by the action text.
+  const dropdown = opts.dropdown ?? true
   if (lead) {
+    if (lead.state === "merged" && !dropdown) {
+      const action = opts.t(entry.reason === "pinned" ? "chain.unpin" : "pill.dismiss")
+      return {
+        icon,
+        label: `${prefix}#${lead.number} · ${opts.t("state.merged")}`,
+        tone,
+        title: `#${lead.number} ${lead.title} · merged${
+          lead.mergedAt === undefined ? "" : ` · ${new Date(lead.mergedAt).toLocaleString()}`
+        } · ${action}`,
+      }
+    }
     // Merged pills keep the "merged" tag but drop the PR title: the collapsed
     // label is just `#number · merged`. The full title stays in the heading.
     const label =
@@ -84,6 +103,26 @@ export const pillViewForPick = (entry: PillViewEntry, opts: PillViewOptions): Pi
   }
   return undefined
 }
+
+/** Overflow census text shared by the popover row and the all-merged title suffix. Single literal, so the two can never diverge. */
+export const overflowLabel = (count: number): string => `+${count} more in the sidebar`
+
+/** Index of the last pick that renders a menu pill (lead not merged), or -1 when every pick is action-only. Overflow has a visible host only at this index. */
+export const lastMenuIndex = (picks: readonly PillViewEntry[]): number => {
+  let last = -1
+  picks.forEach((entry, index) => {
+    if (pillLeadOf(entry.chain, entry.reason)?.state !== "merged") last = index
+  })
+  return last
+}
+
+/** Action-only view for merged picks (no dropdown): chevron-free label with an action-titled accessible name. The single computation behind both the contribution and the pin marker's expected title, so the two can never desync. */
+export const mergedActionView = (
+  entry: PillViewEntry,
+  t: (key: string) => string,
+  waitForAllStatusChecks: boolean,
+): PillView | undefined =>
+  pillViewForPick(entry, { waitForAllStatusChecks, armed: false, spinFrame: "", t, dropdown: false })
 
 /**
  * Dismissal-aware selection pool: dismissed chains leave the eligible pool
