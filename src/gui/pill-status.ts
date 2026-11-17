@@ -34,20 +34,6 @@ export const pillStatusIcon = (
   return "circle-exclamation"
 }
 
-// Aggregate icon for multi-pick capsules only: the icon summarizes the group,
-// the label identifies its lead (picks[0], pinned-first). A per-pick circle
-// would contradict the aggregate tone (e.g. a ready lead's check in danger
-// red when a sibling fails), and chainTone can report danger while that same
-// PR's mergeState stays ready — so multi-pick shape derives from tone alone.
-// Single-pick capsules keep per-PR mergeState detail via pillStatusIcon,
-// which applies the same adverse-evidence override when tone diverges.
-export const aggregateStatusIcon = (
-  tone: NonNullable<ComposerPillTone>,
-): IconName => {
-  if (tone === "danger") return "circle-xmark"
-  if (tone === "warning") return "circle-exclamation"
-  return "circle-check"
-}
 // Total: every rendered pill gets a status tone. Merged keeps success
 // (warning/danger preserved if the chain somehow reports them), closed is
 // danger, open/draft default to warning, run-only defaults to its chain tone

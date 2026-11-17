@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import type { Chain, IssueEntity, PullEntity, RunEntity } from "../model"
-import { applyDismissal, marquee, marqueeFingerprint, marqueeTotal, overflowCount, pillViewForPick, slotEntry } from "./pill-view"
+import { pillDisplay } from "../model"
+import { applyDismissal, marquee, marqueeFingerprint, marqueeTotal, overflowCount, pickableChains, pillViewForPick } from "./pill-view"
 
 const repo = { host: "github.com", owner: "acme", repo: "app" }
 const t = (key: string): string => key
@@ -164,49 +165,6 @@ describe("pillViewForPick", () => {
   })
 })
 
-describe("slotEntry / overflowCount", () => {
-  const key = (n: string): Chain => chain({ key: n })
-  test("empty slot withdraws", () => {
-    expect(slotEntry([], 0)).toBeUndefined()
-  })
-  test("zero picks, zero overflow", () => {
-    expect(overflowCount([], [])).toBe(0)
-  })
-  test("one pick, no overflow", () => {
-    const picks = [{ chain: key("a"), reason: "newest" } as const]
-    expect(slotEntry(picks, 0)?.chain.key).toBe("a")
-    expect(slotEntry(picks, 1)).toBeUndefined()
-    expect(overflowCount([key("a")], picks)).toBe(0)
-  })
-  test("five picks cap leaves the sixth as overflow", () => {
-    const eligible = [key("a"), key("b"), key("c"), key("d"), key("e"), key("f")]
-    const picks = eligible.slice(0, 5).map((c) => ({ chain: c, reason: "newest" as const }))
-    expect(overflowCount(eligible, picks)).toBe(1)
-  })
-  test("ineligible pin consuming a slot shrinks displayed-eligible count", () => {
-    const eligible = [key("a"), key("b")]
-    const pin = { chain: key("foreign"), reason: "pinned" as const }
-    const picks = [pin, { chain: key("a"), reason: "newest" as const }]
-    expect(overflowCount(eligible, picks)).toBe(1)
-  })
-  test("refresh keeps the slot, reorder and disappearance change it", () => {
-    const picks = [
-      { chain: key("a"), reason: "newest" as const },
-      { chain: key("b"), reason: "newest" as const },
-    ]
-    expect(slotEntry(picks, 0)?.chain.key).toBe("a")
-    const refreshed = [
-      { chain: key("a"), reason: "newest" as const },
-      { chain: key("b"), reason: "newest" as const },
-    ]
-    expect(slotEntry(refreshed, 0)?.chain.key).toBe(slotEntry(picks, 0)?.chain.key)
-    const reordered = [picks[1]!, picks[0]!]
-    expect(slotEntry(reordered, 0)?.chain.key).toBe("b")
-    const disappeared = [picks[0]!]
-    expect(slotEntry(disappeared, 1)).toBeUndefined()
-  })
-})
-
 describe("marquee", () => {
   const title = "fix(k8s): pin drifting images"
   test("short names stay static at any offset", () => {
@@ -233,6 +191,50 @@ describe("marquee", () => {
       opts({ marqueeOffset: 5 }),
     )
     expect(view?.label).toContain(marquee(pull().title, 5))
+  })
+})
+
+describe("pickableChains / overflowCount", () => {
+  const eligible = [chain({ key: "a" }), chain({ key: "b" }), chain({ key: "c" })]
+  test("empty dismissal keeps the pool", () => {
+    expect(pickableChains(eligible, new Set()).map((c) => c.key)).toEqual(["a", "b", "c"])
+  })
+  test("dismissed chains leave the pool before capping (slot backfill)", () => {
+    expect(pickableChains(eligible, new Set(["a"])).map((c) => c.key)).toEqual(["b", "c"])
+  })
+  test("overflow excludes dismissed chains", () => {
+    const picks = [{ chain: chain({ key: "a" }), reason: "newest" as const }]
+    // "b" dismissed: not displayed, not advertised — only "c" overflows.
+    expect(overflowCount(pickableChains(eligible, new Set(["b"])), picks)).toBe(1)
+    expect(overflowCount(pickableChains(eligible, new Set()), picks)).toBe(2)
+  })
+  test("ineligible pin consuming a slot shrinks displayed-eligible count", () => {
+    const picks = [
+      { chain: chain({ key: "foreign" }), reason: "pinned" as const },
+      { chain: chain({ key: "a" }), reason: "newest" as const },
+    ]
+    expect(overflowCount(pickableChains(eligible, new Set()), picks)).toBe(2)
+  })
+  test("pillDisplay backfills a dismissed slot from the filtered pool", () => {
+    const openChain = (key: string, n: number): Chain =>
+      chain({ key, prs: [pull({ number: n, title: `feat ${key}` })] })
+    const eligible = ["a", "b", "c", "d", "e", "f"].map((k, i) => openChain(k, 1000 + i))
+    const picks = pillDisplay(pickableChains(eligible, new Set(["b"])), undefined, true, 5)
+    expect(picks.map((p) => p.chain.key)).toEqual(["a", "c", "d", "e", "f"])
+  })
+  test("pillDisplay reinserts a dismissed pin at the lead", () => {
+    const openChain = (key: string, n: number): Chain =>
+      chain({ key, prs: [pull({ number: n, title: `feat ${key}` })] })
+    const eligible = [openChain("a", 1), openChain("b", 2)]
+    const pinned = openChain("b", 2)
+    const picks = pillDisplay(pickableChains(eligible, new Set(["b"])), pinned, true, 5)
+    expect(picks[0]?.chain.key).toBe("b")
+    expect(picks[0]?.reason).toBe("pinned")
+  })
+  test("dismissed pin survives in picks via the pin override", () => {
+    const picks = [{ chain: chain({ key: "a" }), reason: "pinned" as const }]
+    expect(applyDismissal(picks, new Set(["a"])).map((p) => p.chain.key)).toEqual(["a"])
+    expect(overflowCount(pickableChains(eligible, new Set(["a"])), picks)).toBe(2)
   })
 })
 

@@ -98,11 +98,15 @@ export const pillViewForPick = (entry: PillViewEntry, opts: PillViewOptions): Pi
   return undefined
 }
 
-/** Slot lookup: the pick rendered in a collapsed slot (withdrawn when empty). */
-export const slotEntry = (
-  picks: readonly PillViewEntry[],
-  index: number,
-): PillViewEntry | undefined => picks[index]
+/**
+ * Dismissal-aware selection pool: dismissed chains leave the eligible pool
+ * before `pillDisplay` caps and ranks, so a removed chain frees its slot for
+ * the next eligible chain and never inflates the overflow count. Pinned
+ * chains bypass the pool via `pillDisplay`'s pinned param (and survive
+ * `applyDismissal`), so dismissal can never suppress the pin override.
+ */
+export const pickableChains = (eligible: readonly Chain[], dismissed: ReadonlySet<string>): Chain[] =>
+  eligible.filter((chain) => !dismissed.has(chain.key))
 
 /** Eligible chains absent from the displayed picks (overflow row count). */
 export const overflowCount = (

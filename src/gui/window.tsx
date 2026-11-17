@@ -16,7 +16,7 @@ import {
 import { CUSTOM_PROVIDER, mergeProviderOptions, resolveCustomCommit } from "./provider-options"
 import { validateModelSyntax } from "../candidates/model-id"
 import type { ArmedEntry, Chain, Entity, PillReason, Pin, PullEntity, RepoRef, RunEntity, RunStatus } from "../model"
-import { chainTone, armedTargets, staleHeadRetryEligible, staleHeadEvidenceUsable, sessionAttemptCurrent, targetRefreshConfirmed, pillPick, pillDisplay, pillEligible, eligibilityProvenances, pillHeadIdentity, pillLeadOf, pinnedChain, pinForChain, rememberCreated, isFreshBaseSession, mergeReady, mergeWhy, pendingReviewNotice, latestRun, pullForRun, prConflicted, refKey, repoKey, entityKey } from "../model"
+import { chainTone, armedTargets, staleHeadRetryEligible, staleHeadEvidenceUsable, sessionAttemptCurrent, targetRefreshConfirmed, pillPick, pillDisplay, pillEligible, eligibilityProvenances, pillLeadOf, pinnedChain, pinForChain, rememberCreated, isFreshBaseSession, mergeReady, mergeWhy, pendingReviewNotice, latestRun, pullForRun, prConflicted, refKey, repoKey, entityKey } from "../model"
 import { mentionEvidence } from "../candidates/mention-evidence"
 import { prCreateBranchLinks, prCreateRefs, validateCreateLinks } from "../candidates/created"
 import { githubLexicon } from "../providers/github/lexicon"
@@ -27,7 +27,7 @@ import type { definition } from "./definition"
 import { History, MergeButton } from "./history"
 import { CancelledGlyph, CheckGlyph, CopyGlyph, CrossGlyph, IssueGlyph, MergeGlyph, MergedGlyph, PinGlyph, PullConflictGlyph, PullGlyph, QueuedGlyph, UnknownGlyph } from "./icons"
 import { pillIcon } from "./marks"
-import { applyDismissal, marqueeFingerprint, marqueeTotal, pillViewForPick } from "./pill-view"
+import { applyDismissal, marqueeFingerprint, marqueeTotal, overflowCount, pickableChains, pillViewForPick } from "./pill-view"
 import { pillPullDiagnostics } from "./pill-diagnostics"
 import { refreshKeyFor, shouldClearActiveRefresh, shouldRunAutoRefresh } from "./refresh-guard"
 
@@ -856,7 +856,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
    * the debug census, and the last slot's overflow row. */
   const MAX_PILLS = 5
   const pillState = createMemo(() => {
-    if (fresh()) return { eligible: [] as Chain[], picked: undefined as { chain: Chain; reason: PillReason; considered: number } | undefined, picks: [] as { chain: Chain; reason: PillReason }[], provenance: new Map<string, string[]>() as Map<string, string[]> }
+    if (fresh()) return { eligible: [] as Chain[], pickable: [] as Chain[], picked: undefined as { chain: Chain; reason: PillReason; considered: number } | undefined, picks: [] as { chain: Chain; reason: PillReason }[], provenance: new Map<string, string[]>() as Map<string, string[]> }
     // Deliberate same-repo mention evidence for the pills: user/command/prose
     // survivors mapped to hydrated PRs (output-tier never enters; explicit
     // PR-kind drops excluded in the helper). Shared with the pill filter —
@@ -871,15 +871,18 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     }
     const eligible = chains().filter((chain) => pillEligible(chain, eligibilityCtx))
     const provenance = new Map(chains().map((chain) => [chain.key, eligibilityProvenances(chain, eligibilityCtx)] as const))
-    const normal = pillPick(eligible, waitForAllStatusChecks())
+    // Dismissed chains leave the pool before ranking/capping (the pinned
+    // entry bypasses via `pillDisplay`); `eligible` stays full for the census.
+    const pickable = pickableChains(eligible, dismissedKeys())
+    const normal = pillPick(pickable, waitForAllStatusChecks())
     // Single-pin override: pull identity (or chain key) bypasses eligibility.
     // Expiry is disappearance: a pinned chain that's gone unpins on next rechain.
     const pinned = pinnedChain(chains(), ctx.stores.pinned.value)
-    const picks = pillDisplay(eligible, pinned, waitForAllStatusChecks(), MAX_PILLS)
+    const picks = pillDisplay(pickable, pinned, waitForAllStatusChecks(), MAX_PILLS)
     if (pinned) {
-      return { eligible, picked: { chain: pinned, reason: "pinned" as const, considered: eligible.length + 1 }, picks, provenance }
+      return { eligible, pickable, picked: { chain: pinned, reason: "pinned" as const, considered: pickable.length + 1 }, picks, provenance }
     }
-    return { eligible, picked: normal, picks, provenance }
+    return { eligible, pickable, picked: normal, picks, provenance }
   })
 
   const isPinned = (chain: Chain): boolean => {
@@ -1594,9 +1597,8 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       t: (key) => ctx.t(key),
     })
   }
-  /** Eligible chains absent from the displayed picks (an ineligible pin consuming a slot shrinks the displayed-eligible count by one). */
-  const pillSlotOverflow = (): number =>
-    pillState().eligible.filter((chain) => !pillState().picks.some((entry) => entry.chain.key === chain.key)).length
+  /** Filtered-pool chains absent from the displayed picks (an ineligible pin consuming a slot shrinks the displayed-eligible count by one; dismissed chains never inflate it). */
+  const pillSlotOverflow = (): number => overflowCount(pillState().pickable, pillState().picks)
 
   // One chain's rows: PRs, issues, runs. Rendered by each slot's popover for
   // its own chain.

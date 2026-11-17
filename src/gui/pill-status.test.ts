@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { pillStatusIcon, pillStatusTone, aggregateStatusIcon } from "./pill-status"
+import { pillStatusIcon, pillStatusTone } from "./pill-status"
 
 describe("pillStatusIcon", () => {
   test("uses a distinct branch icon for merged PRs", () => {
@@ -67,16 +67,5 @@ describe("pillStatusTone", () => {
     expect(pillStatusTone("closed", undefined)).toBe("danger")
     expect(pillStatusTone(undefined, undefined)).toBe("warning")
     expect(pillStatusTone(undefined, "danger")).toBe("danger")
-  })
-})
-
-describe("aggregateStatusIcon", () => {
-  test("derives multi-pill shape from aggregate tone alone", () => {
-    const cases = [
-      ["danger", "circle-xmark"],
-      ["warning", "circle-exclamation"],
-      ["success", "circle-check"],
-    ] as const
-    for (const [tone, icon] of cases) expect(aggregateStatusIcon(tone)).toBe(icon)
   })
 })
