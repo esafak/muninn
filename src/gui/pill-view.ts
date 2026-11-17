@@ -16,6 +16,10 @@ export interface PillViewOptions {
   spinFrame: string
   /** Locale lookup, e.g. `ctx.t`. */
   t: (key: string) => string
+  /** Whether the pill opens a dropdown. Action-only pills (merged unpin /
+   * dismiss) omit the `▾` chevron and name their action in the title instead
+   * of describing a popover that never opens. Defaults to true. */
+  dropdown?: boolean
 }
 
 export interface PillView {
@@ -43,7 +47,22 @@ export const pillViewForPick = (entry: PillViewEntry, opts: PillViewOptions): Pi
   const icon = pillStatusIcon(lead?.state, mergeStatus, tone)
   const pinnedSuffix = entry.reason === "pinned" ? ` · ${opts.t("pill.pinned")}` : ""
   const prefix = lead?.state === "open" && opts.armed ? `${opts.spinFrame} ` : ""
+  // Action-only pills have no dropdown: the chevron goes and the title names
+  // the click action (unpin for pinned chains, dismiss otherwise) instead of
+  // the popover heading. The pinned suffix is subsumed by the action text.
+  const dropdown = opts.dropdown ?? true
   if (lead) {
+    if (lead.state === "merged" && !dropdown) {
+      const action = opts.t(entry.reason === "pinned" ? "chain.unpin" : "pill.dismiss")
+      return {
+        icon,
+        label: `${prefix}#${lead.number} · ${opts.t("state.merged")}`,
+        tone,
+        title: `#${lead.number} ${lead.title} · merged${
+          lead.mergedAt === undefined ? "" : ` · ${new Date(lead.mergedAt).toLocaleString()}`
+        } · ${action}`,
+      }
+    }
     // Merged pills keep the "merged" tag but drop the PR title: the collapsed
     // label is just `#number · merged`. The full title stays in the heading.
     const label =

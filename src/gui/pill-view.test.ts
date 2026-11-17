@@ -103,6 +103,28 @@ describe("pillViewForPick", () => {
     expect(view?.icon).toBe("branch")
   })
 
+  test("merged action pill drops the chevron and names dismiss", () => {
+    const view = pillViewForPick(
+      { chain: chain({ prs: [pull({ state: "merged" })] }), reason: "merged" },
+      opts({ dropdown: false }),
+    )
+    expect(view?.label).toBe("#2787 · state.merged")
+    expect(view?.title).toBe("#2787 fix(k8s): pin drifting images · merged · pill.dismiss")
+    expect(view?.tone).toBe("success")
+    expect(view?.icon).toBe("branch")
+  })
+
+  test("merged action pill names unpin for pinned chains", () => {
+    const view = pillViewForPick(
+      { chain: chain({ prs: [pull({ state: "merged" })] }), reason: "pinned" },
+      opts({ dropdown: false }),
+    )
+    expect(view?.label).toBe("#2787 · state.merged")
+    expect(view?.title).toBe("#2787 fix(k8s): pin drifting images · merged · chain.unpin")
+    expect(view?.tone).toBe("success")
+    expect(view?.icon).toBe("branch")
+  })
+
   test("closed pinned PR stays visible with danger tone", () => {
     const view = pillViewForPick(
       { chain: chain({ prs: [pull({ state: "closed" })] }), reason: "pinned" },

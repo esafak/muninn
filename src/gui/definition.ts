@@ -198,6 +198,7 @@ export const definition = Plugin.define({
       "chain.pin": "Pin to pill",
       "chain.unpin": "Unpin from pill",
       "pill.pinned": "pinned",
+      "pill.dismiss": "Dismiss pill",
       "settings.section.merging": "Merging",
       "state.open": "open",
       "state.pr-conflict": "Pull request has merge conflicts",
