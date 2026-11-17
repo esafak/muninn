@@ -100,7 +100,7 @@ export const planDiscovery = (
   let pruned = 0
   const admit: TieredRef[] = []
   const present = new Set<string>()
-  const candidates: { ref: TieredRef; key: string; fresh: boolean }[] = []
+  const candidates: { ref: TieredRef; key: string }[] = []
   for (const ref of refs) {
     if (!validNumber(ref.number)) {
       invalid++
@@ -123,7 +123,7 @@ export const planDiscovery = (
         continue
       }
       ledger.seen.set(key, { lastSeenGen: gen, reservedOp: opId })
-      candidates.push({ ref, key, fresh: true })
+      candidates.push({ ref, key })
       continue
     }
     known.lastSeenGen = gen
@@ -153,7 +153,7 @@ export const planDiscovery = (
         continue
       }
       known.reservedOp = opId
-      candidates.push({ ref, key, fresh: known.hydratedAt === undefined && known.retryDueAt === undefined })
+      candidates.push({ ref, key })
     } else {
       // Backing off: still known-unresolved, just not attempted this round.
       deferred++
