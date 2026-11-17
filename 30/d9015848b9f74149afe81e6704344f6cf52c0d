@@ -1,0 +1,20 @@
+src/gui/pill-status.ts
+  h_ea91e2db23540f 37-41
+src/gui/pill-view.test.ts
+  h_ea91e2db23540f 4,95,100
+src/gui/pill-view.ts
+  h_ea91e2db23540f 1,24,47-48,51-52,69
+src/gui/window.tsx
+  h_ea91e2db23540f 28,30,1663-1664
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "30d9015848b9f74149afe81e6704344f6cf52c0d",
+  "prompts": {},
+  "humans": {
+    "h_ea91e2db23540f": {
+      "author": "Emre Şafak <3928300+esafak@users.noreply.github.com>"
+    }
+  }
+}
