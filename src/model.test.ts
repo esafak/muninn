@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import type { Chain, IssueEntity, PullEntity, RepoRef, RunEntity } from "./model"
-import { chainTone, mergeFailed, mergeReady, mergeWhy, pendingReviewNotice, armedTargets, staleHeadRetryEligible, staleHeadEvidenceUsable, sessionAttemptCurrent, targetRefreshConfirmed, pillPick, pillPicks, pillDisplay, type ArmedEntry, pillEligible, eligibilityProvenance, eligibilityProvenances, pillHeadIdentity, pillLeadOf, rememberCreated, pullForRun, pullsForRun, jsonReady, prConflicted, isFreshBaseSession, entityKey } from "./model"
+import { chainTone, mergeFailed, mergeReady, mergeWhy, pendingReviewNotice, armedTargets, staleHeadRetryEligible, staleHeadEvidenceUsable, sessionAttemptCurrent, targetRefreshConfirmed, pillPick, pillPicks, pillDisplay, type ArmedEntry, pillEligible, eligibilityProvenance, eligibilityProvenances, pillLeadOf, rememberCreated, pullForRun, pullsForRun, jsonReady, prConflicted, isFreshBaseSession, entityKey } from "./model"
 import { associate } from "./associate"
 
 const repo = { host: "github.com", owner: "sst", repo: "opencode" }
@@ -911,16 +911,6 @@ describe("pillLeadOf", () => {
     const closed = pull({ state: "closed" })
     expect(pillLeadOf(chain({ prs: [closed] }), "pinned")).toBe(closed)
     expect(pillLeadOf(chain({ prs: [closed] }), "newest")).toBeUndefined()
-  })
-})
-
-describe("pillHeadIdentity", () => {
-  test("names PR leads, then issues, then runs, then the chain key", () => {
-    expect(pillHeadIdentity(chain({ key: "k", prs: [pull({ number: 7, title: "feat: thing" })] }), "newest")).toBe("#7 feat: thing")
-    expect(pillHeadIdentity(chain({ key: "k", prs: [], issues: [issue("open")] }), "pinned")).toBe("#1043 bug: thing")
-    const runChain = chain({ key: "k", prs: [], runs: [{ ...run("failed"), id: 99 }] })
-    expect(pillHeadIdentity(runChain, "pinned")).toBe("run #99")
-    expect(pillHeadIdentity(chain({ key: "lonely", prs: [], runs: [], issues: [] }), "pinned")).toBe("lonely")
   })
 })
 

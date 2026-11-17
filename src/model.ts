@@ -520,22 +520,6 @@ export const pillLeadOf = (chain: Chain, reason: PillReason): PullEntity | undef
   (reason === "merged" || reason === "pinned" ? chain.prs.find((pull) => pull.state === "merged") ?? chain.prs[0] : undefined)
 
 /**
- * Kind-aware identity for a pick's section heading and title clauses: PRs
- * show `#number title`, pinned issues `#number title`, pinned run-only groups
- * `run #id`, anything else the chain key. The capsule label only ever shows
- * PR leads; mixed picks fall back to a generic count there.
- */
-export const pillHeadIdentity = (chain: Chain, reason: PillReason): string => {
-  const lead = pillLeadOf(chain, reason)
-  if (lead) return `#${lead.number} ${lead.title}`
-  const issue = chain.issues[0]
-  if (issue) return `#${issue.number} ${issue.title}`
-  const run = latestRun(chain.runs)
-  if (run) return `run #${run.id}`
-  return chain.key
-}
-
-/**
  * Sticky session-created memory, keyed by session: merge this session's newly
  * owned PR keys into its set, creating it on first use. Evicts the
  * least-recently-created session's set past `cap` so routine multitasking
