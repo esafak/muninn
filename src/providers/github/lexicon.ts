@@ -44,4 +44,12 @@ export const githubLexicon: Lexicon = {
   // Successful `gh pr create` prints the new PR's URL. Anchored so compound
   // commands (`view …; pr create`) and echoes never count as creation.
   creationCommand: /^\s*(gh\s+)?pr\s+create\b/i,
+  // Executable addressing patterns for command-bucket text. Invocation only —
+  // the engine extracts the number and `--repo`/`-R`. Supported placements are
+  // encoded in `extract.ts` tests; `gh pr list` (no number) never matches.
+  commands: [
+    { kind: "pr", invocation: /^\s*gh\s+pr\s+(?:view|checks|comment|checkout|merge|edit|status)\b/i },
+    { kind: "issue", invocation: /^\s*gh\s+issue\s+view\b/i },
+    { kind: "run", invocation: /^\s*gh\s+run\s+view\b/i },
+  ],
 }

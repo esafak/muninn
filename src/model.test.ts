@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import type { Chain, IssueEntity, PullEntity, RepoRef, RunEntity } from "./model"
-import { chainTone, mergeFailed, mergeReady, mergeWhy, pendingReviewNotice, armedTargets, staleHeadRetryEligible, staleHeadEvidenceUsable, sessionAttemptCurrent, targetRefreshConfirmed, pillPick, pillPicks, type ArmedEntry, pillEligible, pillHeadIdentity, pillLeadOf, rememberCreated, pullForRun, pullsForRun, jsonReady, prConflicted, isFreshBaseSession, entityKey } from "./model"
+import { chainTone, mergeFailed, mergeReady, mergeWhy, pendingReviewNotice, armedTargets, staleHeadRetryEligible, staleHeadEvidenceUsable, sessionAttemptCurrent, targetRefreshConfirmed, pillPick, pillPicks, pillDisplay, type ArmedEntry, pillEligible, eligibilityProvenance, eligibilityProvenances, pillHeadIdentity, pillLeadOf, rememberCreated, pullForRun, pullsForRun, jsonReady, prConflicted, isFreshBaseSession, entityKey } from "./model"
 import { associate } from "./associate"
 
 const repo = { host: "github.com", owner: "sst", repo: "opencode" }
@@ -667,7 +667,7 @@ describe("pillEligible", () => {
   const elsewhere = "fix/other-session"
   const branched = (headBranch: string, over: Partial<PullEntity> = {}): Chain =>
     chain({ prs: [pull({ headBranch, ...over })] })
-  const ctx = (over: { sessionBranch?: string; sessionRepo?: RepoRef; sessionHeadSha?: string; created?: ReadonlySet<string> } = {}) => ({
+  const ctx = (over: { sessionBranch?: string; sessionRepo?: RepoRef; sessionHeadSha?: string; created?: ReadonlySet<string>; mentioned?: ReadonlySet<string> } = {}) => ({
     sessionBranch: own,
     sessionRepo: repo,
     ...over,
@@ -779,6 +779,116 @@ describe("pillEligible", () => {
       pillEligible(candidate, { sessionBranch: own, sessionRepo: repo }),
     )
     expect(eligible).toEqual([])
+  })
+
+  test("regression (PR #5, same-repo counterpart): a mentioned same-repo PR pills as a dot", () => {
+    const mentioned = pull({ number: 5, headBranch: elsewhere, state: "open" })
+    const chains = associate([mentioned], [], own)
+    expect(chains.length).toBe(1)
+    const mentionedKeys = new Set([entityKey(mentioned)])
+    const eligible = chains.filter((candidate) =>
+      pillEligible(candidate, { sessionBranch: own, sessionRepo: repo, mentioned: mentionedKeys }),
+    )
+    expect(eligible.map((candidate) => candidate.key)).toEqual(chains.map((candidate) => candidate.key))
+  })
+
+  test("mention path: same-repo open/draft/merged PRs recruit; closed and foreign never do", () => {
+    const open = (n: number) => pull({ number: n, headBranch: elsewhere, state: "open" })
+    const keys = (n: number) => new Set([entityKey(open(n))])
+    expect(pillEligible(chain({ prs: [open(1)] }), ctx({ mentioned: keys(1) }))).toBe(true)
+    expect(pillEligible(chain({ prs: [pull({ number: 2, headBranch: elsewhere, state: "draft" })] }), ctx({ mentioned: new Set([entityKey(pull({ number: 2, headBranch: elsewhere, state: "draft" }))]) }))).toBe(true)
+    expect(pillEligible(chain({ prs: [pull({ number: 3, headBranch: elsewhere, state: "merged" })] }), ctx({ mentioned: new Set([entityKey(pull({ number: 3, headBranch: elsewhere, state: "merged" }))]) }))).toBe(true)
+    const closedPull = pull({ number: 4, headBranch: elsewhere, state: "closed" })
+    expect(pillEligible(chain({ prs: [closedPull] }), ctx({ mentioned: new Set([entityKey(closedPull)]) }))).toBe(false)
+    const foreignPull = pull({ number: 5, headBranch: elsewhere, state: "open", repo: { host: "github.com", owner: "other", repo: "repo" } })
+    expect(pillEligible(chain({ prs: [foreignPull] }), ctx({ mentioned: new Set([entityKey(foreignPull)]) }))).toBe(false)
+    expect(pillEligible(chain({ prs: [open(6)], runs: [run("failed")] }), ctx())).toBe(false)
+    expect(pillEligible(chain({ prs: [open(7)] }), ctx({ sessionRepo: undefined, mentioned: keys(7) }))).toBe(false)
+    expect(pillEligible(chain({ prs: [], runs: [], issues: [issue("open")] }), ctx({ mentioned: new Set([entityKey(open(8))]) }))).toBe(false)
+    expect(pillEligible(chain({ prs: [], runs: [run("succeeded")] }), ctx({ mentioned: new Set([entityKey(open(9))]) }))).toBe(false)
+  })
+
+  test("eligibilityProvenance names the winning rule in priority order", () => {
+    const live = pull({ headBranch: own, number: 1 })
+    expect(eligibilityProvenance(chain({ prs: [live] }), ctx())).toBe("branch")
+    const shaOwned = pull({ headBranch: elsewhere, headSha: "dd18b294", number: 2 })
+    expect(eligibilityProvenance(chain({ prs: [shaOwned] }), ctx({ sessionHeadSha: "dd18b294" }))).toBe("sha")
+    const remembered = pull({ headBranch: elsewhere, number: 7, state: "open" })
+    expect(
+      eligibilityProvenance(chain({ prs: [remembered] }), ctx({ mentioned: new Set([entityKey(remembered)]) })),
+    ).toBe("mention")
+    expect(eligibilityProvenance(chain({ prs: [remembered] }), ctx())).toBe("none")
+    // Live ownership outranks a mention on the same chain.
+    expect(
+      eligibilityProvenance(chain({ prs: [live] }), ctx({ mentioned: new Set([entityKey(live)]) })),
+    ).toBe("branch")
+  })
+
+  test("eligibilityProvenances collects every applicable rule in priority order", () => {
+    const live = pull({ headBranch: own, headSha: "dd18b294", number: 1, state: "open" })
+    const full = ctx({
+      sessionHeadSha: "dd18b294",
+      created: new Set([entityKey(live)]),
+      mentioned: new Set([entityKey(live)]),
+    })
+    expect(eligibilityProvenances(chain({ prs: [live] }), full)).toEqual(["branch", "sha", "created", "mention"])
+    expect(eligibilityProvenances(chain({ prs: [pull({ headBranch: elsewhere, number: 9 })] }), ctx())).toEqual([])
+    const mentioned = pull({ headBranch: elsewhere, number: 7, state: "open" })
+    expect(
+      eligibilityProvenances(chain({ prs: [mentioned] }), ctx({ mentioned: new Set([entityKey(mentioned)]) })),
+    ).toEqual(["mention"])
+  })
+
+  test("mention removal unpills; another session's created set does not leak in", () => {
+    const other = pull({ headBranch: elsewhere, number: 7, state: "open" })
+    const key = entityKey(other)
+    const c = chain({ prs: [other] })
+    expect(pillEligible(c, ctx({ mentioned: new Set([key]) }))).toBe(true)
+    expect(pillEligible(c, ctx({ mentioned: new Set() }))).toBe(false)
+    expect(pillEligible(c, ctx({ created: new Set([key]) }))).toBe(true)
+    expect(pillEligible(c, ctx({ created: new Set(["other-session-key"]) }))).toBe(false)
+  })
+
+  test("two distinct same-repo chains produce two picks; shared-issue PRs stay one dot", () => {
+    const first = pull({ number: 1, headBranch: elsewhere, closes: [9], updatedAt: 100 })
+    const second = pull({ number: 2, headBranch: elsewhere, closes: [9], updatedAt: 200 })
+    const grouped = associate([first, second], [], own)
+    expect(grouped).toHaveLength(1)
+    expect(pillPicks(grouped)).toHaveLength(1)
+    const separate = associate(
+      [pull({ number: 3, headBranch: elsewhere, updatedAt: 100 }), pull({ number: 4, headBranch: elsewhere, updatedAt: 200 })],
+      [],
+      own,
+    )
+    expect(separate).toHaveLength(2)
+    expect(pillPicks(separate)).toHaveLength(2)
+  })
+
+  test("six eligible open chains order danger-then-newest (display caps at five)", () => {
+    const calm = (n: number) => chain({ key: `calm-${n}`, prs: [pull({ number: n })], updatedAt: n })
+    const danger = chain({ key: "danger", prs: [pull({ number: 100, mergeState: "blocked" })], updatedAt: 1 })
+    const picks = pillPicks([calm(2), calm(3), calm(4), calm(5), calm(6), danger])
+    expect(picks.map((pick) => pick.chain.key)).toEqual(["danger", "calm-6", "calm-5", "calm-4", "calm-3", "calm-2"])
+    expect(picks.slice(0, 5)).toHaveLength(5)
+  })
+
+  test("pillDisplay: pinned leads, dedupes when eligible, and caps at five", () => {
+    const calm = (n: number) => chain({ key: `calm-${n}`, prs: [pull({ number: n })], updatedAt: n })
+    const eligible = [calm(1), calm(2), calm(3), calm(4), calm(5), calm(6)]
+    // No pin: first five in newest-first order.
+    expect(pillDisplay(eligible, undefined).map((pick) => pick.chain.key)).toEqual([
+      "calm-6", "calm-5", "calm-4", "calm-3", "calm-2",
+    ])
+    // Pin already eligible and in picks: pinned first, no duplicate, still capped.
+    const pinned = pillDisplay(eligible, eligible[5])
+    expect(pinned[0]).toMatchObject({ reason: "pinned" })
+    expect(pinned.map((pick) => pick.chain.key)).toEqual(["calm-6", "calm-5", "calm-4", "calm-3", "calm-2"])
+    // Pin ineligible (mentions only it): pinned first, then eligible order.
+    const outsider = chain({ key: "outsider", prs: [pull({ number: 99 })], updatedAt: 0 })
+    const withOutsider = pillDisplay(eligible, outsider)
+    expect(withOutsider[0]).toMatchObject({ reason: "pinned" })
+    expect(withOutsider.map((pick) => pick.chain.key)[0]).toBe("outsider")
+    expect(withOutsider).toHaveLength(5)
   })
 })
 

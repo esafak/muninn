@@ -15,6 +15,216 @@ import type { Lexicon } from "./providers/lexicon"
 const stripCode = (text: string): string =>
   text.replace(/```[\s\S]*?```/g, " ").replace(/~~~[\s\S]*?~~~/g, " ").replace(/`[^`\n]*`/g, " ")
 
+/**
+ * Remove single/double-quoted spans (backslash escapes honored), so quoted
+ * fakes (`echo "gh pr view 5"`, `gh pr view "$p"`) never read as addressing.
+ * Unquoted text passes through byte-identical.
+ */
+export const stripQuoted = (text: string): string => {
+  let out = ""
+  let inSingle = false
+  let inDouble = false
+  let escaped = false
+  for (const char of text) {
+    if (inSingle) {
+      if (char === "'") inSingle = false
+      continue
+    }
+    if (inDouble) {
+      if (escaped) {
+        escaped = false
+        continue
+      }
+      if (char === "\\") {
+        escaped = true
+        continue
+      }
+      if (char === '"') inDouble = false
+      continue
+    }
+    if (escaped) {
+      escaped = false
+      out += char
+      continue
+    }
+    if (char === "\\") {
+      escaped = true
+      out += char
+      continue
+    }
+    if (char === "'") {
+      inSingle = true
+      continue
+    }
+    if (char === '"') {
+      inDouble = true
+      continue
+    }
+    out += char
+  }
+  return out
+}
+
+/**
+ * Split a command into quote-aware clauses on `&&`, `||`, `;`, `|`, and
+ * newlines, preserving the separator that follows each clause. Single `&`
+ * (redirections like `2>&1`, background `&`) never splits. Shared by CLI
+ * addressing (extract) and creation attribution (created).
+ */
+export interface CommandClause {
+  text: string
+  sep: "&&" | "||" | "|" | ";" | "\n" | null
+}
+
+export const splitTopLevel = (command: string): CommandClause[] => {
+  const clauses: CommandClause[] = []
+  let current = ""
+  let inSingle = false
+  let inDouble = false
+  let escaped = false
+  const push = (sep: CommandClause["sep"]): void => {
+    clauses.push({ text: current, sep })
+    current = ""
+  }
+  for (let i = 0; i < command.length; i++) {
+    const char = command[i]!
+    if (inSingle) {
+      current += char
+      if (char === "'") inSingle = false
+      continue
+    }
+    if (inDouble) {
+      current += char
+      if (escaped) escaped = false
+      else if (char === "\\") escaped = true
+      else if (char === '"') inDouble = false
+      continue
+    }
+    if (escaped) {
+      escaped = false
+      current += char
+      continue
+    }
+    if (char === "\\") {
+      escaped = true
+      current += char
+      continue
+    }
+    if (char === "'") {
+      inSingle = true
+      current += char
+      continue
+    }
+    if (char === '"') {
+      inDouble = true
+      current += char
+      continue
+    }
+    const next = command[i + 1]
+    if ((char === "&" && next === "&") || (char === "|" && next === "|")) {
+      push(char === "&" ? "&&" : "||")
+      i++
+      continue
+    }
+    if (char === ";" || char === "|" || char === "\n") {
+      push(char)
+      continue
+    }
+    current += char
+  }
+  clauses.push({ text: current, sep: null })
+  return clauses
+}
+
+/** Split a command into quote-aware segments (separators consumed). */
+export const commandSegments = (command: string): string[] =>
+  splitTopLevel(command).map((clause) => clause.text)
+
+/** Quote-aware whitespace tokenization; quotes are retained on their token. */
+export const splitTokens = (segment: string): string[] => {
+  const tokens: string[] = []
+  let current = ""
+  let inSingle = false
+  let inDouble = false
+  let escaped = false
+  const flush = (): void => {
+    if (current.length > 0) tokens.push(current)
+    current = ""
+  }
+  for (const char of segment) {
+    if (inSingle) {
+      current += char
+      if (char === "'") inSingle = false
+      continue
+    }
+    if (inDouble) {
+      current += char
+      if (escaped) escaped = false
+      else if (char === "\\") escaped = true
+      else if (char === '"') inDouble = false
+      continue
+    }
+    if (escaped) {
+      escaped = false
+      current += char
+      continue
+    }
+    if (char === "\\") {
+      escaped = true
+      current += char
+      continue
+    }
+    if (char === "'") {
+      inSingle = true
+      current += char
+      continue
+    }
+    if (char === '"') {
+      inDouble = true
+      current += char
+      continue
+    }
+    if (char === " " || char === "\t" || char === "\n") {
+      flush()
+      continue
+    }
+    current += char
+  }
+  flush()
+  return tokens
+}
+
+/** Remove one matching pair of surrounding quotes; undefined when unbalanced. */
+export const unquoteToken = (value: string): string | undefined => {
+  if (value.length >= 2 && value.startsWith('"') && value.endsWith('"')) return value.slice(1, -1)
+  if (value.length >= 2 && value.startsWith("'") && value.endsWith("'")) return value.slice(1, -1)
+  if (value.startsWith('"') || value.startsWith("'")) return undefined
+  return value
+}
+
+/**
+ * Parse an `--repo`/`-R` value: `owner/repo`, `host/owner/repo` (bare host
+ * needs a dot), or a full URL. Anything else is ambiguous — undefined, and
+ * the caller must reject without falling back to the session repository.
+ */
+export const parseRepoFlag = (value: string, host: string): RepoRef | undefined => {
+  const scoped = /^(?:https?:\/\/([^/]+)\/)?([\w.-]+)\/([\w.-]+)\/?$/.exec(value)
+  if (scoped) return { host: scoped[1] ?? host, owner: scoped[2]!, repo: scoped[3]! }
+  const bareHost = /^([\w.-]*\.[\w.-]+)\/([\w.-]+)\/([\w.-]+)\/?$/.exec(value)
+  if (bareHost) return { host: bareHost[1]!, owner: bareHost[2]!, repo: bareHost[3]! }
+  return undefined
+}
+
+// Options of the supported `gh pr/issue/run` subcommands that take a value:
+// their argument is never a positional entity number (`--body 123` addresses
+// nothing). repo flags are handled separately; unknown `--flags` are validated
+// positionally at the scan site.
+const VALUE_OPTIONS = new Set([
+  "--body", "-b", "--body-file", "-F", "--title", "-T",
+  "--json", "--jq", "--template", "-t", "--base", "-B",
+  "--head", "-H", "--limit", "-L",
+])
+
 // `[^\S\n]` — horizontal whitespace only: a kind word and its number must share a
 // line, so line-numbered tool output ("…via-pr\n6: …") can't fabricate references.
 const kindWordPattern = /\b(pull request|pr|issue|check run|run)[^\S\n]+#?(\d+)\b/gi
@@ -113,6 +323,175 @@ export const scanDetailed = (text: string, repo?: RepoRef, lexicons: readonly Le
   }
 
   return [...found.values()]
+}
+
+/**
+ * Executable CLI addressing, command buckets only (`gh pr view 2781`).
+ *
+ * Unlike `scanDetailed` (prose shapes), this scans invoked command text:
+ * per quote-aware clause, executable-only (a leading `gh`, so
+ * `echo gh pr view 5` never counts), quoted spans stripped (so `"gh pr view
+ * 5"`, `"$p"` and `-R "other/repo"`-style hidden values never misread).
+ *
+ * Repository attribution is token-based: `--repo`/`-R` (space, `=`, or
+ * attached `-Rvalue`/`-R=value`; quotes honored, including quoted flag
+ * spellings like `"--repo"`) resolve that repository, including bare
+ * `host/owner/repo`. A present-but-unusable flag rejects the clause
+ * without falling back to the session repository. Otherwise the clause
+ * resolves against the session repository like a kind word, with the same
+ * deliberateness (singled out, survives run-listing suppression).
+ *
+ * The entity number is the single bare numeric token that is not an option
+ * value: known value-options (`--body`, `--json`, …) consume their argument,
+ * and a bare number after an unrecognized `--flag` rejects the clause as
+ * ambiguous. Quoted numbers (`"$p"`, `"5"`) never count; zero or several
+ * remaining numbers reject the clause.
+ */
+export const scanCommandRefs = (
+  text: string,
+  repo?: RepoRef,
+  lexicons: readonly Lexicon[] = [],
+): (Ref & { origin: Origin })[] => {
+  const found = new Map<string, Ref & { origin: Origin }>()
+  const add = (ref: Ref & { origin: Origin }) => {
+    const key = `${ref.repo ? `${ref.repo.host}/${ref.repo.owner}/${ref.repo.repo}` : "@"}#${ref.number}`
+    const existing = found.get(key)
+    if (!existing) {
+      found.set(key, ref)
+      return
+    }
+    found.set(key, {
+      number: ref.number,
+      kind: existing.kind ?? ref.kind,
+      repo: existing.repo ?? ref.repo,
+      origin: originRank[ref.origin] < originRank[existing.origin] ? ref.origin : existing.origin,
+    })
+  }
+  for (const lexicon of lexicons) {
+    const patterns = lexicon.commands ?? []
+    if (patterns.length === 0) continue
+    for (const { text: clause } of splitTopLevel(text)) {
+      if (!/\S/.test(clause)) continue
+      const invocation = patterns.find((pattern) => pattern.invocation.test(stripQuoted(clause)))
+      if (!invocation) continue
+      const tokens = splitTokens(clause)
+      // One sequential option-aware pass: --repo/-R resolve the repository
+      // (quoted spellings recognized, quoted values honored), known
+      // value-options consume their argument (so `--body 123`, `"--body" 123`,
+      // and `--body "-Rother/repo"` never recruit nor re-flag), and
+      // everything else flows through as potential positionals.
+      let repoValue: string | undefined
+      let flagBad = false
+      const kept: string[] = []
+      for (let i = 0; i < tokens.length; i++) {
+        const plain = unquoteToken(tokens[i]!) ?? tokens[i]!
+        if (plain === "--repo" || plain === "-R") {
+          const value = tokens[i + 1]
+          if (value === undefined) {
+            flagBad = true
+            break
+          }
+          const unquoted = unquoteToken(value)
+          if (unquoted === undefined || unquoted.startsWith("-")) {
+            flagBad = true
+            break
+          }
+          repoValue = unquoted
+          i++
+          continue
+        }
+        if (plain.startsWith("--repo=")) {
+          const value = plain.slice("--repo=".length)
+          if (value.length === 0) {
+            flagBad = true
+            break
+          }
+          repoValue = value
+          continue
+        }
+        if (plain.startsWith("-R") && plain.length > 2 && !plain.startsWith("--")) {
+          let value = plain.slice(2)
+          if (value.startsWith("=")) value = value.slice(1)
+          if (value.length === 0) {
+            flagBad = true
+            break
+          }
+          repoValue = value
+          continue
+        }
+        if (VALUE_OPTIONS.has(plain)) {
+          i++
+          continue
+        }
+        kept.push(tokens[i]!)
+      }
+      if (flagBad) continue
+      let resolved: RepoRef | undefined
+      if (repoValue !== undefined) {
+        resolved = parseRepoFlag(repoValue, lexicon.host)
+        if (!resolved) continue
+      } else {
+        if (!repo) continue
+        resolved = repo
+      }
+      // Positional selectors from the surviving tokens: a bare number after
+      // an unrecognized `--flag` is ambiguous and rejects the clause. Quoted
+      // numbers never count. Value-option arguments were already consumed
+      // above, so they can neither recruit nor re-flag.
+      const numbers = new Set<number>()
+      const keptIdx: number[] = []
+      const unknownFlagIdx: number[] = []
+      for (let i = 0; i < kept.length; i++) {
+        const raw = kept[i]!
+        const plain = unquoteToken(raw) ?? raw
+        if (plain.startsWith("--") && plain.length > 2 && !/^-?\d+$/.test(plain)) {
+          unknownFlagIdx.push(i)
+          continue
+        }
+        const bare = /^#?(\d+)$/.exec(raw)
+        if (bare) {
+          numbers.add(Number(bare[1]))
+          keptIdx.push(i)
+        }
+      }
+      if (unknownFlagIdx.some((u) => keptIdx.some((k) => k > u))) continue
+      if (numbers.size !== 1) continue
+      const number = [...numbers][0]!
+      if (!Number.isSafeInteger(number) || number <= 0) continue
+      add({ kind: invocation.kind, number, repo: resolved, origin: "kindword" })
+    }
+  }
+  return [...found.values()]
+}
+
+/**
+ * Full command-bucket scan: general shapes (a pasted URL in a command still
+ * counts) plus executable CLI addressing. Command buckets only — prose and
+ * output buckets keep general `scanDetailed`.
+ */
+export const scanCommandDetailed = (
+  text: string,
+  repo?: RepoRef,
+  lexicons: readonly Lexicon[] = [],
+): (Ref & { origin: Origin })[] => {
+  const merged = new Map<string, Ref & { origin: Origin }>()
+  const put = (ref: Ref & { origin: Origin }) => {
+    const key = `${ref.repo ? `${ref.repo.host}/${ref.repo.owner}/${ref.repo.repo}` : "@"}#${ref.number}`
+    const existing = merged.get(key)
+    if (!existing) {
+      merged.set(key, ref)
+      return
+    }
+    merged.set(key, {
+      number: ref.number,
+      kind: existing.kind ?? ref.kind,
+      repo: existing.repo ?? ref.repo,
+      origin: originRank[ref.origin] < originRank[existing.origin] ? ref.origin : existing.origin,
+    })
+  }
+  for (const ref of scanDetailed(text, repo, lexicons)) put(ref)
+  for (const ref of scanCommandRefs(text, repo, lexicons)) put(ref)
+  return [...merged.values()]
 }
 
 /** `gh run list`-style enumerations dump dozens of run ids; a run only counts
@@ -275,13 +654,15 @@ export const deliberateRefs = (
       byKey.set(key, { ...rest, tier })
     }
   }
-  const addBlock = (text: string, tier: Tier) => {
-    const detailed = scanDetailed(text, repo, lexicons)
+  const addBlock = (text: string, tier: Tier, isCommand = false) => {
+    // Command buckets scan general shapes plus executable CLI addressing;
+    // prose/user/output buckets keep general shapes only.
+    const detailed = isCommand ? scanCommandDetailed(text, repo, lexicons) : scanDetailed(text, repo, lexicons)
     const listed = listedRunKeys(detailed)
     for (const ref of detailed) if (!listed.has(refKey(ref))) put(ref, tier)
   }
   for (const text of buckets.user) addBlock(text, "user")
-  for (const text of buckets.commands) addBlock(text, "command")
+  for (const text of buckets.commands) addBlock(text, "command", true)
   for (const text of buckets.prose) addBlock(text, "prose")
   for (const output of buckets.outputs)
     for (const text of output.texts) {

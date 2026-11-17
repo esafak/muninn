@@ -266,43 +266,69 @@ export const mergeFailed = (chain: Chain, pull = chain.prs[0], waitForAllStatusC
 export const pendingReviewNotice = (pull: PullEntity): string | undefined =>
   pull.reviewState === "pending" ? "reviews are pending (no approval on record)" : undefined
 
-/** Pill eligibility — what deserves the composer's highest-commitment surface.
- * Only the session's own work pills, one pill per chain (pinned first, capped
- * for display): a PR from the session's repository on the session's branch —
- * repo-scoped, since a foreign PR can share a branch name; or a PR whose head
- * SHA equals the session checkout's HEAD — a push from any local branch name
- * counts as own work. `created` is the sticky memory of PRs this session
- * previously owned (branch/SHA matched at creation time): sequential
- * multi-PR sessions keep every created PR pilled after switching branches,
- * while either ownership match holds for live work. Own work remains eligible
- * after merging while it is not closed; SHA-only ownership lapses if local
- * HEAD advances beyond the PR head. `pillPick` ranks the eligible chains.
- * Everything else is sidebar material: other branches' PRs (mention is not
- * intent — see the PR #5 recruiting incident), issue-only chains,
- * closed-without-merge work, settled run-only chains. */
-export const pillEligible = (
-  chain: Chain,
-  ctx: {
-    sessionBranch?: string
-    sessionRepo?: RepoRef
-    sessionHeadSha?: string
-    created?: ReadonlySet<string>
-  } = {},
-): boolean => {
+/** Why a chain counts as pill-eligible: live branch/SHA ownership, sticky
+ * session-created memory, or a deliberate same-repo mention. `"none"` means
+ * sidebar-only. Kept separate from `PillReason` (which ranks picks) so the
+ * footer can explain every dot without recomputing eligibility per consumer. */
+export type EligibilityProvenance = "branch" | "sha" | "created" | "mention" | "none"
+
+/** Context for `pillEligible` / `eligibilityProvenance`. `mentioned` carries
+ * repo-scoped PR entity keys derived from deliberate `user`/`command`/`prose`
+ * refs (see `mentionEvidence`); `output`-tier refs never enter it. */
+export interface EligibilityContext {
+  sessionBranch?: string
+  sessionRepo?: RepoRef
+  sessionHeadSha?: string
+  created?: ReadonlySet<string>
+  mentioned?: ReadonlySet<string>
+}
+/** All eligibility rules a chain passes, in priority order. Diagnostics read
+ * every applicable rule (`branch+mention`, `pinned+created`); the pill filter
+ * stays boolean via `pillEligible`. */
+export type EligibilityProvenances = Exclude<EligibilityProvenance, "none">[]
+
+export const pillEligible = (chain: Chain, ctx: EligibilityContext = {}): boolean =>
+  eligibilityProvenances(chain, ctx).length > 0
+
+/**
+ * Every eligibility rule a chain passes, in priority order: live branch, live
+ * SHA, sticky created memory, deliberate same-repo mention. The mention path
+ * needs the same repository as the session, a mention-evidenced chain member,
+ * and an unclosed PR state (`open`/`draft`, plus `merged` terminal dots).
+ * Closed PRs, foreign repos, and issue-only/run-only chains never recruit via
+ * mention — mention is still not intent across repositories (see the PR #5
+ * recruiting incident), only within the session's own repo. Diagnostics read
+ * every applicable rule (`branch+mention`); the pill filter stays boolean.
+ * `pillPick` ranks the eligible chains; everything ineligible stays sidebar
+ * material.
+ */
+export const eligibilityProvenances = (chain: Chain, ctx: EligibilityContext = {}): EligibilityProvenances => {
   // The session's own work: repository-scoped, since a foreign PR can share a
   // branch name (the PR #5 incident itself was cross-repo). A HEAD-SHA match
   // covers pushing the PR's branch from a differently-named local branch.
+  const out: EligibilityProvenances = []
   if (
     ctx.sessionRepo !== undefined &&
+    ctx.sessionBranch !== undefined &&
     chain.prs.some(
       (pull) =>
         pull.state !== "closed" &&
         repoKey(pull.repo) === repoKey(ctx.sessionRepo!) &&
-        ((ctx.sessionBranch !== undefined && pull.headBranch === ctx.sessionBranch) ||
-          (ctx.sessionHeadSha !== undefined && pull.headSha === ctx.sessionHeadSha)),
+        pull.headBranch === ctx.sessionBranch,
     )
   )
-    return true
+    out.push("branch")
+  if (
+    ctx.sessionRepo !== undefined &&
+    ctx.sessionHeadSha !== undefined &&
+    chain.prs.some(
+      (pull) =>
+        pull.state !== "closed" &&
+        repoKey(pull.repo) === repoKey(ctx.sessionRepo!) &&
+        pull.headSha === ctx.sessionHeadSha,
+    )
+  )
+    out.push("sha")
   // Sticky session-created memory: a PR this session previously owned stays
   // eligible after the checkout moves on to the next PR's branch. Closed
   // work still drops out; keys are repo-scoped entity keys, so a foreign
@@ -311,9 +337,24 @@ export const pillEligible = (
     ctx.created !== undefined &&
     chain.prs.some((pull) => pull.state !== "closed" && ctx.created!.has(entityKey(pull)))
   )
-    return true
-  return false
+    out.push("created")
+  if (
+    ctx.mentioned !== undefined &&
+    ctx.sessionRepo !== undefined &&
+    chain.prs.some(
+      (pull) =>
+        (pull.state === "open" || pull.state === "draft" || pull.state === "merged") &&
+        repoKey(pull.repo) === repoKey(ctx.sessionRepo!) &&
+        ctx.mentioned!.has(entityKey(pull)),
+    )
+  )
+    out.push("mention")
+  return out
 }
+
+/** First winning rule (priority order), for callers that need a single label. */
+export const eligibilityProvenance = (chain: Chain, ctx: EligibilityContext = {}): EligibilityProvenance =>
+  eligibilityProvenances(chain, ctx)[0] ?? "none"
 
 /** Fresh worktree gate: a new session still on its base branch with zero
  * deliberate transcript refs shows an empty sidebar and no pill. v1 base names
@@ -449,6 +490,23 @@ export const pillPicks = (
   const runChains = chains.filter((chain) => chain.runs.length > 0).toSorted(byNewest)
   for (const chain of runChains) push(chain, "runs-only")
   return out
+}
+
+/**
+ * The pill's display list: the pinned chain first (explicit override, even
+ * when ineligible), then `pillPicks` order with the pinned chain deduped,
+ * capped for display. Pure so the pinned-slot and dedup rules are testable;
+ * the GUI passes `MAX_PILLS` as the cap.
+ */
+export const pillDisplay = (
+  eligible: readonly Chain[],
+  pinned: Chain | undefined,
+  waitForAllStatusChecks = true,
+  max = 5,
+): { chain: Chain; reason: PillReason }[] => {
+  if (!pinned) return pillPicks(eligible, waitForAllStatusChecks).slice(0, max)
+  const ordered = pillPicks(eligible, waitForAllStatusChecks).filter((entry) => entry.chain.key !== pinned.key)
+  return [{ chain: pinned, reason: "pinned" as const }, ...ordered].slice(0, max)
 }
 
 /**

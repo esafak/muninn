@@ -15,6 +15,20 @@ export interface UrlPattern {
   numberGroup?: number
 }
 
+/**
+ * An executable CLI addressing pattern: matches one quote-aware command
+ * segment that names a single entity (e.g. `gh pr view 2781`). The engine
+ * splits command text on unquoted `&&`/`||`/`;`/`|`/newlines, strips quoted
+ * spans, and tests each segment. On a match it takes the first bare number
+ * as the reference and honors `--repo`/`-R` for repository attribution.
+ * Must stay non-global (`.test()` is stateful on `/g` regexes).
+ */
+export interface CliAddress {
+  kind: Kind
+  /** Tests a quote-stripped command segment; must be anchored (`^`). */
+  invocation: RegExp
+}
+
 export interface Lexicon {
   provider: ProviderID
   /** The URL host this provider owns, e.g. "github.com". */
@@ -30,4 +44,10 @@ export interface Lexicon {
    * `/g` regexes (`lastIndex` advances and matching turns intermittent).
    */
   creationCommand?: RegExp
+  /**
+   * Executable CLI addressing patterns (e.g. `gh pr view 2781`). Pure data;
+   * the engine in `extract.ts` owns segmentation, quote-stripping, number and
+   * `--repo` handling. Keep provider-local per the architecture rules.
+   */
+  commands?: readonly CliAddress[]
 }

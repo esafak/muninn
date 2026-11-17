@@ -9,7 +9,7 @@
  * guard stays: paying hydrate+LLM for 50 `gh run list` rows is never worth it.
  */
 
-import { deliberateRefs, scanDetailed, RUN_LISTING_LIMIT } from "../extract"
+import { deliberateRefs, scanCommandDetailed, scanDetailed, RUN_LISTING_LIMIT } from "../extract"
 import type { Buckets, Tier, TieredRef } from "../extract"
 import { refKey } from "../model"
 import type { Lexicon } from "../providers/lexicon"
@@ -36,8 +36,8 @@ export const heuristicExtract = (
     const existing = byKey.get(key)
     if (!existing || tierRank[ref.tier] < tierRank[existing.tier]) byKey.set(key, ref)
   }
-  const addBlock = (text: string, tier: Tier) => {
-    const detailed = scanDetailed(text, repo, lexicons)
+  const addBlock = (text: string, tier: Tier, isCommand = false) => {
+    const detailed = isCommand ? scanCommandDetailed(text, repo, lexicons) : scanDetailed(text, repo, lexicons)
     const runRefs = detailed.filter((r) => r.kind === "run")
     const listedRuns =
       runRefs.length >= RUN_LISTING_LIMIT
@@ -50,7 +50,7 @@ export const heuristicExtract = (
     }
   }
   for (const text of buckets.user) addBlock(text, "user")
-  for (const text of buckets.commands) addBlock(text, "command")
+  for (const text of buckets.commands) addBlock(text, "command", true)
   for (const text of buckets.prose) addBlock(text, "prose")
   for (const output of buckets.outputs) {
     for (const text of output.texts) {
@@ -79,7 +79,11 @@ export const heuristicExtract = (
   return { refs, snippets: snippetMap(buckets, refs, repo, lexicons) }
 }
 
-/** First bucket string (plus invoking command for outputs) that yields each ref. */
+/** First bucket string (plus invoking command for outputs) that yields each ref.
+ * Scan order prefers the richest judge evidence, not tier rank: user words,
+ * then agent prose, then tool output prose (with its invoking command), and
+ * bare command invocations last — so `gh pr view 3670` never shadows the
+ * output prose it produced. CLI-only refs still get their command as text. */
 export const snippetMap = (
   buckets: Buckets,
   refs: readonly TieredRef[],
@@ -88,9 +92,10 @@ export const snippetMap = (
 ): Map<string, CandidateSnippet> => {
   const wanted = new Set(refs.map((ref) => refKey(ref)))
   const out = new Map<string, CandidateSnippet>()
-  const consider = (text: string, command?: string) => {
+  const consider = (text: string, command?: string, isCommand = false) => {
     if (out.size >= wanted.size) return
-    for (const ref of scanDetailed(text, repo, lexicons)) {
+    const scanned = isCommand ? scanCommandDetailed(text, repo, lexicons) : scanDetailed(text, repo, lexicons)
+    for (const ref of scanned) {
       const { origin: _origin, ...rest } = ref
       void rest
       const key = refKey(ref)
@@ -98,8 +103,8 @@ export const snippetMap = (
     }
   }
   for (const text of buckets.user) consider(text)
-  for (const text of buckets.commands) consider(text)
   for (const text of buckets.prose) consider(text)
   for (const output of buckets.outputs) for (const text of output.texts) consider(text, output.command)
+  for (const text of buckets.commands) consider(text, undefined, true)
   return out
 }

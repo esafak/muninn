@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { deliberateRefs, messageBuckets, messagesText, scan, textToScan, LISTING_THRESHOLD, RUN_LISTING_LIMIT, WIRE_REF_CAP, scanDetailed, wireRefs } from "./extract"
+import { deliberateRefs, messageBuckets, messagesText, scan, scanCommandDetailed, textToScan, LISTING_THRESHOLD, RUN_LISTING_LIMIT, WIRE_REF_CAP, scanDetailed, wireRefs, commandSegments, splitTokens, splitTopLevel, stripQuoted, unquoteToken } from "./extract"
 import type { TieredRef } from "./extract"
 import { githubLexicon } from "./providers/github/lexicon"
 import type { RepoRef } from "./model"
@@ -29,6 +29,156 @@ describe("scanDetailed", () => {
   test("a kind word marks an explicitly referenced number as singled out — its origin wins", () => {
     const refs = scanDetailed("https://github.com/sst/opencode/actions/runs/906 — run 906 is the one", opencode, [githubLexicon])
     expect(refs).toEqual([{ number: 906, kind: "run", repo: opencode, origin: "kindword" }])
+  })
+})
+
+describe("commandSegments + stripQuoted", () => {
+  test("splits on unquoted && || ; | and newlines, never on single &", () => {
+    expect(commandSegments("cd dir && gh pr view 5")).toEqual(["cd dir ", " gh pr view 5"])
+    expect(commandSegments("a || b; c | d\ne")).toEqual(["a ", " b", " c ", " d", "e"])
+    expect(commandSegments("git push 2>&1 | tail -4 && gh pr create --head b")).toEqual([
+      "git push 2>&1 ",
+      " tail -4 ",
+      " gh pr create --head b",
+    ])
+    expect(commandSegments("sleep 1 & gh pr view 5")).toHaveLength(1)
+    expect(commandSegments('echo "a && b" | cat')).toEqual(['echo "a && b" ', " cat"])
+    expect(commandSegments("echo 'a; b'")).toEqual(["echo 'a; b'"])
+  })
+
+  test("stripQuoted removes quoted spans, keeping unquoted text", () => {
+    expect(stripQuoted('gh pr view "$p"')).toBe("gh pr view ")
+    expect(stripQuoted(`echo "gh pr view 5"`)).toBe("echo ")
+    expect(stripQuoted("gh pr view 5 --body 'a; b'")).toBe("gh pr view 5 --body ")
+  })
+})
+
+describe("CLI addressing (gh invocation patterns, command buckets only)", () => {
+  const cli = (text: string, repo?: RepoRef) => scanCommandDetailed(text, repo ?? opencode, [githubLexicon])
+
+  test("table: supported invocations resolve against the session repo", () => {
+    const cases = [
+      ["gh pr view 3684", 3684, "pr"],
+      ["gh pr checks 2781", 2781, "pr"],
+      ["gh pr comment 2781 --body x", 2781, "pr"],
+      ["gh pr checkout 12", 12, "pr"],
+      ["gh pr merge 13", 13, "pr"],
+      ["gh pr edit 14", 14, "pr"],
+      ["gh pr view 2781 --json url", 2781, "pr"],
+      ["gh pr view --json url 2781", 2781, "pr"],
+      ["cd dir && gh pr view 2781", 2781, "pr"],
+      ["gh pr view 2781 | jq .", 2781, "pr"],
+      ["gh issue view 42", 42, "issue"],
+      ["gh run view 906", 906, "run"],
+      ['gh pr comment 2781 --body "fix A; fix B"', 2781, "pr"],
+    ] as const
+    for (const [text, number, kind] of cases)
+      expect(cli(text), text).toEqual([{ kind, number, repo: opencode, origin: "kindword" }])
+  })
+
+  test("table: echoes, quoted fakes, variables, listings, loops, option values, and ambiguity never count", () => {
+    const cases = [
+      "echo gh pr view 2781",
+      'echo "gh pr view 5"',
+      '"gh pr view 5"',
+      'gh pr view "$p"',
+      "gh pr list",
+      "gh pr status",
+      "for p in 2781 2782; do echo hi; done",
+      "gh pr view",
+      "gh pr comment --body 123",
+      'gh pr comment "$p" --body 123',
+      "gh pr view 5 6",
+      'gh pr view "$5"',
+      "gh pr view --bogus 5",
+      "gh pr view --json",
+    ]
+    for (const text of cases) expect(cli(text), text).toEqual([])
+  })
+
+  test("ordinary option placements keep the positional number", () => {
+    expect(cli("gh pr comment 2781 --body 123")).toEqual([
+      { kind: "pr", number: 2781, repo: opencode, origin: "kindword" },
+    ])
+    expect(cli("gh pr comment --body 123 2781")).toEqual([
+      { kind: "pr", number: 2781, repo: opencode, origin: "kindword" },
+    ])
+    expect(cli("gh pr view 5 --json url")).toEqual([
+      { kind: "pr", number: 5, repo: opencode, origin: "kindword" },
+    ])
+    expect(cli("gh pr view 5 --bogus")).toEqual([
+      { kind: "pr", number: 5, repo: opencode, origin: "kindword" },
+    ])
+  })
+
+  test("prose and output buckets keep general shapes only: CLI text there is not addressing", () => {
+    expect(scanDetailed("gh pr view 5", opencode, [githubLexicon])).toEqual([])
+    expect(scanDetailed("run gh pr view 5 to see", opencode, [githubLexicon])).toEqual([])
+  })
+
+  test("explicit --repo/-R attributes the foreign repo; ambiguous flags never fall back", () => {
+    expect(cli("gh pr view 5 --repo other/repo")).toEqual([
+      { kind: "pr", number: 5, repo: { host: "github.com", owner: "other", repo: "repo" }, origin: "kindword" },
+    ])
+    expect(cli("gh pr view --repo acme/api 42")).toEqual([
+      { kind: "pr", number: 42, repo: { host: "github.com", owner: "acme", repo: "api" }, origin: "kindword" },
+    ])
+    expect(cli("gh pr view 5 --repo nope")).toEqual([])
+    expect(cli('gh pr view 5 -R "other/repo"')).toEqual([
+      { kind: "pr", number: 5, repo: { host: "github.com", owner: "other", repo: "repo" }, origin: "kindword" },
+    ])
+    expect(cli("gh pr view 5 -Rother/repo")).toEqual([
+      { kind: "pr", number: 5, repo: { host: "github.com", owner: "other", repo: "repo" }, origin: "kindword" },
+    ])
+    expect(cli("gh pr view 5 --repo=ghe.example/acme/api")).toEqual([
+      { kind: "pr", number: 5, repo: { host: "ghe.example", owner: "acme", repo: "api" }, origin: "kindword" },
+    ])
+    expect(cli("gh pr view 5 -R")).toEqual([])
+    expect(cli("gh pr view 5 --repo")).toEqual([])
+    expect(cli("gh pr view 5 --repo a/b/c")).toEqual([])
+    expect(cli('gh pr view 5 "--repo" other/repo')).toEqual([
+      { kind: "pr", number: 5, repo: { host: "github.com", owner: "other", repo: "repo" }, origin: "kindword" },
+    ])
+    expect(cli("gh pr view 5 -R=other/repo")).toEqual([
+      { kind: "pr", number: 5, repo: { host: "github.com", owner: "other", repo: "repo" }, origin: "kindword" },
+    ])
+  })
+
+  test("quoted repo flags recruit through the command bucket (deliberateRefs)", () => {
+    const buckets = { user: [], commands: ['gh pr view 5 "--repo" other/repo'], prose: [], outputs: [] }
+    expect(deliberateRefs(buckets, opencode, [githubLexicon])).toEqual([
+      { kind: "pr", number: 5, repo: { host: "github.com", owner: "other", repo: "repo" }, tier: "command" },
+    ])
+  })
+
+  test("option values never re-flag: a --body -R value cannot override --repo", () => {
+    const foreign = { kind: "pr" as const, number: 5, repo: { host: "github.com", owner: "other", repo: "repo" }, origin: "kindword" as const }
+    expect(cli('gh pr comment 5 -R other/repo --body "-Rsst/opencode"')).toEqual([foreign])
+    // And through the command bucket: still only the foreign reference.
+    const buckets = { user: [], commands: ['gh pr comment 5 -R other/repo --body "-Rsst/opencode"'], prose: [], outputs: [] }
+    expect(deliberateRefs(buckets, opencode, [githubLexicon])).toEqual([
+      { kind: "pr", number: 5, repo: { host: "github.com", owner: "other", repo: "repo" }, tier: "command" },
+    ])
+  })
+
+  test("quoted value-option spellings consume their argument", () => {
+    expect(cli('gh pr comment "--body" 123')).toEqual([])
+    const buckets = { user: [], commands: ['gh pr comment "--body" 123'], prose: [], outputs: [] }
+    expect(deliberateRefs(buckets, opencode, [githubLexicon])).toEqual([])
+  })
+  test("without a session repo only --repo forms resolve", () => {
+    expect(scanCommandDetailed("gh pr view 2781", undefined, [githubLexicon])).toEqual([])
+    expect(scanCommandDetailed("gh pr view 5 --repo acme/api", undefined, [githubLexicon])).toEqual([
+      { kind: "pr", number: 5, repo: { host: "github.com", owner: "acme", repo: "api" }, origin: "kindword" },
+    ])
+  })
+
+  test("a CLI-addressed run is singled out of run listings at the command tier", () => {
+    const listing = Array.from({ length: 7 }, (_, i) => `https://github.com/sst/opencode/actions/runs/${800 + i}`).join("\n")
+    const buckets = { user: [], commands: [`${listing}\ngh run view 807`], prose: [], outputs: [] }
+    const refs = deliberateRefs(buckets, opencode, [githubLexicon])
+    expect(refs.map((ref) => ref.number)).toEqual([807])
+    expect(refs[0]).toMatchObject({ kind: "run", tier: "command" })
   })
 })
 
