@@ -1229,7 +1229,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
   const debugLine = () => {
     const current = session()
     const gate = current?.id === meta.sessionID ? "✓" : "✗"
-    const { eligible, picked, picks, provenance } = pillState()
+    const { eligible, pickable, picked, picks, provenance } = pillState()
     // Every capsule in display order, then the lead's why: which rule won and
     // out of how many candidates, and how the chain chose its lead PR. Read
     // from the same memo the capsules use — eligibility and picks are never
@@ -1237,9 +1237,11 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     // policy, so the footer can never name a different PR than the capsule.
     const lead = picked ? pillLeadOf(picked.chain, picked.reason) : undefined
     const pill = picks.length === 0
-      ? eligible.length > 0
-        ? "off: no eligible chains"
-        : "off: nothing eligible"
+      ? eligible.length === 0
+        ? "off: nothing eligible"
+        : pickable.length === 0
+          ? "off: all dismissed"
+          : "off: no eligible chains"
       : picks
           .map(({ chain, reason }) => {
             const chainLead = pillLeadOf(chain, reason)
