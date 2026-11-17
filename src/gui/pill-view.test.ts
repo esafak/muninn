@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import type { Chain, IssueEntity, PullEntity, RunEntity } from "../model"
 import { pillDisplay } from "../model"
-import { applyDismissal, overflowCount, pickableChains, pillViewForPick } from "./pill-view"
+import { applyDismissal, lastMenuIndex, mergedActionView, overflowCount, overflowLabel, pickableChains, pillViewForPick } from "./pill-view"
 
 const repo = { host: "github.com", owner: "acme", repo: "app" }
 const t = (key: string): string => key
@@ -184,6 +184,50 @@ describe("pillViewForPick", () => {
 
   test("empty chain withdraws", () => {
     expect(pillViewForPick({ chain: chain(), reason: "runs-only" }, opts())).toBeUndefined()
+  })
+})
+
+describe("mergedActionView", () => {
+  const mergedChain = (reason: "merged" | "pinned") => ({
+    chain: chain({ prs: [pull({ state: "merged" })] }),
+    reason,
+  })
+  test("matches the dropdown-less pillViewForPick exactly", () => {
+    for (const entry of [mergedChain("merged"), mergedChain("pinned")]) {
+      expect(mergedActionView(entry, t, true)).toEqual(pillViewForPick(entry, opts({ dropdown: false })))
+    }
+  })
+  test("dismiss vs unpin titles stay distinct", () => {
+    expect(mergedActionView(mergedChain("merged"), t, true)?.title).toContain("pill.dismiss")
+    expect(mergedActionView(mergedChain("pinned"), t, true)?.title).toContain("chain.unpin")
+  })
+})
+
+describe("overflowLabel", () => {
+  test("formats the census count", () => {
+    expect(overflowLabel(1)).toBe("+1 more in the sidebar")
+    expect(overflowLabel(12)).toBe("+12 more in the sidebar")
+  })
+})
+
+describe("lastMenuIndex", () => {
+  const openEntry = (key: string) => ({ chain: chain({ key, prs: [pull()] }), reason: "newest" as const })
+  const mergedEntry = (key: string) => ({ chain: chain({ key, prs: [pull({ state: "merged" })] }), reason: "merged" as const })
+  test("empty picks have no host", () => {
+    expect(lastMenuIndex([])).toBe(-1)
+  })
+  test("all-merged picks have no host", () => {
+    expect(lastMenuIndex([mergedEntry("a"), mergedEntry("b")])).toBe(-1)
+  })
+  test("all-open picks host at the tail", () => {
+    expect(lastMenuIndex([openEntry("a"), openEntry("b")])).toBe(1)
+  })
+  test("overflow hosts on the last menu pill when the tail merges", () => {
+    expect(lastMenuIndex([openEntry("a"), openEntry("b"), mergedEntry("c")])).toBe(1)
+    expect(lastMenuIndex([openEntry("a"), mergedEntry("b"), mergedEntry("c")])).toBe(0)
+  })
+  test("run-only picks still host menus", () => {
+    expect(lastMenuIndex([{ chain: chain({ runs: [run()] }), reason: "runs-only" as const }])).toBe(0)
   })
 })
 

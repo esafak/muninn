@@ -27,7 +27,7 @@ import type { definition } from "./definition"
 import { History, MergeButton } from "./history"
 import { CancelledGlyph, CheckGlyph, CopyGlyph, CrossGlyph, IssueGlyph, MergeGlyph, MergedGlyph, PullConflictGlyph, PullGlyph, QueuedGlyph, UnknownGlyph } from "./icons"
 import { pillIcon } from "./marks"
-import { applyDismissal, overflowCount, pickableChains, pillViewForPick } from "./pill-view"
+import { applyDismissal, lastMenuIndex, mergedActionView, overflowCount, overflowLabel, pickableChains, pillViewForPick, type PillView } from "./pill-view"
 import { pillPullDiagnostics } from "./pill-diagnostics"
 import { refreshKeyFor, shouldClearActiveRefresh, shouldRunAutoRefresh } from "./refresh-guard"
 
@@ -1569,24 +1569,29 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       t: (key) => ctx.t(key),
     })
   }
+  /** Final action-pill view for a visible slot: the shared merged-action view plus the all-merged overflow suffix and the host-routed run. The single computation behind both the contribution and the pin marker's expected title (markMergedPins reads this, never a divergent copy), so appending the suffix can never desync the hover pin. The visible label is untouched, so the capsule width holds. */
+  const mergedActionViewFor = (index: number): (PillView & { run: () => void }) | undefined => {
+    const picks = visiblePicks()
+    const entry = picks[index]
+    if (!entry || pillLeadOf(entry.chain, entry.reason)?.state !== "merged") return undefined
+    const view = mergedActionView(entry, (key) => ctx.t(key), waitForAllStatusChecks())
+    if (!view) return undefined
+    // Overflow's visible row lives on the last menu pill; with zero menu pills
+    // (every pick merged) the count survives only here, in the accessible name
+    // of the last capsule. Explicitly accepted product tradeoff: no popover
+    // host exists by construction, and the unpin run must not also open history.
+    const overflow = pillSlotOverflow()
+    const title =
+      index === picks.length - 1 && lastMenuIndex(picks) === -1 && overflow > 0
+        ? `${view.title} · ${overflowLabel(overflow)}`
+        : view.title
+    return { ...view, title, run: () => removeMergedPick(entry.chain) }
+  }
   /** Action-only view for merged picks: no dropdown chevron, the title names
    * the click action (unpin vs dismiss), and `run` removes the pill. The host
    * routes the click to this contribution's `run`, so no capture-phase
    * interception — and no wrong-pill risk — is needed. */
-  const mergedPillSlotView = (index: number) => {
-    const entry = visiblePicks()[index]
-    if (!entry) return undefined
-    if (pillLeadOf(entry.chain, entry.reason)?.state !== "merged") return undefined
-    const view = pillViewForPick(entry, {
-      waitForAllStatusChecks: waitForAllStatusChecks(),
-      armed: false,
-      spinFrame: "",
-      t: (key) => ctx.t(key),
-      dropdown: false,
-    })
-    if (!view) return undefined
-    return { ...view, run: () => removeMergedPick(entry.chain) }
-  }
+  const mergedPillSlotView = (index: number) => mergedActionViewFor(index)
   // Hover pin marker for verified merged-action capsules only. The host owns
   // the capsule DOM and exposes no contribution identity, so scope by exact
   // full label + accessible title match against our own merged picks (fail
@@ -1603,14 +1608,8 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       return
     }
     const expected = new Map<string, { label: string; title: string; count: number }>()
-    for (const entry of merged) {
-      const view = pillViewForPick(entry, {
-        waitForAllStatusChecks: waitForAllStatusChecks(),
-        armed: false,
-        spinFrame: "",
-        t: (key) => ctx.t(key),
-        dropdown: false,
-      })
+    for (let index = 0; index < picks.length; index++) {
+      const view = mergedActionViewFor(index)
       if (!view) continue
       const key = `${view.label}\n${view.title}`
       const previous = expected.get(key)
@@ -1843,13 +1842,15 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     return (
       <Show when={entry()} fallback={<div class="mn-pop" />}>
         {(live) => {
-          const isLast = () => props.index === visiblePicks().length - 1
+          // Overflow has a visible host only on the last menu pill: trailing
+          // merged picks render action-only capsules with no popover.
+          const hostsOverflow = () => lastMenuIndex(visiblePicks()) === props.index
           return (
             <>
               {pillMenuFor(
                 live().chain,
                 props.input,
-                isLast() && pillSlotOverflow() > 0 ? (
+                hostsOverflow() && pillSlotOverflow() > 0 ? (
                   <div
                     class="mn-pop-more"
                     onClick={() => {
@@ -1857,7 +1858,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
                       if (props.input.session?.id) ctx.layout.open(`${ctx.id}:history`, props.input.session)
                     }}
                   >
-                    +{pillSlotOverflow()} more in the sidebar
+                    {overflowLabel(pillSlotOverflow())}
                   </div>
                 ) : undefined,
               )}
@@ -1871,8 +1872,9 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
   // Two contributions per pick slot: menu pills for live work and action-only
   // pills for merged picks (host-routed `run`, no popover). Each slot shows
   // at most one — the views are mutually exclusive on merged state — so the
-  // row still holds one pill per pick in display order. The last visible slot
-  // surfaces the overflow count.
+  // row still holds one pill per pick in display order. The last menu slot
+  // surfaces the overflow count; with zero menu pills the count survives only
+  // in the last action pill's accessible title (explicitly accepted tradeoff).
   for (let slot = 0; slot < MAX_PILLS; slot++) {
     const index = slot
     ctx.add(ComposerPill, {

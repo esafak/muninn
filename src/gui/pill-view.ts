@@ -104,6 +104,26 @@ export const pillViewForPick = (entry: PillViewEntry, opts: PillViewOptions): Pi
   return undefined
 }
 
+/** Overflow census text shared by the popover row and the all-merged title suffix. Single literal, so the two can never diverge. */
+export const overflowLabel = (count: number): string => `+${count} more in the sidebar`
+
+/** Index of the last pick that renders a menu pill (lead not merged), or -1 when every pick is action-only. Overflow has a visible host only at this index. */
+export const lastMenuIndex = (picks: readonly PillViewEntry[]): number => {
+  let last = -1
+  picks.forEach((entry, index) => {
+    if (pillLeadOf(entry.chain, entry.reason)?.state !== "merged") last = index
+  })
+  return last
+}
+
+/** Action-only view for merged picks (no dropdown): chevron-free label with an action-titled accessible name. The single computation behind both the contribution and the pin marker's expected title, so the two can never desync. */
+export const mergedActionView = (
+  entry: PillViewEntry,
+  t: (key: string) => string,
+  waitForAllStatusChecks: boolean,
+): PillView | undefined =>
+  pillViewForPick(entry, { waitForAllStatusChecks, armed: false, spinFrame: "", t, dropdown: false })
+
 /**
  * Dismissal-aware selection pool: dismissed chains leave the eligible pool
  * before `pillDisplay` caps and ranks, so a removed chain frees its slot for
