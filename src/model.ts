@@ -282,6 +282,11 @@ export interface EligibilityContext {
   created?: ReadonlySet<string>
   mentioned?: ReadonlySet<string>
 }
+/** All eligibility rules a chain passes, in priority order. Diagnostics read
+ * every applicable rule (`branch+mention`, `pinned+created`); the pill filter
+ * stays boolean via `pillEligible`. */
+export type EligibilityProvenances = Exclude<EligibilityProvenance, "none">[]
+
 export const pillEligible = (chain: Chain, ctx: EligibilityContext = {}): boolean =>
   eligibilityProvenances(chain, ctx).length > 0
 
@@ -297,11 +302,6 @@ export const pillEligible = (chain: Chain, ctx: EligibilityContext = {}): boolea
  * `pillPick` ranks the eligible chains; everything ineligible stays sidebar
  * material.
  */
-/** All eligibility rules a chain passes, in priority order. Diagnostics read
- * every applicable rule (`branch+mention`, `pinned+created`); the pill filter
- * stays boolean via `pillEligible`. */
-export type EligibilityProvenances = Exclude<EligibilityProvenance, "none">[]
-
 export const eligibilityProvenances = (chain: Chain, ctx: EligibilityContext = {}): EligibilityProvenances => {
   // The session's own work: repository-scoped, since a foreign PR can share a
   // branch name (the PR #5 incident itself was cross-repo). A HEAD-SHA match
@@ -458,7 +458,8 @@ export const pillPick = (
  * `pillPick` is the first element of this list. An issue-only chain never
  * appears — there is nothing to show. Deduplicated by chain key; callers cap
  * the length for display.
- */export const pillPicks = (
+ */
+export const pillPicks = (
   chains: readonly Chain[],
   waitForAllStatusChecks = true,
 ): { chain: Chain; reason: PillReason }[] => {

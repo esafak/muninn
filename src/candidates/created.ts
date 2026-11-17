@@ -284,9 +284,9 @@ export const prCreateBranchLinks = (
 
 /**
  * Gate branch links against hydrated PRs: a link seeds only when the same
- * repo+number hydrated with `headSha`-fresh data whose head branch equals the
- * `--head` value — and the work is still open. Closed work drops out like
- * every other owned-memory path.
+ * repo+number hydrated whose head branch equals the `--head` value. Closed
+ * work drops out like every other owned-memory path; merged work still seeds
+ * (terminal dots, same as the created/mention paths).
  */
 export const validateCreateLinks = (
   links: readonly CreateBranchLink[],
