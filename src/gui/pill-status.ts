@@ -34,10 +34,11 @@ export const pillStatusIcon = (
   return "circle-exclamation"
 }
 
-// Total: every rendered pill gets a status tone. Merged keeps success
-// (warning/danger preserved if the chain somehow reports them), closed is
-// danger, open/draft default to warning, run-only defaults to its chain tone
-// or warning — never undefined, so the host never falls back to black.
+// Merged keeps success (warning/danger preserved if the chain somehow
+// reports them): the host has no purple tone, so the branch glyph stays
+// green with the "merged" tag. Closed is danger, open/draft default to
+// warning, run-only defaults to its chain tone or warning — never undefined,
+// so the host never falls back to black.
 export const pillStatusTone = (
   state: PullState | undefined,
   tone: ComposerPillTone | undefined,
