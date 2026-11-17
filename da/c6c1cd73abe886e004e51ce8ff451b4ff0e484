@@ -1,0 +1,45 @@
+src/gui/window.tsx
+  h_ea91e2db23540f 6,8-13,15-21,23-24,129-148,150-151,153,156-160,163,165-166,577-583,652-655,657-659,663-665,671-674,676-678,680,683,685,688-689,694-698,702,705,708-713,715,717-722,737,760-765,794-795,841,913-918,920-930,933-934,937,939,942,944,947-948,950,952,954-956,958-962,1013-1017,1019,1026-1048,1129-1135,1356,1388,1401,1407,1409-1416,1470
+  s_93287d611ac512::t_1ba932649612a4 22,149,152,154-155,161-162,164,650-651,656,660-662,666-668,675,679,681,684,686-687,690-693,748-752,766,904,919,935-936,938,940-941,943,945-946,949,951,953,957,1049-1128
+  s_93287d611ac512::t_60ef6131bca683 767
+  s_93287d611ac512::t_789519b0a9d3e4 753
+  h_ea91e2db23540f 14,726-729
+src/gui/hydration-policy.ts
+  h_ea91e2db23540f 1-331,353-374
+  s_93287d611ac512::t_0adb656b3fe472 345-352
+  h_ea91e2db23540f 332-344
+src/gui/hydration-policy.test.ts
+  s_c1616f693ed65b::t_c9761552e21ff6 11,196-198,200-202
+  h_ea91e2db23540f 1-10,12,14-18,20-195,199,203-314,351-352
+  s_c1616f693ed65b::t_cdce0a1aac9ecb 19,315-333,338,346
+  s_c1616f693ed65b::t_53f84625b03ace 13,334-337,339-345,347-350
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "dac6c1cd73abe886e004e51ce8ff451b4ff0e484",
+  "prompts": {},
+  "humans": {
+    "h_ea91e2db23540f": {
+      "author": "Emre Şafak <3928300+esafak@users.noreply.github.com>"
+    }
+  },
+  "sessions": {
+    "s_93287d611ac512": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_e17d9783effebffNJ76QhjRzc7",
+        "model": "unknown"
+      },
+      "human_author": "Emre Şafak <3928300+esafak@users.noreply.github.com>"
+    },
+    "s_c1616f693ed65b": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_e17e8d6f2ffeq4nhwvUk6Bokxq",
+        "model": "unknown"
+      },
+      "human_author": "Emre Şafak <3928300+esafak@users.noreply.github.com>"
+    }
+  }
+}
