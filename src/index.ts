@@ -249,15 +249,26 @@ export default Plugin.define({
         }
 
         const results = await Promise.all(
-          [...groups].map(([source, refs]) =>
-            source
-              .hydrate(refs, sessionRepo, () => source.auth(ctx))
-              .catch(() => ({ entities: [], unresolved: refs as (Ref & { repo: RepoRef })[] })),
-          ),
+          [...groups].map(async ([source, refs]) => {
+            try {
+              return await source.hydrate(refs, sessionRepo, () => source.auth(ctx))
+            } catch (cause) {
+              // A whole-source failure (bad token, rate limit, transport) must
+              // reach the footer: otherwise every ref just looks unresolved.
+              return {
+                entities: [],
+                unresolved: refs as (Ref & { repo: RepoRef })[],
+                error: cause instanceof Error ? cause.message : String(cause),
+              }
+            }
+          }),
         )
+        const error = results.map((result) => result.error).find((candidate) => candidate !== undefined)
         return {
           entities: results.flatMap((result) => result.entities).map(jsonReady),
           unresolved: results.flatMap((result) => result.unresolved).map(jsonReady),
+          // Omit the key when absent: the RPC encoder rejects `undefined` values.
+          ...(error !== undefined ? { error } : {}),
         }
       },
 
@@ -265,7 +276,10 @@ export default Plugin.define({
         const repo = await readRemote(input.directory)
         const source = sourceFor(repo?.host)
         if (!repo || !source) return { runs: [], prs: [] }
-        const result = await source.branchRuns(repo, input.branch, () => source.auth(ctx)).catch(() => ({ runs: [], prs: [] }))
+        const result = await source.branchRuns(repo, input.branch, () => source.auth(ctx)).catch((cause: unknown) => {
+          console.warn("[muninn] branchRuns failed", cause)
+          return { runs: [], prs: [] }
+        })
         // Entity-carrying like hydrate: the strict-JSON boundary applies here too.
         return { runs: result.runs.map((run) => jsonReady(run)), prs: result.prs.map((pull) => jsonReady(pull)) }
       },

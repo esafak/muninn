@@ -15,6 +15,8 @@ export type Unresolved = Ref & { repo: RepoRef }
 export interface Hydration {
   entities: Entity[]
   unresolved: Unresolved[]
+  /** First provider error that prevented hydration (auth, rate limit, transport). Diagnostic only. */
+  error?: string
 }
 
 /** The repo's merge policy, from the provider's repository settings. */

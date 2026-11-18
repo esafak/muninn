@@ -391,6 +391,13 @@ export const isOperationCurrent = (
   latestOp: number,
 ): boolean => sessionOk && gen === currentGen && opId === latestOp
 
+/** Currency for evidence from a separate RPC (branch runs), not a hydrate
+ * operation: session attempt and generation only. A newer hydrate op — the
+ * message debounce fires ~600ms after every hydrate — must not invalidate a
+ * branch-run result that is still being fetched by its own RPC. */
+export const isRefreshCurrent = (sessionOk: boolean, gen: number, currentGen: number): boolean =>
+  sessionOk && gen === currentGen
+
 /** Settlement decision for one hydrate operation: commit only when this
  * operation is still the latest sent one and the pipeline is current.
  * Concurrent same-generation completions (A/B in either order) resolve here:

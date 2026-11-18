@@ -603,27 +603,47 @@ const race = <T>(promise: Promise<T>, ms: number): Promise<T | undefined> => {
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer))
 }
 
-/** `gh auth token`, resolved once per server process (re-login needs a restart). */
-let ghTokenCache: string | undefined | null = null
+/** `gh auth token`, cached once resolved; failures share one lookup with a short cooldown. */
+const GH_TOKEN_RETRY_MS = 10_000
+let ghTokenCache: string | undefined = undefined
+let ghTokenResolved = false
+let ghTokenFailedAt = 0
+let ghTokenPending: Promise<string | undefined> | undefined
 const ghAuthToken = async (): Promise<string | undefined> => {
-  if (ghTokenCache !== null) return ghTokenCache
+  // A success is sticky; a failure is not, so a transient startup failure (e.g.
+  // keyring not ready) can recover. Concurrent callers share one in-flight
+  // lookup instead of each spawning subprocesses, and failures back off briefly.
+  if (ghTokenResolved) return ghTokenCache
+  if (ghTokenPending) return ghTokenPending
+  if (Date.now() - ghTokenFailedAt < GH_TOKEN_RETRY_MS) return undefined
   // The desktop server can run with a minimal PATH (GUI-launched): gh is often a
   // shell-version-manager shim (mise, asdf) that only a user shell resolves.
   const attempts = [
     () => exec("gh", ["auth", "token"], { timeout: 10_000 }),
     () => exec("/bin/zsh", ["-ic", "gh auth token"], { timeout: 10_000 }),
   ]
-  for (const run of attempts) {
-    try {
-      const { stdout } = await run()
-      ghTokenCache = stdout.trim() || undefined
-      if (ghTokenCache) return ghTokenCache
-    } catch {
-      // Try the next resolution strategy.
+  ghTokenPending = (async () => {
+    for (const run of attempts) {
+      try {
+        const { stdout } = await run()
+        const token = stdout.trim()
+        if (token) {
+          ghTokenCache = token
+          ghTokenResolved = true
+          return token
+        }
+      } catch {
+        // Try the next resolution strategy.
+      }
     }
+    ghTokenFailedAt = Date.now()
+    return undefined
+  })()
+  try {
+    return await ghTokenPending
+  } finally {
+    ghTokenPending = undefined
   }
-  ghTokenCache = undefined
-  return undefined
 }
 
 const tokenFrom = (credential: Credential.Value | undefined): string | undefined => {
@@ -669,6 +689,7 @@ export const github: SourceProvider = {
     for (const ref of refs) unique.set(`${ref.repo.owner}/${ref.repo.repo}#${ref.number}`, ref)
     const epochs = new Map<string, number>()
     for (const ref of unique.values()) epochs.set(repositoryCacheKey(ref.repo), repositoryEpoch(ref.repo))
+    let error: string | undefined
 
     const results = await Promise.all(
       [...unique.values()].map(async (ref) => {
@@ -679,10 +700,12 @@ export const github: SourceProvider = {
             () => hydrateOne(ref, auth),
           )
           return { ref, entity }
-        } catch {
+        } catch (cause) {
           // One failing ref (transient 502, rate limit) must not wedge the
           // whole batch: it becomes unresolved while the rest still hydrate,
-          // so a PR pill survives a bad run ref.
+          // so a PR pill survives a bad run ref. Keep the first cause for the
+          // diagnostic footer — a bad token otherwise looks like a bad ref.
+          error ??= cause instanceof Error ? cause.message : String(cause)
           return { ref, entity: undefined }
         }
       }),
@@ -705,7 +728,10 @@ export const github: SourceProvider = {
       const runKey = `${entity.repo.owner}/${entity.repo.repo}:${entity.id}`
       let numbers = entity.pullRequests.length > 0 ? entity.pullRequests : runPullsCache.get(runKey)
       if (!numbers) {
-        const prs = await pullsForBranch(entity.repo, entity.headBranch, auth).catch(() => [])
+        const prs = await pullsForBranch(entity.repo, entity.headBranch, auth).catch((cause: unknown) => {
+          error ??= cause instanceof Error ? cause.message : String(cause)
+          return []
+        })
         numbers = prs.map((pr) => pr.number)
         runPullsCache.set(runKey, numbers)
       }
@@ -724,7 +750,8 @@ export const github: SourceProvider = {
             () => hydratePull(ref.repo, ref.number, auth),
           )
           return { entity }
-        } catch {
+        } catch (cause) {
+          error ??= cause instanceof Error ? cause.message : String(cause)
           return { entity: undefined }
         }
       }),
@@ -734,13 +761,14 @@ export const github: SourceProvider = {
     const staleRepos = new Set(
       [...epochs].filter(([key, epoch]) => (repositoryEpochs.get(key) ?? 0) !== epoch).map(([key]) => key),
     )
-    if (staleRepos.size === 0) return { entities, unresolved }
+    if (staleRepos.size === 0) return { entities, unresolved, error }
     return {
       entities: entities.filter((entity) => !staleRepos.has(repositoryCacheKey(entity.repo))),
       unresolved: [
         ...unresolved,
         ...[...unique.values()].filter((ref) => staleRepos.has(repositoryCacheKey(ref.repo))),
       ],
+      error,
     }
   },
   branchRuns: async (repo, branch, auth) => {
@@ -752,6 +780,11 @@ export const github: SourceProvider = {
         `/repos/${repo.owner}/${repo.repo}/actions/runs?branch=${encodeURIComponent(branch)}&per_page=8`,
         auth,
       ).catch(() => undefined)
+      // A failed runs request (e.g. 404 on a private repo without access) is
+      // swallowed by request() as undefined, which is otherwise
+      // indistinguishable from a branch with no runs. Log the failure; an
+      // empty but successful response is normal and must stay silent.
+      if (runs === undefined) console.warn("[muninn] branchRuns: runs request failed", { owner: repo.owner, repo: repo.repo, branch })
       const runEntities = (
         await Promise.all(
           (runs?.workflow_runs ?? []).map((run) =>
