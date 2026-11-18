@@ -16,7 +16,7 @@
  */
 
 import type { TieredRef } from "../extract"
-import { repoKey, type Chain, type Entity, type RepoRef } from "../model"
+import { repoKey, type Chain, type Entity, type RepoRef, type RunStatus } from "../model"
 
 /** Ledger identity for one hydratable reference: repo-scoped `owner/repo#number`.
  * Kind-agnostic on purpose: hydrate fans bare refs out by payload, and a PR
@@ -31,6 +31,25 @@ export const ledgerKeyFor = (ref: TieredRef, sessionRepo: RepoRef | undefined): 
   if (!repo) return undefined
   return discoveryKey(repo, ref.number)
 }
+
+/** Poll cadence: fast only while a run is actively in flight and recently
+ * updated, so a stuck queued run decays back to the normal tick. Errors stay at
+ * the normal cadence — a broken forge is a credential/network problem, not a
+ * freshness problem (see DISCOVERY_RETRY_MS). */
+export const POLL_NORMAL_MS = 30_000
+export const POLL_FAST_MS = 5_000
+/** A run updated longer than this ago no longer counts as actively in flight. */
+export const POLL_FAST_MAX_AGE_MS = 10 * 60_000
+
+export const pollInterval = (
+  runs: readonly { status: RunStatus; updatedAt: number }[],
+  now: number = Date.now(),
+): number =>
+  runs.some((run) =>
+    (run.status === "queued" || run.status === "running") && now - run.updatedAt < POLL_FAST_MAX_AGE_MS,
+  )
+    ? POLL_FAST_MS
+    : POLL_NORMAL_MS
 
 /** How long an unresolved discovery ref waits before its next attempt. Fixed
  * and conservative: without failure classification (the RPC reports every
