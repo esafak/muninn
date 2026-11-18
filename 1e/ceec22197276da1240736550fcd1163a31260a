@@ -1,0 +1,28 @@
+src/associate.test.ts
+  h_ea91e2db23540f 167-173
+src/gui/hydration-policy.test.ts
+  h_ea91e2db23540f 318-335
+src/gui/hydration-policy.ts
+  h_ea91e2db23540f 372-376
+src/gui/window.tsx
+  h_ea91e2db23540f 182-190,193-197,200-247,282-294,298-301,305,471-476,480,514-516,774,847-862,865-870,872,874-876,901,1056,1095,1112-1121,1129-1132,1221-1245,1269,1272-1282,1297,1671,1674-1678
+src/model.test.ts
+  h_ea91e2db23540f 92-94
+src/model.ts
+  h_ea91e2db23540f 198-203,227-231
+src/providers/github.test.ts
+  h_ea91e2db23540f 2,169-189,215-219
+src/providers/github.ts
+  h_ea91e2db23540f 332-339,347-353,420-423,430-436,440,461-464,467-472,480,502-504,782-825,947-951,953-962
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1eceec22197276da1240736550fcd1163a31260a",
+  "prompts": {},
+  "humans": {
+    "h_ea91e2db23540f": {
+      "author": "Emre Şafak <3928300+esafak@users.noreply.github.com>"
+    }
+  }
+}
