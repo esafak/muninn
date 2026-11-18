@@ -499,9 +499,14 @@ const hydrateOne = async (ref: Ref & { repo: RepoRef }, auth: Auth): Promise<Ent
   const base = `/repos/${ref.repo.owner}/${ref.repo.repo}`
   if (ref.kind === "run") return hydrateRun(ref.repo, ref.number, auth)
 
-  // An explicit PR kind needs no probe: `/pulls/{n}` is authoritative, and the
-  // extra `/issues/{n}` round trip is pure quota cost on every poll.
-  if (ref.kind === "pr") return hydratePull(ref.repo, ref.number, auth)
+  // A PR kind is a syntactic hint, not a verified type: "PR #123" can name an
+  // issue. Probe only on a miss so real PRs skip the extra round trip.
+  if (ref.kind === "pr") {
+    const pull = await hydratePull(ref.repo, ref.number, auth)
+    if (pull) return pull
+    const issue = await request<IssueJson>(`${base}/issues/${ref.number}`, auth)
+    return issue && !issue.pull_request ? toIssueEntity(ref.repo, issue) : undefined
+  }
   // The issues API serves both; a bare `#123` learns its kind from the payload.
   const issue = await request<IssueJson>(`${base}/issues/${ref.number}`, auth)
   if (!issue) return undefined
