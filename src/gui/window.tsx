@@ -1388,10 +1388,14 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
   }
 
   /** A plugin reload briefly unregisters the merge RPC. A transport failure is
-   * not a merge failure: hold the intent and retry with bounded backoff rather
-   * than toasting an error or disarming an arm. Provider refusals resolve
-   * normally and are never retried. The server's coordinateMerge dedupes any
-   * retry that races a success already committed before the connection died. */
+   * not a merge failure: manual clicks retry in-process with bounded backoff
+   * and only surface an availability notice if all attempts fail; armed merges
+   * return immediately and are re-driven by the next poll, which rechecks
+   * consent and readiness. Neither records merge-failed nor disarms an arm.
+   * Provider refusals resolve normally and never enter the transport retry
+   * loop (a stale-head response can still start a fresh armed attempt against
+   * the updated head). The server's process-local coordinateMerge dedupes a
+   * retry racing a success committed before the connection died. */
   const MERGE_TRANSPORT_BACKOFF_MS = [1_000, 2_000, 4_000]
   const fireMerge = async (
     pull: PullEntity,
