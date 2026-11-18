@@ -173,7 +173,7 @@ export const History = (props: HistoryProps) => {
     else next.add(key)
     setExpanded(next)
   }
-  // The lead PR row toggles its group's member rows (issues + runs).
+  // The lead PR row toggles its group's run rows (issues always render).
   const toggleChain = (key: string) => {
     const next = new Set(collapsed())
     if (next.has(key)) next.delete(key)

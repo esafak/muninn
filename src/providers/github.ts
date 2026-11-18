@@ -603,33 +603,47 @@ const race = <T>(promise: Promise<T>, ms: number): Promise<T | undefined> => {
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer))
 }
 
-/** `gh auth token`, cached once resolved (a failed lookup must not be cached). */
+/** `gh auth token`, cached once resolved; failures share one lookup with a short cooldown. */
+const GH_TOKEN_RETRY_MS = 10_000
 let ghTokenCache: string | undefined = undefined
 let ghTokenResolved = false
+let ghTokenFailedAt = 0
+let ghTokenPending: Promise<string | undefined> | undefined
 const ghAuthToken = async (): Promise<string | undefined> => {
-  // Only a successful resolution is sticky: a startup-time failure must not
-  // pin every later call to an integration fallback that may lack access.
+  // A success is sticky; a failure is not, so a transient startup failure (e.g.
+  // keyring not ready) can recover. Concurrent callers share one in-flight
+  // lookup instead of each spawning subprocesses, and failures back off briefly.
   if (ghTokenResolved) return ghTokenCache
+  if (ghTokenPending) return ghTokenPending
+  if (Date.now() - ghTokenFailedAt < GH_TOKEN_RETRY_MS) return undefined
   // The desktop server can run with a minimal PATH (GUI-launched): gh is often a
   // shell-version-manager shim (mise, asdf) that only a user shell resolves.
   const attempts = [
     () => exec("gh", ["auth", "token"], { timeout: 10_000 }),
     () => exec("/bin/zsh", ["-ic", "gh auth token"], { timeout: 10_000 }),
   ]
-  for (const run of attempts) {
-    try {
-      const { stdout } = await run()
-      const token = stdout.trim()
-      if (token) {
-        ghTokenCache = token
-        ghTokenResolved = true
-        return token
+  ghTokenPending = (async () => {
+    for (const run of attempts) {
+      try {
+        const { stdout } = await run()
+        const token = stdout.trim()
+        if (token) {
+          ghTokenCache = token
+          ghTokenResolved = true
+          return token
+        }
+      } catch {
+        // Try the next resolution strategy.
       }
-    } catch {
-      // Try the next resolution strategy.
     }
+    ghTokenFailedAt = Date.now()
+    return undefined
+  })()
+  try {
+    return await ghTokenPending
+  } finally {
+    ghTokenPending = undefined
   }
-  return undefined
 }
 
 const tokenFrom = (credential: Credential.Value | undefined): string | undefined => {
@@ -766,10 +780,11 @@ export const github: SourceProvider = {
         `/repos/${repo.owner}/${repo.repo}/actions/runs?branch=${encodeURIComponent(branch)}&per_page=8`,
         auth,
       ).catch(() => undefined)
-      // A 404 (private repo without access) is swallowed by request() as
-      // undefined, so an empty result here is otherwise indistinguishable from
-      // a branch with no runs. Log it — the GUI footer cannot see this cause.
-      if (!runs?.workflow_runs?.length) console.warn("[muninn] branchRuns: no runs returned", { owner: repo.owner, repo: repo.repo, branch })
+      // A failed runs request (e.g. 404 on a private repo without access) is
+      // swallowed by request() as undefined, which is otherwise
+      // indistinguishable from a branch with no runs. Log the failure; an
+      // empty but successful response is normal and must stay silent.
+      if (runs === undefined) console.warn("[muninn] branchRuns: runs request failed", { owner: repo.owner, repo: repo.repo, branch })
       const runEntities = (
         await Promise.all(
           (runs?.workflow_runs ?? []).map((run) =>
