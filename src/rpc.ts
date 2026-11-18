@@ -114,6 +114,8 @@ export const Muninn = Rpc.define({
       output: z.object({
         entities: z.array(Entity),
         unresolved: z.array(z.object({ number: z.number(), repo: RepoRef, kind: z.string().optional() })),
+        /** First provider error (bad token, rate limit, transport). Diagnostic only. */
+        error: z.string().optional(),
       }),
     },
     /** Recent CI runs of one branch: the standalone cards of the history panel. */
