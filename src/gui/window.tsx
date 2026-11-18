@@ -15,6 +15,7 @@ import {
   isOperationCurrent,
   isRefreshCurrent,
   pollInterval,
+  POLL_NORMAL_MS,
   partitionRefs,
   planDiscovery,
   releaseReservations,
@@ -50,7 +51,6 @@ import { applyDismissal, lastMenuIndex, mergedActionView, overflowCount, overflo
 import { pillPullDiagnostics } from "./pill-diagnostics"
 import { refreshKeyFor, shouldClearActiveRefresh, shouldRunAutoRefresh } from "./refresh-guard"
 
-const POLL_MS = 30_000
 /** Debounce for scan → hydrate while a message streams in. */
 const HYDRATE_DEBOUNCE_MS = 600
 /** How long a forge-reported merge blocks retries while hydration catches up.
@@ -1024,13 +1024,15 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
             else if (chains().length > 0) requestAutoRefresh()
             else if (refs().length > 0) requestAutoRefresh()
           })
-          .finally(() => schedulePollAt(pollInterval(chains().flatMap((chain) => chain.runs))))
+          // A failed refresh leaves chains intact, so gate the fast cadence on a
+          // clean last refresh: an errored forge backs off to the normal tick.
+          .finally(() => schedulePollAt(meta.error !== null ? POLL_NORMAL_MS : pollInterval(chains().flatMap((chain) => chain.runs))))
       } else {
-        schedulePollAt(POLL_MS)
+        schedulePollAt(POLL_NORMAL_MS)
       }
     }, ms)
   }
-  schedulePollAt(POLL_MS)
+  schedulePollAt(POLL_NORMAL_MS)
   onCleanup(() => {
     pollDisposed = true
     clearTimeout(pollTimer)
