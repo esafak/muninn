@@ -164,6 +164,7 @@ const sameDay = (a: number, b: number): boolean => new Date(a).toDateString() ==
 export const History = (props: HistoryProps) => {
   const ctx = usePlugin<typeof definition>()
   const [expanded, setExpanded] = createSignal<ReadonlySet<string>>(new Set())
+  const [collapsed, setCollapsed] = createSignal<ReadonlySet<string>>(new Set())
   const [copied, setCopied] = createSignal<string | null>(null)
 
   const toggle = (key: string) => {
@@ -171,6 +172,13 @@ export const History = (props: HistoryProps) => {
     if (next.has(key)) next.delete(key)
     else next.add(key)
     setExpanded(next)
+  }
+  // The lead PR row toggles its group's member rows (issues + runs).
+  const toggleChain = (key: string) => {
+    const next = new Set(collapsed())
+    if (next.has(key)) next.delete(key)
+    else next.add(key)
+    setCollapsed(next)
   }
 
   const copyId = (event: MouseEvent, text: string, key: string) => {
@@ -244,10 +252,18 @@ export const History = (props: HistoryProps) => {
                     return (
                     <div
                       class="mn-row"
-                      classList={{ sub: prIndex() > 0 }}
-                      onClick={() => props.onOpen(pull.url)}
+                      classList={{ sub: prIndex() > 0, "group-head": prIndex() === 0 }}
+                      data-toggle={prIndex() === 0 ? "" : undefined}
+                      aria-expanded={prIndex() === 0 ? !collapsed().has(chain.key) : undefined}
+                      title={prIndex() === 0 ? (collapsed().has(chain.key) ? "Show group runs" : "Hide group runs") : undefined}
+                      onClick={() => prIndex() === 0 ? toggleChain(chain.key) : props.onOpen(pull.url)}
                     >
-                      <span class="mn-mark">
+                      <span
+                        class="mn-mark"
+                        classList={{ "mn-link": prIndex() === 0 }}
+                        title={prIndex() === 0 ? "Open PR on the forge" : undefined}
+                        onClick={prIndex() === 0 ? (event) => { event.stopPropagation(); props.onOpen(pull.url) } : undefined}
+                      >
                         <Mark provider={pull.provider} />
                       </span>
                       <span
@@ -327,22 +343,24 @@ export const History = (props: HistoryProps) => {
                   )}
                 </For>
 
-                <For each={chain.runs}>
-                  {(run, runIndex) => (
-                    <RunRow
-                      run={run}
-                      chainKey={chain.key}
-                      expanded={expanded}
-                      onToggle={toggle}
-                      onOpen={props.onOpen}
-                      label={ctx.t}
-                      showPin={chain.prs.length === 0 && chain.issues.length === 0 && runIndex() === 0}
-                      pinned={props.isPinned(chain)}
-                      pinTitle={ctx.t(props.isPinned(chain) ? "chain.unpin" : "chain.pin")}
-                      onPin={() => props.onPin(chain)}
-                    />
-                  )}
-                </For>
+                <Show when={!collapsed().has(chain.key)}>
+                  <For each={chain.runs}>
+                    {(run, runIndex) => (
+                      <RunRow
+                        run={run}
+                        chainKey={chain.key}
+                        expanded={expanded}
+                        onToggle={toggle}
+                        onOpen={props.onOpen}
+                        label={ctx.t}
+                        showPin={chain.prs.length === 0 && chain.issues.length === 0 && runIndex() === 0}
+                        pinned={props.isPinned(chain)}
+                        pinTitle={ctx.t(props.isPinned(chain) ? "chain.unpin" : "chain.pin")}
+                        onPin={() => props.onPin(chain)}
+                      />
+                    )}
+                  </For>
+                </Show>
 
                 <Show when={chain.prs.length > 0 && chain.issues.length > 0}>
                   <div class="mn-chain-foot">
@@ -390,23 +408,28 @@ const RunRow = (props: {
   return (
     <>
       <div class="mn-row sub" onClick={() => props.onToggle(key())}>
-        <span class="mn-state" data-status={props.run.status} title={props.label(`state.${props.run.status}`)}>
-          <StatusGlyph status={props.run.status} />
-        </span>
-        <span class="mn-title" title={fullTitle()}>
-          {displayName()}
-        </span>
-        <span class="mn-meta">{time(props.run.updatedAt)}</span>
         <span
-          class="mn-link"
-          title="Open run"
+          class="mn-mark mn-link"
+          title="Open run on the forge"
           onClick={(event) => {
             event.stopPropagation()
             props.onOpen(props.run.url)
           }}
         >
-          ↗
+          <Mark provider={props.run.provider} />
         </span>
+        <span class="mn-state" data-status={props.run.status} title={props.label(`state.${props.run.status}`)}>
+          <StatusGlyph status={props.run.status} />
+        </span>
+        <span
+          class="mn-title"
+          data-toggle
+          title={`${fullTitle()} — click to ${props.expanded().has(key()) ? "hide" : "show"} checks`}
+          aria-expanded={props.expanded().has(key())}
+        >
+          {displayName()}
+        </span>
+        <span class="mn-meta">{time(props.run.updatedAt)}</span>
         <Show when={props.showPin}>
           <PinButton pinned={props.pinned} title={props.pinTitle} label={props.pinTitle} onPin={props.onPin} />
         </Show>

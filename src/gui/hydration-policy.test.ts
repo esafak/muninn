@@ -12,6 +12,7 @@ import {
   freshKeyFor,
   freshKeysFor,
   isOperationCurrent,
+  isRefreshCurrent,
   ledgerKeyFor,
   partitionRefs,
   planDiscovery,
@@ -373,6 +374,25 @@ describe("isOperationCurrent", () => {
     expect(isOperationCurrent(true, 6, 7, 11, 11)).toBe(false);
     expect(isOperationCurrent(false, 7, 7, 11, 11)).toBe(false);
     expect(isOperationCurrent(true, 7, 7, 11, 12)).toBe(false);
+  });
+});
+
+describe("isRefreshCurrent", () => {
+  test("a newer hydrate op does not invalidate branch-run evidence", () => {
+    // Regression: branch runs come from their own RPC, not from the hydrate
+    // operation. The message debounce bumps lastSentOp ~600ms after every
+    // hydrate, while branchRuns is still in flight. Gating setRuns on
+    // isOperationCurrent(opId, lastSentOp) discarded every branch-run result.
+    // Here op 11 is no longer the latest sent op (12), yet the branch-run
+    // result stays valid for this session/generation.
+    const sessionOk = true
+    expect(isOperationCurrent(sessionOk, 7, 7, 11, 12)).toBe(false)
+    expect(isRefreshCurrent(sessionOk, 7, 7)).toBe(true)
+  });
+  test("still rejects a stale generation or changed session", () => {
+    expect(isRefreshCurrent(true, 6, 7)).toBe(false)
+    expect(isRefreshCurrent(false, 7, 7)).toBe(false)
+    expect(isRefreshCurrent(true, 7, 7)).toBe(true)
   });
 });
 

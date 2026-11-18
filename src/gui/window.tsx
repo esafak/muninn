@@ -13,6 +13,7 @@ import {
   freshKeyFor,
   freshKeysFor,
   isOperationCurrent,
+  isRefreshCurrent,
   partitionRefs,
   planDiscovery,
   releaseReservations,
@@ -33,7 +34,7 @@ import {
 import { CUSTOM_PROVIDER, mergeProviderOptions, resolveCustomCommit } from "./provider-options"
 import { validateModelSyntax } from "../candidates/model-id"
 import type { ArmedEntry, Chain, Entity, PillReason, Pin, PullEntity, RepoRef, RunEntity, RunStatus } from "../model"
-import { chainTone, armedTargets, staleHeadRetryEligible, staleHeadEvidenceUsable, sessionAttemptCurrent, targetRefreshConfirmed, pillPick, pillDisplay, pillEligible, eligibilityProvenances, pillLeadOf, pinnedChain, pinForChain, rememberCreated, isFreshBaseSession, mergeReady, mergeWhy, pendingReviewNotice, latestRun, pullForRun, prConflicted, refKey, repoKey, entityKey } from "../model"
+import { chainTone, armedTargets, staleHeadRetryEligible, staleHeadEvidenceUsable, sessionAttemptCurrent, targetRefreshConfirmed, pillPick, pillDisplay, pillEligible, eligibilityProvenances, pillLeadOf, pinnedChain, pinForChain, rememberCreated, isFreshBaseSession, mergeReady, mergeWhy, pendingReviewNotice, latestRun, pullForRun, pullsForRun, prConflicted, refKey, repoKey, entityKey } from "../model"
 import { mentionEvidence } from "../candidates/mention-evidence"
 import { prCreateBranchLinks, prCreateRefs, validateCreateLinks } from "../candidates/created"
 import { githubLexicon } from "../providers/github/lexicon"
@@ -336,6 +337,10 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     // association is visible without a mention.
     // When the DecisionModel judged, dropped refs never reach chains.
     const judged = verdictsForSession()
+    // Branch runs are associated evidence too: a run the transcript never
+    // mentioned still belongs to the PR whose head it tested. Those PRs are
+    // pulled in below, not only for transcript runs.
+    const sessionRuns = repo ? (runs[repoKey(repo)] ?? []) : []
     const relevant = filteredRefs().flatMap((ref) => {
       if (ref.kind) {
         const entity = entities[refKey(ref)]
@@ -366,18 +371,17 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       }
       relevant.push(...pinnedExtra)
     }
-    for (const entity of relevant) {
-      if (entity.kind !== "run") continue
-      for (const candidate of Object.values(entities)) {
-        if (candidate.kind !== "pr") continue
-        if (
-          candidate.repo.host !== entity.repo.host ||
-          candidate.repo.owner !== entity.repo.owner ||
-          candidate.repo.repo !== entity.repo.repo
-        )
-          continue
-        if (candidate.headSha === entity.headSha && !relevant.includes(candidate) && !related.includes(candidate))
-          related.push(candidate)
+    const runsToLink: RunEntity[] = [
+      ...relevant.filter((entity): entity is RunEntity => entity.kind === "run"),
+      ...sessionRuns,
+    ]
+    const cachedPulls = Object.values(entities).filter((entity): entity is PullEntity => entity.kind === "pr")
+    for (const entity of runsToLink) {
+      // Same rules associate() uses to bind runs: explicit PR ids, head SHA,
+      // then unique head branch. Pulling the PR in lets a run that only came
+      // from branchRuns (never mentioned in the transcript) join its chain.
+      for (const candidate of pullsForRun(entity, cachedPulls)) {
+        if (!relevant.includes(candidate) && !related.includes(candidate)) related.push(candidate)
       }
     }
     // Branch-linked creates hydrate through the dedicated path even when
@@ -403,7 +407,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       setChains([])
       return
     }
-    const next = associate([...relevant, ...related], repo ? (runs[repoKey(repo)] ?? []) : [])
+    const next = associate([...relevant, ...related], sessionRuns)
     setChains(next)
     // Remember PRs this session owns right now (branch/SHA match): the sticky
     // session-created set behind multi-pill sessions. Later branch switches
@@ -593,7 +597,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     // a slow refresh can never overwrite a newer debounce judgment.
     const epoch = ++judgeEpoch
     const currentRefresh = () =>
-      generation === refreshGeneration && sessionAttemptCurrent(current, session())
+      isRefreshCurrent(sessionAttemptCurrent(current, session()), generation, refreshGeneration)
     const targetKey = target ? mergeKey(target.repo, target.number) : undefined
     if (targetKey) refreshedPullByPR.delete(targetKey)
     setSessionReady(true)
@@ -666,6 +670,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
         // after every hydration stage below accepts it — branch results extend
         // the same set rather than overwriting hydrate's.
         const freshKeys = new Set<string>()
+        let hydrateError: string | undefined
         let targetPull: PullEntity | undefined
         let targetUnresolved = false
         const allEntities: Entity[] = []
@@ -680,6 +685,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
             releaseReservations(ledger, opId)
             throw error
           }
+          for (const result of results) hydrateError ??= result.error
           const completed = settleHydration({
             admission,
             results,
@@ -723,10 +729,12 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
         }
         if (branch && !isFreshBaseSession(branch ?? "", found.length)) {
           const { runs: branchRuns, prs } = await stage("branch-runs", () => client.rpc(Muninn).branchRuns({ directory: current.directory, branch }))
-          // Combined generation/session/operation check: an older branch
-          // response must not overwrite a newer operation's accepted runs and
-          // PRs, even within the same refresh generation.
-          if (!isOperationCurrent(sessionAttemptCurrent(current, session()), generation, refreshGeneration, opId, lastSentOp)) {
+          // Branch runs are fetched by a separate RPC, not by the hydrate
+          // operation: a newer hydrate op (e.g. the message debounce firing
+          // right after this refresh's hydrate) does not invalidate them.
+          // Requiring opId === lastSentOp here discarded every branch-run
+          // result and left the run rows empty. Session + generation is enough.
+          if (!currentRefresh()) {
             resumeInFlightBranch = undefined
             return false
           }
@@ -755,7 +763,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
           return false
         }
         for (const [key, pull] of recoveredPulls) refreshedPullByPR.set(key, pull)
-        setMeta("error", null)
+        setMeta("error", hydrateError ?? null)
         await judgeFound(current.id, current.directory, found, epoch)
         // Re-verify after the async judgment (operation token included): a newer
         // hydrate operation may have started while judging. Publish this
@@ -2632,6 +2640,10 @@ const STYLES = `
 .mn-scroll { min-height: 0; flex: 1; overflow-y: auto; padding: 10px 12px 14px; }
 .mn-head { display: flex; align-items: center; gap: 6px; padding: 2px 4px 10px; color: var(--v2-text-text-muted); }
 .mn-mark { color: var(--v2-icon-icon-muted); flex: none; display: inline-flex; }
+.mn-mark.mn-link { cursor: pointer; }
+.mn-mark.mn-link:hover { color: var(--v2-text-text-accent); }
+.mn-title[data-toggle] { cursor: pointer; }
+.mn-row[data-toggle] { cursor: pointer; }
 .mn-repo { font-family: var(--v2-font-family-code); font-size: 11px; }
 .mn-branch {
   margin-left: auto; font-size: 10.5px; font-family: var(--v2-font-family-code);
