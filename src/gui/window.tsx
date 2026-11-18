@@ -179,11 +179,72 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
    * driving requires membership here — a snapshot that merely matches the head
    * is not proof it was just observed. */
   let freshSafety: FreshSafety | undefined
+  /** Run requirements for armed PRs, kept for as long as the arm lives on the
+   * same head. Once a run has been part of an armed merge decision it stays
+   * required and re-requested even if a failed read drops it from the chain. */
+  interface ArmedRunRequirement {
+    headSha: string
+    /** fresh key → the run ref needed to re-request it. */
+    runs: Map<string, TieredRef>
+  }
+  let requiredArmedRuns = new Map<string, ArmedRunRequirement>()
   /** Publish accepted evidence once per completed operation. Monotonic: an older
    * completion racing a newer one never overwrites fresher evidence. */
-  const publishFreshSafety = (op: number, keys: ReadonlySet<string>): void => {
+  const publishFreshSafety = (
+    op: number,
+    keys: ReadonlySet<string>,
+    required: ReadonlyMap<string, ArmedRunRequirement>,
+  ): void => {
     if (freshSafety !== undefined && op <= freshSafety.op) return
     freshSafety = { op, sessionKey: createdKeyFor(), keys }
+    for (const [prKey, entry] of required) {
+      const existing = requiredArmedRuns.get(prKey)
+      if (!existing || existing.headSha !== entry.headSha)
+        requiredArmedRuns.set(prKey, { headSha: entry.headSha, runs: new Map(entry.runs) })
+      else
+        for (const [runKey, ref] of entry.runs) existing.runs.set(runKey, ref)
+    }
+    const armedKeys = new Set(ctx.stores.armed.value.entries.map((entry) => mergeKey(entry.repo, entry.number)))
+    for (const prKey of requiredArmedRuns.keys())
+      if (!armedKeys.has(prKey)) requiredArmedRuns.delete(prKey)
+    trackMissingArmedRuns(required)
+  }
+  /** Consecutive accepted operations in which an armed PR's required run was
+   * absent from fresh evidence — a visible, bounded recovery path when a run
+   * vanishes from GitHub rather than an infinite silent retry. */
+  const missingRunTicks = new Map<string, number>()
+  const missingRunNotified = new Set<string>()
+  /** One notice pass per accepted hydrate operation, for every armed PR —
+   * including ones whose retained run snapshot currently fails readiness. */
+  const trackMissingArmedRuns = (
+    required: ReadonlyMap<string, ArmedRunRequirement>,
+  ): void => {
+    const evidence = freshSafety
+    if (!evidence) return
+    for (const arm of ctx.stores.armed.value.entries) {
+      const prKey = mergeKey(arm.repo, arm.number)
+      // Only runs this operation actually requested can be "missing" from it.
+      const requirement = required.get(prKey)
+      if (!requirement) continue
+      for (const runKey of requirement.runs.keys()) {
+        const noticeKey = `${prKey}\u0000${arm.armID ?? ""}\u0000${requirement.headSha}\u0000${runKey}`
+        if (evidence.keys.has(runKey)) {
+          missingRunTicks.delete(noticeKey)
+          missingRunNotified.delete(noticeKey)
+          continue
+        }
+        const ticks = (missingRunTicks.get(noticeKey) ?? 0) + 1
+        missingRunTicks.set(noticeKey, ticks)
+        if (ticks >= 5 && !missingRunNotified.has(noticeKey)) {
+          missingRunNotified.add(noticeKey)
+          ctx.toast.show({
+            title: `PR #${arm.number} merge-when-ready is waiting on a check`,
+            description: "Muninn can't confirm a check on this head. Turn the toggle off and on to retry.",
+            variant: "default",
+          })
+        }
+      }
+    }
   }
   const mergeInFlight = new Set<string>()
   const serverBusyUntil = new Map<string, number>()
@@ -218,14 +279,30 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     mergeKey(candidate.repo, candidate.number) === mergeKey(original.repo, original.number) &&
     candidate.method === original.method &&
     candidate.armID === original.armID
-  const removeArm = (original: ArmedEntry): void =>
+  const clearMissingRunNotices = (prKey: string): void => {
+    for (const key of missingRunTicks.keys()) if (key.startsWith(`${prKey}\u0000`)) missingRunTicks.delete(key)
+    for (const key of missingRunNotified) if (key.startsWith(`${prKey}\u0000`)) missingRunNotified.delete(key)
+  }
+  const removeArm = (original: ArmedEntry): void => {
+    const prKey = mergeKey(original.repo, original.number)
+    // A late completion for a superseded arm must not erase a replacement
+    // arm's run ledger or its notice state.
+    const current = ctx.stores.armed.value.entries.find((entry) => mergeKey(entry.repo, entry.number) === prKey)
+    if (!current || sameArm(current, original)) {
+      requiredArmedRuns.delete(prKey)
+      clearMissingRunNotices(prKey)
+    }
     ctx.stores.armed.update((draft) => {
       draft.entries = draft.entries.filter((entry) => !sameArm(entry, original))
     })
-  const removeArmsForPR = (repo: RepoRef, number: number): void =>
+  }
+  const removeArmsForPR = (repo: RepoRef, number: number): void => {
+    clearMissingRunNotices(mergeKey(repo, number))
+    requiredArmedRuns.delete(mergeKey(repo, number))
     ctx.stores.armed.update((draft) => {
       draft.entries = draft.entries.filter((entry) => mergeKey(entry.repo, entry.number) !== mergeKey(repo, number))
     })
+  }
 
   const session = () => ctx.sessions.current()
 
@@ -391,9 +468,16 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       }
       relevant.push(...pinnedExtra)
     }
+    // Runs required by an armed PR must reach the merge decision even when the
+    // branch listing omits them: use the directly hydrated snapshot we have.
+    const armedRunKeys = new Set([...requiredArmedRuns.values()].flatMap((entry) => [...entry.runs.keys()]))
+    const knownArmedRuns = Object.values(entities).filter((entity): entity is RunEntity =>
+      entity.kind === "run" && armedRunKeys.has(freshKeyFor(entity.repo, "run", entity.id)),
+    )
     const runsToLink: RunEntity[] = [
       ...relevant.filter((entity): entity is RunEntity => entity.kind === "run"),
       ...sessionRuns,
+      ...knownArmedRuns,
     ]
     const cachedPulls = Object.values(entities).filter((entity): entity is PullEntity => entity.kind === "pr")
     for (const entity of runsToLink) {
@@ -427,7 +511,9 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       setChains([])
       return
     }
-    const next = associate([...relevant, ...related], sessionRuns)
+    // Directly hydrated armed-run snapshots go last so they win the equal-
+    // timestamp dedupe over a replayed branch row carrying stale status.
+    const next = associate([...relevant, ...related, ...sessionRuns, ...knownArmedRuns], [])
     setChains(next)
     // Remember PRs this session owns right now (branch/SHA match): the sticky
     // session-created set behind multi-pill sessions. Later branch switches
@@ -685,7 +771,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
           gen: generation,
           sessionRepo: repo,
         })
-        const { sendList, batches, plan, ledger, opId, invalid: invalidDropped } = admission
+        const { sendList, batches, plan, ledger, opId, invalid: invalidDropped, armedRuns } = admission
         // Locally accumulated evidence for this operation only. Published once,
         // after every hydration stage below accepts it — branch results extend
         // the same set rather than overwriting hydrate's.
@@ -758,17 +844,36 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
             resumeInFlightBranch = undefined
             return false
           }
-          setRuns(branchRunsKey(repo, branch), branchRuns)
-          saveRuns(repo, branch, branchRuns)
+          // Direct hydration from this operation is authoritative: a branch-run
+          // PR or run (possibly replayed from the shared short-TTL server cache)
+          // must not overwrite a fresher state we just fetched, nor supply merge
+          // evidence for something we did not recheck here. Branch-only rows
+          // still render and associate normally.
+          const hydratedKeys = new Set(allEntities.map(entityKey))
+          const branchPrs = prs.filter((pull) => !hydratedKeys.has(entityKey(pull)))
+          // Keep every branch-discovered run for display/association, but use
+          // the directly hydrated counterpart where one exists: dropping it
+          // could remove the only link to a branch-discovered PR.
+          const directRuns = new Map(
+            allEntities.filter((entity): entity is RunEntity => entity.kind === "run").map((run) => [entityKey(run), run]),
+          )
+          const branchRunsForStore = branchRuns.map((run) => directRuns.get(entityKey(run)) ?? run)
+          setRuns(branchRunsKey(repo, branch), branchRunsForStore)
+          saveRuns(repo, branch, branchRunsForStore)
           branchRunsBranch = branch
           if (resumeInFlightBranch === branch) resumeInFlightBranch = undefined
-          merge(prs)
-          for (const key of freshKeysFor([...prs, ...branchRuns])) freshKeys.add(key)
-          for (const pull of prs) {
+          merge(branchPrs)
+          // Branch-listed runs are display/association only. Fresh evidence for
+          // a run comes solely from a successful direct hydration; once chained,
+          // the next safety batch requests it and an armed merge waits for that.
+          const directPrs = allEntities.filter((entity): entity is PullEntity => entity.kind === "pr")
+          for (const pull of branchPrs) {
             const key = mergeKey(pull.repo, pull.number)
-            if (recoveryKeys.has(key)) recoveredPulls.set(key, pull)
+            if (recoveryKeys.has(key) && !recoveredPulls.has(key)) recoveredPulls.set(key, pull)
           }
-          const branchTarget = prs.find((pull) => targetKey === mergeKey(pull.repo, pull.number))
+          const branchTarget =
+            directPrs.find((pull) => targetKey === mergeKey(pull.repo, pull.number)) ??
+            branchPrs.find((pull) => targetKey === mergeKey(pull.repo, pull.number))
           if (branchTarget) {
             targetPull = branchTarget
             targetUnresolved = false
@@ -793,7 +898,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
         // operation marked fresh. Never rechain or drive merges on superseded
         // evidence.
         if (!isOperationCurrent(sessionAttemptCurrent(current, session()), generation, refreshGeneration, opId, lastSentOp)) return false
-        publishFreshSafety(opId, freshKeys)
+        publishFreshSafety(opId, freshKeys, armedRuns)
         rechain()
         if (isFreshBaseSession(branch ?? "", found.length) && resumeInFlightBranch === branch) resumeInFlightBranch = undefined
         const knownPulls = Object.values(entities).filter((entity): entity is PullEntity =>
@@ -948,7 +1053,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
         gen: generationAtSchedule,
         sessionRepo: meta.repo ?? undefined,
       })
-      const { sendList, batches, plan, ledger, opId } = admission
+      const { sendList, batches, plan, ledger, opId, armedRuns } = admission
       const isDebounceCurrent = (): boolean =>
         generationAtSchedule === refreshGeneration && sessionAttemptCurrent(current, session()) && !isFreshBaseSession(meta.branch, refs().length)
       // Skip the network request when nothing is admitted, but still judge
@@ -987,7 +1092,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       // operation's evidence only now, immediately before accepted rechaining,
       // so a failed judgment can never leave an incomplete operation marked fresh.
       if (!isDebounceCurrent() || opId !== lastSentOp) return
-      publishFreshSafety(opId, freshKeysFor(completed.entities))
+      publishFreshSafety(opId, freshKeysFor(completed.entities), armedRuns)
       rechain()
       // An active transcript keeps admitting new hydrate ops, which supersede
       // the refresh operations that normally drive armed merges. Drive from
@@ -1004,6 +1109,16 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
   // after a failed refresh, or candidates with no chains yet all retry.
   let pollTimer: ReturnType<typeof setTimeout> | undefined
   let pollDisposed = false
+  /** A hidden window (background tab, minimized app) does no forge polling.
+   * Coming back into view refreshes once so state catches up immediately. */
+  const windowVisible = (): boolean => typeof document === "undefined" || document.visibilityState !== "hidden"
+  if (typeof document !== "undefined") {
+    const onVisible = (): void => {
+      if (document.visibilityState !== "hidden") requestAutoRefresh()
+    }
+    document.addEventListener("visibilitychange", onVisible)
+    onCleanup(() => document.removeEventListener("visibilitychange", onVisible))
+  }
   // Self-rescheduling: each tick re-arms in `.finally` from the current state,
   // so a rejected vcs.get cannot kill polling and cadence tracks run status.
   // The disposed guard stops an in-flight tick from re-arming after cleanup.
@@ -1011,6 +1126,10 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     if (pollDisposed) return
     pollTimer = setTimeout(() => {
       if (pollDisposed) return
+      if (!windowVisible()) {
+        schedulePollAt(POLL_NORMAL_MS)
+        return
+      }
       const current = session()
       if (current) {
         void ctx.client.vcs
@@ -1099,6 +1218,31 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
   /** Repos whose output-tier run refs ride the live lane (armed PR repos). */
   const armedHydrationRepos = (): Set<string> =>
     new Set(ctx.stores.armed.value.entries.map((entry) => repoKey(entry.repo)))
+  /** Current-head run keys the freshness gate must require for each armed PR. */
+  const armedRunRequirements = (): Map<string, ArmedRunRequirement> => {
+    const out = new Map<string, ArmedRunRequirement>()
+    for (const entry of ctx.stores.armed.value.entries) {
+      const key = mergeKey(entry.repo, entry.number)
+      for (const chain of chains()) {
+        const pull = chain.prs.find(
+          (candidate) => candidate.number === entry.number && repoKey(candidate.repo) === repoKey(entry.repo),
+        )
+        if (!pull) continue
+        const runs = new Map<string, TieredRef>()
+        for (const run of chain.runs) {
+          if (repoKey(run.repo) !== repoKey(pull.repo) || run.headSha !== pull.headSha) continue
+          runs.set(freshKeyFor(run.repo, "run", run.id), { repo: run.repo, number: run.id, kind: "run", tier: "user" })
+        }
+        // Carry requirements already recorded for this head, even if the run
+        // has since dropped out of the chain.
+        const known = requiredArmedRuns.get(key)
+        if (known && known.headSha === pull.headSha)
+          for (const [runKey, ref] of known.runs) runs.set(runKey, ref)
+        out.set(key, { headSha: pull.headSha, runs })
+      }
+    }
+    return out
+  }
   /**
    * One hydrate admission, shared by refresh and the message debounce so the
    * two pipelines can never diverge on partition, budget, chunking, or
@@ -1122,8 +1266,20 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     ledger: DiscoveryLedger
     opId: number
     invalid: number
+    armedRuns: Map<string, ArmedRunRequirement>
   } => {
     const safety = safetyRefsFor({ recovery: input.recovery, creation: input.creation, target: input.target })
+    const armedRuns = armedRunRequirements()
+    // Re-request runs still required by an armed PR even after they vanished
+    // from the rebuilt chain; otherwise a failed read would end the requirement.
+    const safetyKey = (ref: TieredRef): string => `${ref.kind ?? ""}:${ref.repo ? repoKey(ref.repo) : ""}#${ref.number}`
+    const safetyKeys = new Set(safety.map(safetyKey))
+    for (const requirement of armedRuns.values())
+      for (const ref of requirement.runs.values())
+        if (!safetyKeys.has(safetyKey(ref))) {
+          safetyKeys.add(safetyKey(ref))
+          safety.push(ref)
+        }
     const valid = input.requested.filter((ref) => Number.isSafeInteger(ref.number) && ref.number > 0)
     const invalid = input.requested.length - valid.length
     // Kind-aware coverage dedup: transcript refs whose payload a safety ref
@@ -1138,7 +1294,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     const sendList = [...safety, ...live, ...plan.admit]
     const batches: TieredRef[][] = []
     for (let i = 0; i < sendList.length; i += WIRE_REF_CAP) batches.push(sendList.slice(i, i + WIRE_REF_CAP))
-    return { sendList, batches, plan, ledger, opId, invalid }
+    return { sendList, batches, plan, ledger, opId, invalid, armedRuns }
   }
   /**
    * Shared completion: currency-guarded commit of one operation's results.
@@ -1512,9 +1668,14 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       // decision will read must be fresh in the latest accepted operation.
       // Evidence from a superseded operation — or none at all — fails closed
       // here and retries on the next successful hydration.
-      const requiredRuns = chain.runs
+      const chainRuns = chain.runs
         .filter((run) => repoKey(run.repo) === repoKey(pull.repo) && run.headSha === pull.headSha)
         .map((run) => freshKeyFor(run.repo, "run", run.id))
+      // A run required by the accepted safety batch stays required even when a
+      // failed read or a truncated listing drops it from the rebuilt chain.
+      const carried = requiredArmedRuns.get(key)
+      const carriedRuns = carried && carried.headSha === pull.headSha ? [...carried.runs.keys()] : []
+      const requiredRuns = [...new Set([...chainRuns, ...carriedRuns])]
       if (!armedMergeEligible(freshSafety, createdKeyFor(), lastSentOp, [freshKeyFor(pull.repo, "pr", pull.number), ...requiredRuns])) continue
       if (
         mergeInFlight.has(key) ||

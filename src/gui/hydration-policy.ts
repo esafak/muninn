@@ -369,7 +369,11 @@ export const safetyRefs = (input: SafetyInput): TieredRef[] => {
     out.push(ref)
   }
   const members = (chain: Chain): void => {
-    for (const pull of chain.prs) push(pull.repo, pull.number, "pr")
+    // A merged PR is a permanent fact: keeping it out of the safety batch
+    // stops it being re-hydrated on every 30s poll. A closed PR can reopen,
+    // so it keeps its place in the batch.
+    for (const pull of chain.prs)
+      if (pull.state !== "merged") push(pull.repo, pull.number, "pr")
     for (const issue of chain.issues) push(issue.repo, issue.number, "issue")
     for (const run of chain.runs) push(run.repo, run.id, "run")
   }

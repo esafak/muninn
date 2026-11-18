@@ -195,9 +195,12 @@ const currentRunsForPull = (chain: Chain, pull: PullEntity): RunEntity[] => late
  * outstanding change requests. Defaults to the chain's lead; callers pass an
  * explicit pull to check another member of the chain. Unknown states (entries
  * hydrated by older code) don't block — they fall back to the checks. No
- * evidence, no merge: zero known runs merges only on the provider's explicit
- * clean state, never on absence of data. Superseded runs in a known series do
- * not block; unrelated runs and runs without series metadata remain independent.
+ * evidence, no merge: a green current-head status snapshot or the provider's
+ * explicit clean state authorizes a merge (a mere absence of data never does).
+ * Superseded runs in a known series do not block; a terminal failed/cancelled
+ * run always does, and an in-flight run blocks unless the status snapshot is
+ * green for the same head. Unrelated runs and runs without series metadata
+ * remain independent.
  * `requireApproval` makes a missing approval a blocker; by default only
  * requested changes block — comments and 👍 reactions are passes.
  * `requireResolvedThreads` blocks on unresolved, non-outdated review threads
@@ -210,20 +213,33 @@ export const mergeReady = (chain: Chain, pull = chain.prs[0], waitForAllStatusCh
   // from a failed hydration when the user asked to gate on it.
   if (requireResolvedThreads && pull.unresolvedThreads !== 0) return false
   const currentRuns = currentRunsForPull(chain, pull)
-  if (!currentRuns.every((run) => run.status === "succeeded")) return false
+  const snapshot = pull.statusChecks
+  // A fully green status snapshot for this exact head is authoritative: GitHub
+  // has finished every check run it knows about. A stale run row that still
+  // reads queued/running, or a transient `unknown` mergeability reported as
+  // `pending`, must not outrank it and wedge an armed merge.
+  const checksGreen =
+    snapshot !== undefined &&
+    snapshot.state === "available" &&
+    snapshot.headSha === pull.headSha &&
+    snapshot.contexts.length > 0 &&
+    snapshot.contexts.every((context) => context.status === "succeeded")
+  // Terminal failures are real blockers: a same-SHA snapshot is not proof that
+  // a failed or cancelled run was superseded. Only a stale in-flight run may be
+  // overridden by green checks for that exact head.
+  if (currentRuns.some((run) => run.status === "failed" || run.status === "cancelled")) return false
+  if (currentRuns.some((run) => run.status === "queued" || run.status === "running") && !checksGreen) return false
   if (waitForAllStatusChecks) {
-    const snapshot = pull.statusChecks
     if (!snapshot || snapshot.headSha !== pull.headSha || snapshot.state === "unavailable") return false
     if (snapshot.state === "available" && !snapshot.contexts.every((context) => context.status === "succeeded")) return false
   }
-  if (pull.reviewState === "changes_requested" || pull.mergeState === "conflict") return false
-  if (pull.mergeState && pull.mergeState !== "ready") return false
-  // No evidence, no merge: a green run on this PR's current head, or the
-  // provider's explicit clean state. Stale runs from earlier commits neither
-  // block nor count as evidence, and a minimal forge with no run discovery and
-  // no merge state is never auto-mergeable (accepted: GitHub always hydrates
-  // state, so its clean `ready` is itself the evidence when no runs are known).
-  if (currentRuns.length === 0 && pull.mergeState !== "ready") return false
+  if (pull.reviewState === "changes_requested" || pull.mergeState === "conflict" || pull.mergeState === "blocked") return false
+  if (pull.mergeState === "pending" && !checksGreen) return false
+  // No evidence, no merge: a green run on this PR's current head, a green
+  // status snapshot, or the provider's explicit clean state. Stale runs from
+  // earlier commits neither block nor count as evidence, and a minimal forge
+  // with no run discovery and no merge state is never auto-mergeable.
+  if (currentRuns.length === 0 && pull.mergeState !== "ready" && !checksGreen) return false
   return true
 }
 

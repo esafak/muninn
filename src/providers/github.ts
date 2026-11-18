@@ -329,12 +329,26 @@ export const branchPullSnapshot = (
   listed: PullEntity,
   detailed: PullEntity | undefined,
   fallbackChecks: PullEntity["statusChecks"],
-): PullEntity => detailed ?? (fallbackChecks ? { ...listed, statusChecks: fallbackChecks } : listed)
+): PullEntity => detailed ?? (!fallbackChecks ? listed : {
+  ...listed,
+  // A branch-list row carries no review history. Without this marker a green
+  // checks snapshot alone could authorize an armed merge with changes
+  // requested by a reviewer we never loaded.
+  reviewsIncomplete: true,
+  statusChecks: fallbackChecks,
+})
 
 /** Opaque, auth-scoped status cache identity. Never stores or logs the raw token. */
 export const statusCheckCacheKey = (repo: RepoRef, headSha: string, token: string | undefined): string => {
   const credential = token ? createHash("sha256").update(token).digest("hex") : "anonymous"
   return JSON.stringify([repo.host, repo.owner, repo.repo, headSha, credential])
+}
+
+/** Auth-scoped identity for the branch-runs fan-out, so one window's poll
+ * collapses into the shared in-flight result for every other window. */
+export const branchRunsCacheKey = (repo: RepoRef, branch: string, token: string | undefined): string => {
+  const credential = token ? createHash("sha256").update(token).digest("hex") : "anonymous"
+  return JSON.stringify([repo.host, repositoryCacheKey(repo), branch, credential])
 }
 
 export const cachedPromise = <T>(
@@ -403,15 +417,27 @@ const mergeMethods = (repo: RepoJson): MergeSettings => {
 //   cached for the life of the process, never re-queried once learned.
 
 const ENTITY_TTL_MS = 45_000
+// Merged and closed PRs change state slowly (or never). A 5-minute cache
+// avoids spending pull+reviews calls on them every 45s poll while still
+// catching a reopen. Explicit merge invalidation forces a fresh confirmation.
+const TERMINAL_PR_TTL_MS = 5 * 60_000
 const BRANCH_PR_TTL_MS = 5 * 60_000
 const MERGE_TTL_MS = 10 * 60_000
 // Fixed from request start: shorter than the 30s refresh interval and shared by
 // concurrent hydration paths; stale data is never used as fallback after expiry.
 const STATUS_TTL_MS = 20_000
 const STATUS_CACHE_MAX_ENTRIES = 512
+// branchRuns fans out (runs list + jobs per run + branch PRs). Every window
+// polls it on each refresh, so without a shared short TTL N windows cost N×
+// the REST calls and exhaust GitHub's hourly core quota.
+const BRANCH_RUNS_TTL_MS = 20_000
+const BRANCH_RUNS_CACHE_MAX_ENTRIES = 256
+
+type BranchRunsResult = { runs: RunEntity[]; prs: PullEntity[] }
 
 const cache = new Map<string, { at: number; entity?: Entity }>()
 const statusCheckCache = new Map<string, { at: number; promise: Promise<NonNullable<PullEntity["statusChecks"]>> }>()
+const branchRunsCache = new Map<string, { at: number; promise: Promise<BranchRunsResult> }>()
 const repositoryEpochs = new Map<string, number>()
 const repositoryCacheKey = (repo: RepoRef): string => `${repo.owner.toLowerCase()}/${repo.repo.toLowerCase()}`
 const repositoryEpoch = (repo: RepoRef): number => repositoryEpochs.get(repositoryCacheKey(repo)) ?? 0
@@ -432,7 +458,17 @@ const invalidatePullCaches = (repo: RepoRef, number: number): void => {
   const key = repositoryCacheKey(repo)
   repositoryEpochs.set(key, repositoryEpoch(repo) + 1)
   invalidatePullCacheEntries(cache, branchPullsCache, repo, number)
+  // A merge changes the branch's PR list immediately; don't serve the pre-merge
+  // fan-out for the rest of the short TTL.
+  for (const cacheKey of branchRunsCache.keys())
+    if (cacheKey.includes(`"${key}"`)) branchRunsCache.delete(cacheKey)
 }
+
+/** Cache lifetime for one hydrated entity: terminal PRs are stable facts. */
+export const entityTtlFor = (entity: Entity | undefined): number =>
+  entity?.kind === "pr" && (entity.state === "merged" || entity.state === "closed")
+    ? TERMINAL_PR_TTL_MS
+    : ENTITY_TTL_MS
 
 const cached = async (
   key: string,
@@ -441,7 +477,7 @@ const cached = async (
   retries = 2,
 ): Promise<Entity | undefined> => {
   const hit = cache.get(key)
-  if (hit && Date.now() - hit.at < ENTITY_TTL_MS) return hit.entity
+  if (hit && Date.now() - hit.at < entityTtlFor(hit.entity)) return hit.entity
   const epoch = repositoryEpoch(repo)
   const entity = await load()
   if (epoch !== repositoryEpoch(repo))
@@ -463,6 +499,14 @@ const hydrateOne = async (ref: Ref & { repo: RepoRef }, auth: Auth): Promise<Ent
   const base = `/repos/${ref.repo.owner}/${ref.repo.repo}`
   if (ref.kind === "run") return hydrateRun(ref.repo, ref.number, auth)
 
+  // A PR kind is a syntactic hint, not a verified type: "PR #123" can name an
+  // issue. Probe only on a miss so real PRs skip the extra round trip.
+  if (ref.kind === "pr") {
+    const pull = await hydratePull(ref.repo, ref.number, auth)
+    if (pull) return pull
+    const issue = await request<IssueJson>(`${base}/issues/${ref.number}`, auth)
+    return issue && !issue.pull_request ? toIssueEntity(ref.repo, issue) : undefined
+  }
   // The issues API serves both; a bare `#123` learns its kind from the payload.
   const issue = await request<IssueJson>(`${base}/issues/${ref.number}`, auth)
   if (!issue) return undefined
@@ -740,6 +784,50 @@ const tokenFrom = (credential: Credential.Value | undefined): string | undefined
   return credential.type === "oauth" ? credential.access : credential.type === "key" ? credential.key : undefined
 }
 
+/** The uncached branch-runs fan-out. Called only through branchRunsCache, so
+ * every window polling the same branch shares one set of REST calls. */
+const loadBranchRuns = async (repo: RepoRef, branch: string, auth: Auth, retries = 2): Promise<BranchRunsResult> => {
+  const epoch = repositoryEpoch(repo)
+  // Runs and PRs are independent: a failing runs list must not lose the
+  // branch PRs (the pill), and vice versa.
+  const runs = await request<{ workflow_runs: readonly RunJson[] }>(
+    `/repos/${repo.owner}/${repo.repo}/actions/runs?branch=${encodeURIComponent(branch)}&per_page=8`,
+    auth,
+  ).catch(() => undefined)
+  // A failed runs request (e.g. 404 on a private repo without access) is
+  // swallowed by request() as undefined, which is otherwise
+  // indistinguishable from a branch with no runs. Log the failure; an
+  // empty but successful response is normal and must stay silent.
+  if (runs === undefined) console.warn("[muninn] branchRuns: runs request failed", { owner: repo.owner, repo: repo.repo, branch })
+  const runEntities = (
+    await Promise.all(
+      (runs?.workflow_runs ?? []).map((run) =>
+        runEntity(repo, run, auth, true).catch(() => undefined),
+      ),
+    )
+  ).filter((entity): entity is RunEntity => entity !== undefined)
+  // Branch runs are push-triggered: their pull_requests array comes back empty,
+  // so query the branch's open PRs and let the GUI associate by head SHA.
+  const pulls = await pullsForBranch(repo, branch, auth).catch(() => [] as PullEntity[])
+  const prs = await Promise.all(pulls.map(async (pull) => {
+    if (!shouldLoadStatusChecks(pull)) return branchPullSnapshot(pull, undefined, undefined)
+    // The pulls list endpoint is association-only and omits mergeability and
+    // review details. Prefer the cached `/pulls/{number}` entity so this
+    // branch-run result cannot overwrite richer hydration in the GUI.
+    const detailed = await cached(
+      `${repositoryCacheKey(repo)}#pr${pull.number}`,
+      repo,
+      () => hydratePull(repo, pull.number, auth),
+    ).catch(() => undefined)
+    const detailedPull = detailed?.kind === "pr" ? detailed : undefined
+    const fallbackChecks = detailedPull ? undefined : await loadStatusChecks(repo, pull.headSha, auth)
+    return branchPullSnapshot(pull, detailedPull, fallbackChecks)
+  }))
+  if (epoch !== repositoryEpoch(repo))
+    return retries > 0 ? loadBranchRuns(repo, branch, auth, retries - 1) : { runs: [], prs: [] }
+  return { runs: runEntities, prs }
+}
+
 // ── The provider ────────────────────────────────────────────────────────────
 
 export const github: SourceProvider = {
@@ -861,48 +949,22 @@ export const github: SourceProvider = {
     }
   },
   branchRuns: async (repo, branch, auth) => {
-    const load = async (retries: number): Promise<{ runs: RunEntity[]; prs: PullEntity[] }> => {
-      const epoch = repositoryEpoch(repo)
-      // Runs and PRs are independent: a failing runs list must not lose the
-      // branch PRs (the pill), and vice versa.
-      const runs = await request<{ workflow_runs: readonly RunJson[] }>(
-        `/repos/${repo.owner}/${repo.repo}/actions/runs?branch=${encodeURIComponent(branch)}&per_page=8`,
-        auth,
-      ).catch(() => undefined)
-      // A failed runs request (e.g. 404 on a private repo without access) is
-      // swallowed by request() as undefined, which is otherwise
-      // indistinguishable from a branch with no runs. Log the failure; an
-      // empty but successful response is normal and must stay silent.
-      if (runs === undefined) console.warn("[muninn] branchRuns: runs request failed", { owner: repo.owner, repo: repo.repo, branch })
-      const runEntities = (
-        await Promise.all(
-          (runs?.workflow_runs ?? []).map((run) =>
-            runEntity(repo, run, auth, true).catch(() => undefined),
-          ),
-        )
-      ).filter((entity): entity is RunEntity => entity !== undefined)
-      // Branch runs are push-triggered: their pull_requests array comes back empty,
-      // so query the branch's open PRs and let the GUI associate by head SHA.
-      const pulls = await pullsForBranch(repo, branch, auth).catch(() => [] as PullEntity[])
-      const prs = await Promise.all(pulls.map(async (pull) => {
-        if (!shouldLoadStatusChecks(pull)) return branchPullSnapshot(pull, undefined, undefined)
-        // The pulls list endpoint is association-only and omits mergeability and
-        // review details. Prefer the cached `/pulls/{number}` entity so this
-        // branch-run result cannot overwrite richer hydration in the GUI.
-        const detailed = await cached(
-          `${repositoryCacheKey(repo)}#pr${pull.number}`,
-          repo,
-          () => hydratePull(repo, pull.number, auth),
-        ).catch(() => undefined)
-        const detailedPull = detailed?.kind === "pr" ? detailed : undefined
-        const fallbackChecks = detailedPull ? undefined : await loadStatusChecks(repo, pull.headSha, auth)
-        return branchPullSnapshot(pull, detailedPull, fallbackChecks)
-      }))
-      if (epoch !== repositoryEpoch(repo))
-        return retries > 0 ? load(retries - 1) : { runs: [], prs: [] }
-      return { runs: runEntities, prs }
+    let token: string | undefined
+    try {
+      token = await auth()
+    } catch {
+      return { runs: [], prs: [] }
     }
-    return load(2)
+    if (branchRunsCache.size >= BRANCH_RUNS_CACHE_MAX_ENTRIES) {
+      const oldest = branchRunsCache.keys().next().value
+      if (oldest) branchRunsCache.delete(oldest)
+    }
+    return cachedPromise(
+      branchRunsCache,
+      branchRunsCacheKey(repo, branch, token),
+      BRANCH_RUNS_TTL_MS,
+      () => loadBranchRuns(repo, branch, async () => token),
+    )
   },
 
   merge: async (repo, number, method, expectedHeadSha, auth) => {

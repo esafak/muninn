@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { mergeResponse, staleHeadConflict, mergeAlreadyHandled, toPullEntity, runEntity, toIssueEntity, checkStatus, statusCheckSnapshot, combineStatusCheckResults, decodeStatusPage, collectStatusPages, cachedPromise, statusCheckCacheKey, shouldLoadStatusChecks, branchPullSnapshot, invalidatePullCacheEntries, repoFromUrl, repoFromFullName, unresolvedThreadCount } from "./github"
+import { mergeResponse, staleHeadConflict, mergeAlreadyHandled, toPullEntity, runEntity, toIssueEntity, checkStatus, statusCheckSnapshot, combineStatusCheckResults, decodeStatusPage, collectStatusPages, cachedPromise, statusCheckCacheKey, shouldLoadStatusChecks, branchPullSnapshot, invalidatePullCacheEntries, entityTtlFor, repoFromUrl, repoFromFullName, unresolvedThreadCount } from "./github"
 import { PullEntity, RunEntity as RunEntitySchema } from "../rpc"
 
 describe("mergeResponse", () => {
@@ -166,6 +166,27 @@ describe("toPullEntity", () => {
   })
 })
 
+describe("entityTtlFor", () => {
+  const repo = { host: "github.com", owner: "octo", repo: "repo" }
+  const basePull = {
+    node_id: "n1", number: 7, title: "T", state: "open", draft: false, merged_at: null,
+    body: null, html_url: "https://github.com/octo/repo/pull/7",
+    head: { sha: "abc", ref: "feature" }, base: { ref: "main" },
+    mergeable: null, mergeable_state: "unknown", auto_merge: null,
+    updated_at: "2026-11-10T00:00:00Z",
+  } as const
+  const entity = (state: "open" | "merged" | "closed") => toPullEntity(repo, {
+    ...basePull,
+    ...(state === "open" ? {} : { state: "closed" as const }),
+    ...(state === "merged" ? { merged_at: "2026-11-10T00:33:47Z" } : {}),
+  })
+  test("merged and closed PRs get the same longer cache life", () => {
+    expect(entityTtlFor(entity("open"))).toBeLessThan(entityTtlFor(entity("merged")))
+    expect(entityTtlFor(entity("closed"))).toBe(entityTtlFor(entity("merged")))
+    expect(entityTtlFor(undefined)).toBe(entityTtlFor(entity("open")))
+  })
+})
+
 describe("branchPullSnapshot", () => {
   const repo = { host: "github.com", owner: "octo", repo: "repo" }
   const listed = toPullEntity(repo, {
@@ -191,7 +212,11 @@ describe("branchPullSnapshot", () => {
 
   test("preserves list data and fallback checks when detail hydration fails", () => {
     const fallbackChecks = { headSha: "abc", state: "available" as const, contexts: [] }
-    expect(branchPullSnapshot(listed, undefined, fallbackChecks)).toEqual({ ...listed, statusChecks: fallbackChecks })
+    expect(branchPullSnapshot(listed, undefined, fallbackChecks)).toEqual({
+      ...listed,
+      reviewsIncomplete: true,
+      statusChecks: fallbackChecks,
+    })
     expect(branchPullSnapshot(listed, undefined, undefined)).toBe(listed)
   })
 })

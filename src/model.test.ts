@@ -81,6 +81,19 @@ describe("mergeReady", () => {
     expect(mergeReady(chain({ prs: [pull({ mergeState: "pending" })] }))).toBe(false)
   })
 
+  test("a green status snapshot outranks stale in-flight runs and pending mergeability", () => {
+    const green = pull({
+      mergeState: "pending",
+      statusChecks: { headSha: "abc123", state: "available", contexts: [{ name: "ci", status: "succeeded" }] },
+    })
+    expect(mergeReady(chain({ prs: [green], runs: [run("running"), run("queued")] }))).toBe(true)
+    // Without the green snapshot the stale runs still block.
+    expect(mergeReady(chain({ prs: [pull({ mergeState: "pending" })], runs: [run("running")] }))).toBe(false)
+    // A terminal result is a real blocker even when the status snapshot is green.
+    expect(mergeReady(chain({ prs: [green], runs: [run("failed")] }))).toBe(false)
+    expect(mergeReady(chain({ prs: [green], runs: [run("cancelled")] }))).toBe(false)
+  })
+
   test("no evidence, no merge: zero runs with unknown or absent merge state is not ready", () => {
     expect(mergeReady(chain({ runs: [] }))).toBe(false)
     expect(mergeReady(chain({ runs: [], prs: [pull({ mergeState: null })] }))).toBe(false)
