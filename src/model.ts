@@ -210,20 +210,29 @@ export const mergeReady = (chain: Chain, pull = chain.prs[0], waitForAllStatusCh
   // from a failed hydration when the user asked to gate on it.
   if (requireResolvedThreads && pull.unresolvedThreads !== 0) return false
   const currentRuns = currentRunsForPull(chain, pull)
-  if (!currentRuns.every((run) => run.status === "succeeded")) return false
+  const snapshot = pull.statusChecks
+  // A fully green status snapshot for this exact head is authoritative: GitHub
+  // has finished every check run it knows about. A stale run row that still
+  // reads queued/running, or a transient `unknown` mergeability reported as
+  // `pending`, must not outrank it and wedge an armed merge.
+  const checksGreen =
+    snapshot !== undefined &&
+    snapshot.state === "available" &&
+    snapshot.headSha === pull.headSha &&
+    snapshot.contexts.length > 0 &&
+    snapshot.contexts.every((context) => context.status === "succeeded")
+  if (!currentRuns.every((run) => run.status === "succeeded") && !checksGreen) return false
   if (waitForAllStatusChecks) {
-    const snapshot = pull.statusChecks
     if (!snapshot || snapshot.headSha !== pull.headSha || snapshot.state === "unavailable") return false
     if (snapshot.state === "available" && !snapshot.contexts.every((context) => context.status === "succeeded")) return false
   }
-  if (pull.reviewState === "changes_requested" || pull.mergeState === "conflict") return false
-  if (pull.mergeState && pull.mergeState !== "ready") return false
-  // No evidence, no merge: a green run on this PR's current head, or the
-  // provider's explicit clean state. Stale runs from earlier commits neither
-  // block nor count as evidence, and a minimal forge with no run discovery and
-  // no merge state is never auto-mergeable (accepted: GitHub always hydrates
-  // state, so its clean `ready` is itself the evidence when no runs are known).
-  if (currentRuns.length === 0 && pull.mergeState !== "ready") return false
+  if (pull.reviewState === "changes_requested" || pull.mergeState === "conflict" || pull.mergeState === "blocked") return false
+  if (pull.mergeState === "pending" && !checksGreen) return false
+  // No evidence, no merge: a green run on this PR's current head, a green
+  // status snapshot, or the provider's explicit clean state. Stale runs from
+  // earlier commits neither block nor count as evidence, and a minimal forge
+  // with no run discovery and no merge state is never auto-mergeable.
+  if (currentRuns.length === 0 && pull.mergeState !== "ready" && !checksGreen) return false
   return true
 }
 
