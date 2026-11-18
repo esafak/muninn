@@ -103,6 +103,9 @@ export interface PullEntity extends Base {
   nodeId?: string
   mergeState?: MergeState | null
   reviewState?: ReviewState | null
+  /** Review history was truncated or failed to load. A partial history can
+   * neither supply an approval nor erase a known block, so merging waits. */
+  reviewsIncomplete?: boolean
   /** Unresolved, non-outdated review threads. Absent when unknown — a gate
    * that needs it must fail closed rather than assume zero. */
   unresolvedThreads?: number
@@ -201,6 +204,7 @@ const currentRunsForPull = (chain: Chain, pull: PullEntity): RunEntity[] => late
  * and fails closed when their state is unknown. */
 export const mergeReady = (chain: Chain, pull = chain.prs[0], waitForAllStatusChecks = true, requireApproval = false, requireResolvedThreads = false): boolean => {
   if (!pull || pull.state !== "open") return false
+  if (pull.reviewsIncomplete) return false
   if (requireApproval && pull.reviewState !== "approved") return false
   // Fail closed on unknown thread state: an empty result must never be inferred
   // from a failed hydration when the user asked to gate on it.
@@ -245,6 +249,7 @@ export const mergeWhy = (chain: Chain, pull = chain.prs[0], waitForAllStatusChec
   if (pull?.mergeState === "conflict") return "merge conflicts with the base branch"
   if (pull?.mergeState === "blocked") return "blocked by branch rules or a missing review"
   if (!pull || pull.state !== "open") return "pull request is not open"
+  if (pull.reviewsIncomplete) return "review history unavailable"
   if (requireApproval && pull.reviewState !== "approved") return "an explicit approval is required (none on record)"
   if (requireResolvedThreads && pull.unresolvedThreads !== 0) {
     if (pull.unresolvedThreads === undefined) return "review thread state unavailable"

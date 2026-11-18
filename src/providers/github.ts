@@ -200,9 +200,11 @@ const loadUnresolvedThreads = async (nodeId: string, auth: Auth): Promise<number
       threads.push(...connection.nodes)
       if (!connection.pageInfo.hasNextPage) return unresolvedThreadCount(threads)
       after = connection.pageInfo.endCursor
-      if (!after) return unresolvedThreadCount(threads)
+      // More pages but no cursor: the count is incomplete, not zero.
+      if (!after) return undefined
     }
-    return unresolvedThreadCount(threads)
+    // Page cap hit with more pages remaining: unknown, never a partial count.
+    return undefined
   } catch {
     return undefined
   }
@@ -549,22 +551,53 @@ export const toPullEntity = (repo: RepoRef, pull: PullJson): PullEntity => ({
   updatedAt: epoch(pull.updated_at),
 })
 
+const REVIEW_PAGES = 5
+
+interface ReviewHistory {
+  reviews: ReviewJson[] | undefined
+  /** False on truncation or any failed page — the history may be missing a
+   * later dismissal or change request. Consumers must not treat it as a
+   * decision, either for or against merging. */
+  complete: boolean
+}
+
+/** Review history for one PR, up to a bounded page count. The latest submitted
+ * review per user decides, so a truncated tail could hide a later dismissal or
+ * change request. Keep whatever was fetched (a known block must survive) but
+ * mark the result incomplete so no gate can rely on it as a full decision. */
+const loadReviews = async (repo: RepoRef, number: number, auth: Auth): Promise<ReviewHistory> => {
+  const all: ReviewJson[] = []
+  try {
+    for (let page = 1; page <= REVIEW_PAGES; page++) {
+      const rows = await request<ReviewJson[]>(
+        `/repos/${repo.owner}/${repo.repo}/pulls/${number}/reviews?per_page=100&page=${page}`,
+        auth,
+      )
+      if (!rows) break
+      all.push(...rows)
+      if (rows.length < 100) return { reviews: all, complete: true }
+    }
+  } catch {
+    // Fall through with whatever was read; incomplete either way.
+  }
+  return { reviews: all.length > 0 ? all : undefined, complete: false }
+}
+
 const hydratePull = async (repo: RepoRef, number: number, auth: Auth): Promise<PullEntity | undefined> => {
   const pull = await request<PullJson>(`/repos/${repo.owner}/${repo.repo}/pulls/${number}`, auth)
   if (!pull) return undefined
   const entity = toPullEntity(repo, pull)
   // Reviews and commit statuses are extra reads per PR; a failing detail read
   // must not lose the PR itself, or one flaky endpoint hides the pill.
-  const [reviews, statusChecks, unresolvedThreads] = await Promise.all([
-    request<ReviewJson[]>(`/repos/${repo.owner}/${repo.repo}/pulls/${number}/reviews?per_page=30`, auth).catch(
-      () => undefined,
-    ),
+  const [reviewHistory, statusChecks, unresolvedThreads] = await Promise.all([
+    loadReviews(repo, number, auth),
     shouldLoadStatusChecks(entity) ? loadStatusChecks(repo, pull.head.sha, auth) : Promise.resolve(undefined),
-    entity.nodeId ? loadUnresolvedThreads(entity.nodeId, auth) : Promise.resolve(undefined),
+    entity.state === "open" && entity.nodeId ? loadUnresolvedThreads(entity.nodeId, auth) : Promise.resolve(undefined),
   ])
   return {
     ...entity,
-    reviewState: reviewState(reviews),
+    reviewState: reviewHistory.reviews ? reviewState(reviewHistory.reviews) : null,
+    ...(reviewHistory.complete ? {} : { reviewsIncomplete: true }),
     ...(statusChecks ? { statusChecks } : {}),
     ...(unresolvedThreads !== undefined ? { unresolvedThreads } : {}),
   }

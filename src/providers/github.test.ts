@@ -88,6 +88,8 @@ describe("PullEntity RPC schema", () => {
     expect(PullEntity.parse({ ...entity, statusChecks: checks }).statusChecks).toEqual(checks)
     expect(PullEntity.parse({ ...entity, unresolvedThreads: 2 }).unresolvedThreads).toBe(2)
     expect(PullEntity.parse(entity).unresolvedThreads).toBeUndefined()
+    expect(PullEntity.parse({ ...entity, reviewsIncomplete: true }).reviewsIncomplete).toBe(true)
+    expect(PullEntity.parse(entity).reviewsIncomplete).toBeUndefined()
   })
 })
 

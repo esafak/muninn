@@ -362,6 +362,19 @@ describe("requireApproval", () => {
   })
 })
 
+describe("reviewsIncomplete", () => {
+  // A truncated/failed review fetch must not let an older approval satisfy the
+  // gate, nor erase a known block. It waits (amber), never merges.
+  const incomplete = chain({ prs: [pull({ reviewState: "approved", reviewsIncomplete: true })] })
+  test("an incomplete review history blocks even with an approval on record", () => {
+    expect(mergeReady(incomplete)).toBe(false)
+    expect(mergeReady(incomplete, undefined, true, true)).toBe(false)
+    expect(mergeWhy(incomplete)).toBe("review history unavailable")
+    expect(mergeFailed(incomplete)).toBe(false)
+    expect(chainTone(incomplete)).toBe("warning")
+  })
+})
+
 describe("requireResolvedThreads", () => {
   const blocked = chain({ prs: [pull({ unresolvedThreads: 2 })] })
   const clear = chain({ prs: [pull({ unresolvedThreads: 0 })] })

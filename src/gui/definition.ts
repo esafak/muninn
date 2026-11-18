@@ -61,6 +61,7 @@ const Entity = Schema.Union([
     nodeId: Schema.optional(Schema.String),
     mergeState: Schema.optional(Schema.NullOr(Schema.Literals(["ready", "pending", "blocked", "conflict"]))),
     reviewState: Schema.optional(Schema.NullOr(Schema.Literals(["approved", "changes_requested", "pending"]))),
+    reviewsIncomplete: Schema.optional(Schema.Boolean),
     unresolvedThreads: Schema.optional(Schema.Number),
     autoMerge: Schema.optional(Schema.NullOr(Schema.Literals(["merge", "squash", "rebase"]))),
     statusChecks: Schema.optional(StatusCheckSnapshot),

@@ -1402,9 +1402,14 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     for (let attempt = 0; ; attempt++) {
       const outcome = await fireMergeOnce(pull, method, via)
       if (outcome !== "transport") return outcome
+      // Armed merges must not outlive consent: a disarm or gate change during a
+      // backoff would not be seen. Leave the arm intact and let the next poll's
+      // driveArmedMerges recheck it. Manual clicks have no such long-lived intent.
+      if (via === "when-ready") return "transport"
       const backoff = MERGE_TRANSPORT_BACKOFF_MS[attempt]
       if (backoff === undefined || !sessionAttemptCurrent(attemptSession, session())) return "transport"
       await new Promise<void>((resolve) => setTimeout(resolve, backoff + Math.floor(Math.random() * backoff / 4)))
+      if (!sessionAttemptCurrent(attemptSession, session())) return "transport"
     }
   }
 
@@ -1436,7 +1441,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     if (outcome === "transport") {
       ctx.toast.show({
         title: `PR #${pull.number} merge unavailable`,
-        description: "Muninn's forge connection is reloading. The merge was not sent — try again in a moment.",
+        description: "Muninn couldn't confirm the merge outcome while its forge connection was reloading. Check the PR before retrying.",
         variant: "default",
       })
       return
