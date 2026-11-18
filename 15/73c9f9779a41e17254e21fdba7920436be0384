@@ -1,0 +1,20 @@
+src/gui/history.tsx
+  h_ea91e2db23540f 167,176-182,255-259,261-266,346-363,412-413,419-422,424-432
+src/gui/hydration-policy.test.ts
+  h_ea91e2db23540f 15,380-398
+src/gui/hydration-policy.ts
+  h_ea91e2db23540f 394-400
+src/gui/window.tsx
+  h_ea91e2db23540f 16,37,340-343,374-384,410,600,673,688,732-737,766,2643-2646
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1573c9f9779a41e17254e21fdba7920436be0384",
+  "prompts": {},
+  "humans": {
+    "h_ea91e2db23540f": {
+      "author": "Emre Şafak <3928300+esafak@users.noreply.github.com>"
+    }
+  }
+}
