@@ -305,12 +305,103 @@ describe("mergeFailed", () => {
 })
 
 describe("pendingReviewNotice", () => {
-  test("names the approval gap only when reviews exist without a decision", () => {
-    expect(pendingReviewNotice(pull({ reviewState: "pending" }))).toBe("reviews are pending (no approval on record)")
-    expect(pendingReviewNotice(pull({ reviewState: "approved" }))).toBeUndefined()
-    expect(pendingReviewNotice(pull({ reviewState: "changes_requested" }))).toBeUndefined()
-    expect(pendingReviewNotice(pull({ reviewState: null }))).toBeUndefined()
-    expect(pendingReviewNotice(pull({ reviewState: undefined }))).toBeUndefined()
+  test("stays silent by default — comments and reactions are not a blocker", () => {
+    for (const reviewState of ["pending", "approved", "changes_requested", null, undefined] as const)
+      expect(pendingReviewNotice(pull({ reviewState }))).toBeUndefined()
+  })
+  test("names the approval gap only when explicit approval is required", () => {
+    const notice = "an explicit approval is required (none on record)"
+    expect(pendingReviewNotice(pull({ reviewState: "pending" }), true)).toBe(notice)
+    expect(pendingReviewNotice(pull({ reviewState: null }), true)).toBe(notice)
+    expect(pendingReviewNotice(pull({ reviewState: undefined }), true)).toBe(notice)
+    expect(pendingReviewNotice(pull({ reviewState: "approved" }), true)).toBeUndefined()
+    expect(pendingReviewNotice(pull({ reviewState: "changes_requested" }), true)).toBeUndefined()
+  })
+})
+
+describe("requireApproval", () => {
+  test("only an explicit approval satisfies the review gate when enabled", () => {
+    const pending = chain({ prs: [pull({ reviewState: "pending" })] })
+    const approved = chain({ prs: [pull({ reviewState: "approved" })] })
+    const requested = chain({ prs: [pull({ reviewState: "changes_requested" })] })
+    // Default: a comment or 👍 (mapped to "pending") is a pass.
+    expect(mergeReady(pending)).toBe(true)
+    expect(mergeReady(pending, undefined, true, false)).toBe(true)
+    expect(mergeReady(pending, undefined, true, true)).toBe(false)
+    expect(mergeReady(approved, undefined, true, true)).toBe(true)
+    expect(mergeReady(requested, undefined, true, true)).toBe(false)
+  })
+  test("mergeWhy explains a missing approval", () => {
+    const pending = chain({ prs: [pull({ reviewState: "pending" })] })
+    expect(mergeWhy(pending, undefined, true, false)).toBe("not ready")
+    expect(mergeWhy(pending, undefined, true, true)).toBe("an explicit approval is required (none on record)")
+  })
+  test("chainTone keeps an unapproved chain amber instead of green", () => {
+    const pending = chain({ prs: [pull({ reviewState: "pending" })] })
+    expect(chainTone(pending)).toBe("success")
+    expect(chainTone(pending, true, true)).toBe("warning")
+    expect(chainTone(chain({ prs: [pull({ reviewState: "approved" })] }), true, true)).toBe("success")
+  })
+  test("armed merges wait for approval when enabled", () => {
+    const pending = chain({ prs: [pull({ reviewState: "pending" })] })
+    const entry: ArmedEntry = { repo, number: 4821, method: "squash" }
+    expect(armedTargets([entry], [pending])).toHaveLength(1)
+    expect(armedTargets([entry], [pending], true, true)).toHaveLength(0)
+  })
+  test("running jobs never drive an armed merge, in either mode", () => {
+    const running = chain({ runs: [run("running")] })
+    const entry: ArmedEntry = { repo, number: 4821, method: "squash" }
+    expect(armedTargets([entry], [running])).toHaveLength(0)
+    expect(armedTargets([entry], [running], true, true)).toHaveLength(0)
+  })
+  test("a missing approval stays amber; requested changes stay red", () => {
+    const pending = chain({ prs: [pull({ reviewState: "pending" })] })
+    const requested = chain({ prs: [pull({ reviewState: "changes_requested" })] })
+    expect(mergeFailed(pending, undefined, true, true)).toBe(false)
+    expect(mergeFailed(requested, undefined, true, true)).toBe(true)
+  })
+})
+
+describe("reviewsIncomplete", () => {
+  // A truncated/failed review fetch must not let an older approval satisfy the
+  // gate, nor erase a known block. It waits (amber), never merges.
+  const incomplete = chain({ prs: [pull({ reviewState: "approved", reviewsIncomplete: true })] })
+  test("an incomplete review history blocks even with an approval on record", () => {
+    expect(mergeReady(incomplete)).toBe(false)
+    expect(mergeReady(incomplete, undefined, true, true)).toBe(false)
+    expect(mergeWhy(incomplete)).toBe("review history unavailable")
+    expect(mergeFailed(incomplete)).toBe(false)
+    expect(chainTone(incomplete)).toBe("warning")
+  })
+})
+
+describe("requireResolvedThreads", () => {
+  const blocked = chain({ prs: [pull({ unresolvedThreads: 2 })] })
+  const clear = chain({ prs: [pull({ unresolvedThreads: 0 })] })
+  const unknown = chain({ prs: [pull()] })
+  const flags = [true, false, true] as const
+
+  test("off by default — thread state never blocks", () => {
+    expect(mergeReady(blocked)).toBe(true)
+    expect(mergeReady(unknown)).toBe(true)
+    expect(mergeWhy(blocked)).toBe("not ready")
+  })
+  test("on — unresolved threads block, zero passes, unknown fails closed", () => {
+    expect(mergeReady(blocked, undefined, ...flags)).toBe(false)
+    expect(mergeReady(clear, undefined, ...flags)).toBe(true)
+    expect(mergeReady(unknown, undefined, ...flags)).toBe(false)
+  })
+  test("on — the reason names the count or the missing state", () => {
+    expect(mergeWhy(blocked, undefined, ...flags)).toBe("2 unresolved review threads")
+    expect(mergeWhy(chain({ prs: [pull({ unresolvedThreads: 1 })] }), undefined, ...flags)).toBe("1 unresolved review thread")
+    expect(mergeWhy(unknown, undefined, ...flags)).toBe("review thread state unavailable")
+  })
+  test("on — waiting stays amber and armed merges stay blocked", () => {
+    expect(mergeFailed(blocked, undefined, ...flags)).toBe(false)
+    expect(chainTone(blocked, ...flags)).toBe("warning")
+    const entry: ArmedEntry = { repo, number: 4821, method: "squash" }
+    expect(armedTargets([entry], [blocked], ...flags)).toHaveLength(0)
+    expect(armedTargets([entry], [clear], ...flags)).toHaveLength(1)
   })
 })
 

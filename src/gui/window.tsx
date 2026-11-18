@@ -1052,6 +1052,8 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
   // in the sidebar; settled history never pills.
 
   const waitForAllStatusChecks = () => ctx.stores.settings.value.waitForAllStatusChecks !== false
+  const requireApproval = () => ctx.stores.settings.value.requireApproval === true
+  const requireResolvedThreads = () => ctx.stores.settings.value.requireResolvedThreads === true
   /** How many one-pill-per-pick slots the composer row holds: pinned first,
    * then `pillDisplay` order. Anything beyond the cap stays in the sidebar,
    * the debug census, and the last slot's overflow row. */
@@ -1178,11 +1180,11 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     // Dismissed chains leave the pool before ranking/capping (the pinned
     // entry bypasses via `pillDisplay`); `eligible` stays full for the census.
     const pickable = pickableChains(eligible, dismissedKeys())
-    const normal = pillPick(pickable, waitForAllStatusChecks())
+    const normal = pillPick(pickable, waitForAllStatusChecks(), requireApproval(), requireResolvedThreads())
     // Single-pin override: pull identity (or chain key) bypasses eligibility.
     // Expiry is disappearance: a pinned chain that's gone unpins on next rechain.
     const pinned = pinnedChain(chains(), ctx.stores.pinned.value)
-    const picks = pillDisplay(pickable, pinned, waitForAllStatusChecks(), MAX_PILLS)
+    const picks = pillDisplay(pickable, pinned, waitForAllStatusChecks(), MAX_PILLS, requireApproval(), requireResolvedThreads())
     if (pinned) {
       return { eligible, pickable, picked: { chain: pinned, reason: "pinned" as const, considered: pickable.length + 1 }, picks, provenance }
     }
@@ -1292,34 +1294,34 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       if (draft.entries.length > 200) draft.entries.length = 200
     })
 
-  /** Fires the merge RPC (head-SHA guarded; method and delete-branch from settings)
-   * and toasts the outcome. No confirmation — callers own consent. Every outcome
-   * lands in the activity ledger: merges, deletions, failures. */
-  const fireMerge = async (
+  type MergeOutcome = "merged" | "failed" | "head-changed" | "in-flight" | "already-handled" | "transport"
+
+  /** Provider refusals are RETURNED as `{merged:false, message:"GitHub ..."}`;
+   * transport failures (plugin reload → unregistered RPC, network abort) THROW.
+   * Keep the two separate: a transport failure is not a merge failure. */
+  const fireMergeOnce = async (
     pull: PullEntity,
     method: "merge" | "squash" | "rebase",
     via: "manual" | "when-ready",
-  ): Promise<"merged" | "failed" | "head-changed" | "in-flight" | "already-handled"> => {
+  ): Promise<MergeOutcome> => {
     const current = session()
     const client = ctx.client
-    if (!current || !client) return "failed"
+    if (!current || !client) return "transport"
     const origin = { sessionID: current.id, directory: current.directory, repo: meta.repo }
     const deleteBranch = ctx.stores.settings.value.deleteBranch
-    const result = await client
-      .rpc(Muninn)
-      .merge({
+    let result: { merged: boolean; message?: string; headChanged?: boolean; inFlight?: boolean; alreadyHandled?: boolean } | undefined
+    try {
+      result = await client.rpc(Muninn).merge({
         directory: current.directory,
         number: pull.number,
         method,
         expectedHeadSha: pull.headSha,
       })
-      .catch((error: unknown) => ({
-        merged: false as const,
-        message: error instanceof Error ? error.message : String(error),
-        headChanged: false,
-        inFlight: false,
-        alreadyHandled: false,
-      }))
+    } catch (error) {
+      console.warn("[muninn] merge RPC transport failure", error)
+      return "transport"
+    }
+    if (!result) return "transport"
     if (!result.merged) {
       if (result.inFlight) {
         if (via === "manual")
@@ -1385,13 +1387,43 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     return "merged"
   }
 
+  /** A plugin reload briefly unregisters the merge RPC. A transport failure is
+   * not a merge failure: manual clicks retry in-process with bounded backoff
+   * and only surface an availability notice if all attempts fail; armed merges
+   * return immediately and are re-driven by the next poll, which rechecks
+   * consent and readiness. Neither records merge-failed nor disarms an arm.
+   * Provider refusals resolve normally and never enter the transport retry
+   * loop (a stale-head response can still start a fresh armed attempt against
+   * the updated head). The server's process-local coordinateMerge dedupes a
+   * retry racing a success committed before the connection died. */
+  const MERGE_TRANSPORT_BACKOFF_MS = [1_000, 2_000, 4_000]
+  const fireMerge = async (
+    pull: PullEntity,
+    method: "merge" | "squash" | "rebase",
+    via: "manual" | "when-ready",
+  ): Promise<MergeOutcome> => {
+    const attemptSession = session()
+    for (let attempt = 0; ; attempt++) {
+      const outcome = await fireMergeOnce(pull, method, via)
+      if (outcome !== "transport") return outcome
+      // Armed merges must not outlive consent: a disarm or gate change during a
+      // backoff would not be seen. Leave the arm intact and let the next poll's
+      // driveArmedMerges recheck it. Manual clicks have no such long-lived intent.
+      if (via === "when-ready") return "transport"
+      const backoff = MERGE_TRANSPORT_BACKOFF_MS[attempt]
+      if (backoff === undefined || !sessionAttemptCurrent(attemptSession, session())) return "transport"
+      await new Promise<void>((resolve) => setTimeout(resolve, backoff + Math.floor(Math.random() * backoff / 4)))
+      if (!sessionAttemptCurrent(attemptSession, session())) return "transport"
+    }
+  }
+
   /** Merges a pull request now: confirms in the app's dialog (naming exactly what
    * happens), then fires the provider merge guarded by the PR's head SHA. */
   const mergePull = async (pull: PullEntity): Promise<void> => {
     const method = ctx.stores.settings.value.mergeMethod
     const deleteBranch = ctx.stores.settings.value.deleteBranch
     const fastForward = ctx.stores.settings.value.fastForwardBase
-    const reviewNotice = pendingReviewNotice(pull)
+    const reviewNotice = pendingReviewNotice(pull, requireApproval())
     const kind = await checkoutKind(session()?.directory ?? "")
     const methodName = `${method[0]!.toUpperCase()}${method.slice(1)}`
     const cleanupClause = !deleteBranch
@@ -1409,7 +1441,15 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       danger: true,
     })
     if (!ok) return
-    await fireMerge(pull, method, "manual")
+    const outcome = await fireMerge(pull, method, "manual")
+    if (outcome === "transport") {
+      ctx.toast.show({
+        title: `PR #${pull.number} merge unavailable`,
+        description: "Muninn couldn't confirm the merge outcome while its forge connection was reloading. Check the PR before retrying.",
+        variant: "default",
+      })
+      return
+    }
     void refresh({ full: true })
   }
 
@@ -1421,7 +1461,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       const method = ctx.stores.settings.value.mergeMethod
       const deleteBranch = ctx.stores.settings.value.deleteBranch
       const fastForward = ctx.stores.settings.value.fastForwardBase
-      const reviewNotice = pendingReviewNotice(pull)
+      const reviewNotice = pendingReviewNotice(pull, requireApproval())
       const kind = await checkoutKind(session()?.directory ?? "")
       const sentences = [`Muninn watches "${pull.title}" and merges into ${pull.baseBranch} with ${method} once checks pass and merge requirements are satisfied.`]
       if (fastForward && (!deleteBranch || kind !== "canonical"))
@@ -1430,7 +1470,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
         sentences.push(kind === "canonical"
           ? `It will switch to ${pull.baseBranch}${fastForward ? ", fast-forward it when safe," : ""} and delete the local branch ${pull.headBranch} when possible.`
           : `It will delete the clean local tree and branch ${pull.headBranch} when possible.`)
-      if (reviewNotice) sentences.push(`${reviewNotice[0]!.toUpperCase()}${reviewNotice.slice(1)} — arming proceeds without an approval.`)
+      if (reviewNotice) sentences.push(`${reviewNotice[0]!.toUpperCase()}${reviewNotice.slice(1)} — Muninn will wait for an approval before merging.`)
       sentences.push("You can cancel any time.")
       const ok = await ctx.dialogs.confirm({
         title: `Merge PR #${pull.number} when ready?`,
@@ -1461,7 +1501,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
   /** Fires ready armed entries once per PR. A stale head stays armed but is
    * blocked until a successful refresh observes a different head SHA. */
   const driveArmedMerges = () => {
-    for (const { pull, chain, method } of armedTargets(ctx.stores.armed.value.entries, chains(), waitForAllStatusChecks())) {
+    for (const { pull, chain, method } of armedTargets(ctx.stores.armed.value.entries, chains(), waitForAllStatusChecks(), requireApproval(), requireResolvedThreads())) {
       const key = mergeKey(pull.repo, pull.number)
       // Freshness gate: the armed PR and every current-head run the merge
       // decision will read must be fresh in the latest accepted operation.
@@ -1498,10 +1538,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       const attempt = { ...entry }
       const attemptSession = session()
       void (async () => {
-        const outcome = await fireMerge(pull, method, "when-ready").catch((error: unknown) => {
-          console.error("[muninn] merge-when-ready failed", error)
-          return "failed" as const
-        })
+        const outcome = await fireMerge(pull, method, "when-ready")
         if (outcome === "head-changed") rejectedHeadByPR.set(key, pull.headSha)
         if (outcome === "merged") {
           removeArm(attempt)
@@ -1509,6 +1546,13 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
         }
         if (outcome === "failed") removeArm(attempt)
         if (outcome === "already-handled") removeArm(attempt)
+
+        // Transport failure is not a merge failure: keep the arm and skip the
+        // refresh (which would hit the forge while its RPC is still churning).
+        if (outcome === "transport") {
+          mergeInFlight.delete(key)
+          return
+        }
 
         if (outcome === "in-flight") {
           serverBusyUntil.set(key, Date.now() + 25_000)
@@ -1534,7 +1578,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
           )
           if (!stillArmed) rejectedHeadByPR.delete(key)
           const currentPull = refreshedPullByPR.get(key)
-          const ready = armedTargets(ctx.stores.armed.value.entries, chains(), waitForAllStatusChecks()).some(
+          const ready = armedTargets(ctx.stores.armed.value.entries, chains(), waitForAllStatusChecks(), requireApproval(), requireResolvedThreads()).some(
             (target) => mergeKey(target.pull.repo, target.pull.number) === key,
           )
           if (staleHeadRetryEligible({
@@ -1876,6 +1920,8 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     const armed = pull?.state === "open" ? isArmed(pull) : false
     return pillViewForPick(entry, {
       waitForAllStatusChecks: waitForAllStatusChecks(),
+      requireApproval: requireApproval(),
+      requireResolvedThreads: requireResolvedThreads(),
       armed,
       spinFrame: SPIN_FRAMES[spin() % SPIN_FRAMES.length] ?? "",
       t: (key) => ctx.t(key),
@@ -1886,7 +1932,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     const picks = visiblePicks()
     const entry = picks[index]
     if (!entry || pillLeadOf(entry.chain, entry.reason)?.state !== "merged") return undefined
-    const view = mergedActionView(entry, (key) => ctx.t(key), waitForAllStatusChecks())
+    const view = mergedActionView(entry, (key) => ctx.t(key), waitForAllStatusChecks(), requireApproval(), requireResolvedThreads())
     if (!view) return undefined
     // Overflow's visible row lives on the last menu pill; with zero menu pills
     // (every pick merged) the count survives only here, in the accessible name
@@ -1975,7 +2021,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
   // One chain's rows: PRs, issues, runs. Rendered by each slot's popover for
   // its own chain.
   const pillChainRows = (chain: Chain, input: ComposerPillMenuProps): JSX.Element => (
-        <div class="mn-pop-chain" data-tone={chainTone(chain, waitForAllStatusChecks())}>
+        <div class="mn-pop-chain" data-tone={chainTone(chain, waitForAllStatusChecks(), requireApproval(), requireResolvedThreads())}>
           <For each={chain.prs}>
             {(pull) => (
               <div class="mn-pop-row" onClick={() => { input.close(); open(pull.url) }}>
@@ -2001,6 +2047,8 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
                   pull={pull}
                   isArmed={isArmed}
                   waitForAllStatusChecks={waitForAllStatusChecks}
+                  requireApproval={requireApproval}
+                  requireResolvedThreads={requireResolvedThreads}
                   onMerge={mergePull}
                   onArm={armPull}
                 />
@@ -2060,10 +2108,10 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
           class="mn-pop-toggle"
           title={
             isArmed(entry().pull)
-              ? `Merging when ready (${entry().pull.autoMerge ? "also on the forge" : "watched locally"}); ${mergeReady(entry().chain, entry().pull, waitForAllStatusChecks()) ? "merging on the next check (within ~30s)" : `waiting: ${mergeWhy(entry().chain, entry().pull, waitForAllStatusChecks())}`} — click to stop`
-              : mergeReady(entry().chain, entry().pull, waitForAllStatusChecks())
+              ? `Merging when ready (${entry().pull.autoMerge ? "also on the forge" : "watched locally"}); ${mergeReady(entry().chain, entry().pull, waitForAllStatusChecks(), requireApproval(), requireResolvedThreads()) ? "merging on the next check (within ~30s)" : `waiting: ${mergeWhy(entry().chain, entry().pull, waitForAllStatusChecks(), requireApproval(), requireResolvedThreads())}`} — click to stop`
+              : mergeReady(entry().chain, entry().pull, waitForAllStatusChecks(), requireApproval(), requireResolvedThreads())
                 ? "green now — Muninn merges on its next check (within ~30s)"
-                : `Muninn merges once checks pass and merge requirements are satisfied — now blocked: ${mergeWhy(entry().chain, entry().pull, waitForAllStatusChecks())}`
+                : `Muninn merges once checks pass and merge requirements are satisfied — now blocked: ${mergeWhy(entry().chain, entry().pull, waitForAllStatusChecks(), requireApproval(), requireResolvedThreads())}`
           }
         >
           <input
@@ -2258,6 +2306,8 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
             debug={debugLine}
             showDebug={() => ctx.stores.settings.value.debugMode}
             waitForAllStatusChecks={waitForAllStatusChecks}
+            requireApproval={requireApproval}
+            requireResolvedThreads={requireResolvedThreads}
             sessionReady={sessionReady}
             onOpen={open}
             onMerge={mergePull}
@@ -2312,6 +2362,18 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
           title: ctx.t("settings.waitForAllStatusChecks"),
           description: ctx.t("settings.waitForAllStatusChecks.description"),
           keywords: "merge checks status ci ready",
+        },
+        {
+          id: "require-approval",
+          title: ctx.t("settings.requireApproval"),
+          description: ctx.t("settings.requireApproval.description"),
+          keywords: "merge review approval approve changes requested comment reaction",
+        },
+        {
+          id: "require-resolved-threads",
+          title: ctx.t("settings.requireResolvedThreads"),
+          description: ctx.t("settings.requireResolvedThreads.description"),
+          keywords: "merge review unresolved threads conversations resolve outdated",
         },
         {
           id: "decision-models-enabled",
@@ -2555,6 +2617,30 @@ const MuninnSettings = (): JSX.Element => {
             label={ctx.t("settings.waitForAllStatusChecks")}
             hideLabel
             onChange={(checked) => ctx.stores.settings.update((draft) => { draft.waitForAllStatusChecks = checked })}
+          />
+        </ui.SettingsRow>
+        <ui.SettingsRow
+          id="require-approval"
+          title={ctx.t("settings.requireApproval")}
+          description={ctx.t("settings.requireApproval.description")}
+        >
+          <ui.Switch
+            checked={ctx.stores.settings.value.requireApproval === true}
+            label={ctx.t("settings.requireApproval")}
+            hideLabel
+            onChange={(checked) => ctx.stores.settings.update((draft) => { draft.requireApproval = checked })}
+          />
+        </ui.SettingsRow>
+        <ui.SettingsRow
+          id="require-resolved-threads"
+          title={ctx.t("settings.requireResolvedThreads")}
+          description={ctx.t("settings.requireResolvedThreads.description")}
+        >
+          <ui.Switch
+            checked={ctx.stores.settings.value.requireResolvedThreads === true}
+            label={ctx.t("settings.requireResolvedThreads")}
+            hideLabel
+            onChange={(checked) => ctx.stores.settings.update((draft) => { draft.requireResolvedThreads = checked })}
           />
         </ui.SettingsRow>
       </ui.SettingsSection>

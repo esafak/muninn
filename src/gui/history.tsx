@@ -35,6 +35,8 @@ export interface HistoryProps {
   /** Toggles the pin leading the pills for a chain (single pin; re-pin moves it). */
   onPin: (chain: Chain) => void
   waitForAllStatusChecks: Accessor<boolean>
+  requireApproval: Accessor<boolean>
+  requireResolvedThreads: Accessor<boolean>
 }
 
 /**
@@ -50,24 +52,28 @@ export const MergeButton = (props: {
   chain: Chain
   pull: PullEntity
   waitForAllStatusChecks: () => boolean
+  requireApproval: () => boolean
+  requireResolvedThreads: () => boolean
   isArmed: (pull: PullEntity) => boolean
   onMerge: (pull: PullEntity) => Promise<void>
   onArm: (pull: PullEntity, enable: boolean) => Promise<void>
 }): JSX.Element => {
   const wait = () => props.waitForAllStatusChecks()
+  const approval = () => props.requireApproval()
+  const threads = () => props.requireResolvedThreads()
   /** Watching tints follow the live PR state; the node itself stays stable so
    * refresh ticks never drop focus or restart the spinner. */
-  const watchedReady = () => mergeReady(props.chain, props.pull, wait())
-  const watchedFailed = () => !watchedReady() && mergeFailed(props.chain, props.pull, wait())
+  const watchedReady = () => mergeReady(props.chain, props.pull, wait(), approval(), threads())
+  const watchedFailed = () => !watchedReady() && mergeFailed(props.chain, props.pull, wait(), approval(), threads())
   const watchedClass = () => `mn-merge armed${watchedReady() ? " ready" : ""}${watchedFailed() ? " failed" : ""}`
   const watchedTitle = () => {
     const forge = props.pull.autoMerge ? ` (also on the forge as ${props.pull.autoMerge})` : ""
     const state = watchedReady()
       ? "ready — merging on the next check (within ~30s)"
-      : `${mergeWhy(props.chain, props.pull, wait())} — will merge when green`
+      : `${mergeWhy(props.chain, props.pull, wait(), approval(), threads())} — will merge when green`
     return `Merging when ready${forge}: ${state}. Click to stop.`
   }
-  const failedTitle = () => `${mergeWhy(props.chain, props.pull, wait())} — fix this before it can merge`
+  const failedTitle = () => `${mergeWhy(props.chain, props.pull, wait(), approval(), threads())} — fix this before it can merge`
   return (
   <Show when={props.pull.state === "open"}>
     <Switch>
@@ -84,7 +90,7 @@ export const MergeButton = (props: {
           Merging when ready
         </button>
       </Match>
-      <Match when={mergeReady(props.chain, props.pull, props.waitForAllStatusChecks())}>
+      <Match when={mergeReady(props.chain, props.pull, props.waitForAllStatusChecks(), props.requireApproval(), props.requireResolvedThreads())}>
         <button
           class="mn-merge"
           title="Merge now — method and delete-branch follow the pill menu's choices"
@@ -96,7 +102,7 @@ export const MergeButton = (props: {
           Merge
         </button>
       </Match>
-      <Match when={props.pull.state === "open" && mergeFailed(props.chain, props.pull, props.waitForAllStatusChecks())}>
+      <Match when={props.pull.state === "open" && mergeFailed(props.chain, props.pull, props.waitForAllStatusChecks(), props.requireApproval(), props.requireResolvedThreads())}>
         <span
           class="mn-wrap-fail"
           title={failedTitle()}
@@ -114,7 +120,7 @@ export const MergeButton = (props: {
       <Match when={props.pull.state === "open"}>
         <button
           class="mn-merge pending"
-          title={`${mergeWhy(props.chain, props.pull, props.waitForAllStatusChecks())} — click to merge when ready (auto-merge)`}
+          title={`${mergeWhy(props.chain, props.pull, props.waitForAllStatusChecks(), props.requireApproval(), props.requireResolvedThreads())} — click to merge when ready (auto-merge)`}
           onClick={(event) => {
             event.stopPropagation()
             void props.onArm(props.pull, true)
@@ -240,7 +246,7 @@ export const History = (props: HistoryProps) => {
               <Show when={index() === 0 || !sameDay(props.chains()[index() - 1]!.updatedAt, chain.updatedAt)}>
                 <div class="mn-day">{dayLabel(chain.updatedAt)}</div>
               </Show>
-              <div class="mn-chain" data-tone={chainTone(chain, props.waitForAllStatusChecks())}>
+              <div class="mn-chain" data-tone={chainTone(chain, props.waitForAllStatusChecks(), props.requireApproval(), props.requireResolvedThreads())}>
                 <For each={chain.prs}>
                   {(pull, prIndex) => {
                     // Per-PR evidence: a non-lead row must never show the lead's
@@ -299,7 +305,7 @@ export const History = (props: HistoryProps) => {
                         {copied() === `p${chain.key}${pull.number}` ? "✓" : `#${pull.number}`}
                       </span>
                       <span class="mn-title" title={pull.title || `#${pull.number}`}>{pull.title || `#${pull.number}`}</span>
-                      <MergeButton chain={chain} pull={pull} isArmed={props.isArmed} waitForAllStatusChecks={props.waitForAllStatusChecks} onMerge={props.onMerge} onArm={props.onArm} />
+                      <MergeButton chain={chain} pull={pull} isArmed={props.isArmed} waitForAllStatusChecks={props.waitForAllStatusChecks} requireApproval={props.requireApproval} requireResolvedThreads={props.requireResolvedThreads} onMerge={props.onMerge} onArm={props.onArm} />
                       <Show when={prIndex() === 0}>
                         <PinButton
                           pinned={props.isPinned(chain)}

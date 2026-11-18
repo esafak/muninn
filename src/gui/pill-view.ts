@@ -10,6 +10,10 @@ export interface PillViewEntry {
 
 export interface PillViewOptions {
   waitForAllStatusChecks: boolean
+  /** Require an explicit approval review before the chain reads green. */
+  requireApproval?: boolean
+  /** Require unresolved review threads to be resolved before the chain reads green. */
+  requireResolvedThreads?: boolean
   /** Whether the lead PR is armed for merge-when-ready (armed prefix). */
   armed: boolean
   /** Current braille spinner frame for the armed prefix. */
@@ -42,7 +46,7 @@ const short = (title: string): string => (title.length > SHORT_LEN ? `${title.sl
 export const pillViewForPick = (entry: PillViewEntry, opts: PillViewOptions): PillView | undefined => {
   const lead = pillLeadOf(entry.chain, entry.reason)
   const run = latestRun(entry.chain.runs)
-  const tone = pillStatusTone(lead?.state, chainTone(entry.chain, opts.waitForAllStatusChecks))
+  const tone = pillStatusTone(lead?.state, chainTone(entry.chain, opts.waitForAllStatusChecks, opts.requireApproval, opts.requireResolvedThreads))
   const mergeStatus = lead?.state === "open" || lead?.state === "draft" ? lead.mergeState : undefined
   const icon = pillStatusIcon(lead?.state, mergeStatus, tone)
   const pinnedSuffix = entry.reason === "pinned" ? ` · ${opts.t("pill.pinned")}` : ""
@@ -121,8 +125,10 @@ export const mergedActionView = (
   entry: PillViewEntry,
   t: (key: string) => string,
   waitForAllStatusChecks: boolean,
+  requireApproval = false,
+  requireResolvedThreads = false,
 ): PillView | undefined =>
-  pillViewForPick(entry, { waitForAllStatusChecks, armed: false, spinFrame: "", t, dropdown: false })
+  pillViewForPick(entry, { waitForAllStatusChecks, requireApproval, requireResolvedThreads, armed: false, spinFrame: "", t, dropdown: false })
 
 /**
  * Dismissal-aware selection pool: dismissed chains leave the eligible pool

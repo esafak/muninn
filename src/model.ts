@@ -103,6 +103,12 @@ export interface PullEntity extends Base {
   nodeId?: string
   mergeState?: MergeState | null
   reviewState?: ReviewState | null
+  /** Review history was truncated or failed to load. A partial history can
+   * neither supply an approval nor erase a known block, so merging waits. */
+  reviewsIncomplete?: boolean
+  /** Unresolved, non-outdated review threads. Absent when unknown — a gate
+   * that needs it must fail closed rather than assume zero. */
+  unresolvedThreads?: number
   /** The provider's auto-merge: armed with this method, or null when off. */
   autoMerge?: AutoMergeMethod | null
   /** Commit statuses and check-runs discovered for headSha; older cache entries omit it. */
@@ -191,9 +197,18 @@ const currentRunsForPull = (chain: Chain, pull: PullEntity): RunEntity[] => late
  * hydrated by older code) don't block — they fall back to the checks. No
  * evidence, no merge: zero known runs merges only on the provider's explicit
  * clean state, never on absence of data. Superseded runs in a known series do
- * not block; unrelated runs and runs without series metadata remain independent. */
-export const mergeReady = (chain: Chain, pull = chain.prs[0], waitForAllStatusChecks = true): boolean => {
+ * not block; unrelated runs and runs without series metadata remain independent.
+ * `requireApproval` makes a missing approval a blocker; by default only
+ * requested changes block — comments and 👍 reactions are passes.
+ * `requireResolvedThreads` blocks on unresolved, non-outdated review threads
+ * and fails closed when their state is unknown. */
+export const mergeReady = (chain: Chain, pull = chain.prs[0], waitForAllStatusChecks = true, requireApproval = false, requireResolvedThreads = false): boolean => {
   if (!pull || pull.state !== "open") return false
+  if (pull.reviewsIncomplete) return false
+  if (requireApproval && pull.reviewState !== "approved") return false
+  // Fail closed on unknown thread state: an empty result must never be inferred
+  // from a failed hydration when the user asked to gate on it.
+  if (requireResolvedThreads && pull.unresolvedThreads !== 0) return false
   const currentRuns = currentRunsForPull(chain, pull)
   if (!currentRuns.every((run) => run.status === "succeeded")) return false
   if (waitForAllStatusChecks) {
@@ -214,7 +229,7 @@ export const mergeReady = (chain: Chain, pull = chain.prs[0], waitForAllStatusCh
 
 /** Why a PR can't merge yet — the disabled button's tooltip. Defaults to the
  * chain's lead; callers pass an explicit pull to explain another member. */
-export const mergeWhy = (chain: Chain, pull = chain.prs[0], waitForAllStatusChecks = true): string => {
+export const mergeWhy = (chain: Chain, pull = chain.prs[0], waitForAllStatusChecks = true, requireApproval = false, requireResolvedThreads = false): string => {
   const currentRuns = pull ? currentRunsForPull(chain, pull) : []
   const failed = currentRuns.find((run) => run.status === "failed")
   if (failed) return `checks failed (run #${failed.id})`
@@ -234,6 +249,12 @@ export const mergeWhy = (chain: Chain, pull = chain.prs[0], waitForAllStatusChec
   if (pull?.mergeState === "conflict") return "merge conflicts with the base branch"
   if (pull?.mergeState === "blocked") return "blocked by branch rules or a missing review"
   if (!pull || pull.state !== "open") return "pull request is not open"
+  if (pull.reviewsIncomplete) return "review history unavailable"
+  if (requireApproval && pull.reviewState !== "approved") return "an explicit approval is required (none on record)"
+  if (requireResolvedThreads && pull.unresolvedThreads !== 0) {
+    if (pull.unresolvedThreads === undefined) return "review thread state unavailable"
+    return `${pull.unresolvedThreads} unresolved review thread${pull.unresolvedThreads === 1 ? "" : "s"}`
+  }
   // Mirror the evidence gate: this is the chain that just lost merge readiness.
   if (currentRuns.length === 0 && pull?.mergeState !== "ready")
     return "no checks on record for the current head"
@@ -246,9 +267,9 @@ export const mergeWhy = (chain: Chain, pull = chain.prs[0], waitForAllStatusChec
  * checks, unavailable snapshots, and missing evidence stay amber — they can
  * still turn green without intervention. Returns false for ready or non-open
  * PRs, so callers check it only as the red branch before the amber fallback. */
-export const mergeFailed = (chain: Chain, pull = chain.prs[0], waitForAllStatusChecks = true): boolean => {
+export const mergeFailed = (chain: Chain, pull = chain.prs[0], waitForAllStatusChecks = true, requireApproval = false, requireResolvedThreads = false): boolean => {
   if (!pull || pull.state !== "open") return false
-  if (mergeReady(chain, pull, waitForAllStatusChecks)) return false
+  if (mergeReady(chain, pull, waitForAllStatusChecks, requireApproval, requireResolvedThreads)) return false
   const currentRuns = currentRunsForPull(chain, pull)
   if (currentRuns.some((run) => run.status === "failed" || run.status === "cancelled")) return true
   if (waitForAllStatusChecks && pull.statusChecks?.state === "available" && pull.statusChecks.headSha === pull.headSha) {
@@ -259,12 +280,14 @@ export const mergeFailed = (chain: Chain, pull = chain.prs[0], waitForAllStatusC
   return false
 }
 
-/** Confirmation fragment for merge/arm dialogs when review activity exists
- * without an approval (comments, dismissed, or otherwise non-decisive
- * reviews). The provider does not block these, so merging stays allowed —
- * but the dialog names it so the approval gap is a conscious accept. */
-export const pendingReviewNotice = (pull: PullEntity): string | undefined =>
-  pull.reviewState === "pending" ? "reviews are pending (no approval on record)" : undefined
+/** Confirmation fragment for merge/arm dialogs when an explicit approval is
+ * required but none is on record. Off by default: comments and 👍 reactions
+ * are passes, so the dialog stays quiet. Requested changes are a separate
+ * hard block with their own explanation, never an approval gap. */
+export const pendingReviewNotice = (pull: PullEntity, requireApproval = false): string | undefined =>
+  requireApproval && pull.reviewState !== "approved" && pull.reviewState !== "changes_requested"
+    ? "an explicit approval is required (none on record)"
+    : undefined
 
 /** Why a chain counts as pill-eligible: live branch/SHA ownership, sticky
  * session-created memory, or a deliberate same-repo mention. `"none"` means
@@ -430,10 +453,12 @@ export type PillReason = "pinned" | "danger" | "newest" | "runs-only" | "merged"
 export const pillPick = (
   chains: readonly Chain[],
   waitForAllStatusChecks = true,
+  requireApproval = false,
+  requireResolvedThreads = false,
 ): { chain: Chain; reason: PillReason; considered: number } | undefined => {
   const byNewest = (a: { updatedAt: number }, b: { updatedAt: number }): number => b.updatedAt - a.updatedAt
   const prChains = chains.filter((chain) => chain.prs.some((pull) => pull.state === "open" || pull.state === "draft")).toSorted(byNewest)
-  const danger = prChains.find((chain) => chainTone(chain, waitForAllStatusChecks) === "danger")
+  const danger = prChains.find((chain) => chainTone(chain, waitForAllStatusChecks, requireApproval, requireResolvedThreads) === "danger")
   if (danger) return { chain: danger, reason: "danger", considered: prChains.length }
   if (prChains[0]) return { chain: prChains[0], reason: "newest", considered: prChains.length }
   const attention = chains
@@ -462,6 +487,8 @@ export const pillPick = (
 export const pillPicks = (
   chains: readonly Chain[],
   waitForAllStatusChecks = true,
+  requireApproval = false,
+  requireResolvedThreads = false,
 ): { chain: Chain; reason: PillReason }[] => {
   const byNewest = (a: { updatedAt: number }, b: { updatedAt: number }): number => b.updatedAt - a.updatedAt
   const seen = new Set<string>()
@@ -473,11 +500,11 @@ export const pillPicks = (
   }
   const prChains = chains.filter((chain) => chain.prs.some((pull) => pull.state === "open" || pull.state === "draft")).toSorted(byNewest)
   for (const chain of prChains.toSorted((a, b) => {
-    const dangerA = chainTone(a, waitForAllStatusChecks) === "danger" ? 0 : 1
-    const dangerB = chainTone(b, waitForAllStatusChecks) === "danger" ? 0 : 1
+    const dangerA = chainTone(a, waitForAllStatusChecks, requireApproval, requireResolvedThreads) === "danger" ? 0 : 1
+    const dangerB = chainTone(b, waitForAllStatusChecks, requireApproval, requireResolvedThreads) === "danger" ? 0 : 1
     return dangerA - dangerB || b.updatedAt - a.updatedAt
   }))
-    push(chain, chainTone(chain, waitForAllStatusChecks) === "danger" ? "danger" : "newest")
+    push(chain, chainTone(chain, waitForAllStatusChecks, requireApproval, requireResolvedThreads) === "danger" ? "danger" : "newest")
   const attention = chains
     .filter((chain) =>
       chain.prs.length === 0 &&
@@ -503,9 +530,11 @@ export const pillDisplay = (
   pinned: Chain | undefined,
   waitForAllStatusChecks = true,
   max = 5,
+  requireApproval = false,
+  requireResolvedThreads = false,
 ): { chain: Chain; reason: PillReason }[] => {
-  if (!pinned) return pillPicks(eligible, waitForAllStatusChecks).slice(0, max)
-  const ordered = pillPicks(eligible, waitForAllStatusChecks).filter((entry) => entry.chain.key !== pinned.key)
+  if (!pinned) return pillPicks(eligible, waitForAllStatusChecks, requireApproval, requireResolvedThreads).slice(0, max)
+  const ordered = pillPicks(eligible, waitForAllStatusChecks, requireApproval, requireResolvedThreads).filter((entry) => entry.chain.key !== pinned.key)
   return [{ chain: pinned, reason: "pinned" as const }, ...ordered].slice(0, max)
 }
 
@@ -609,6 +638,8 @@ export const armedTargets = (
   entries: readonly ArmedEntry[],
   chains: readonly Chain[],
   waitForAllStatusChecks = true,
+  requireApproval = false,
+  requireResolvedThreads = false,
 ): { pull: PullEntity; chain: Chain; method: ArmedEntry["method"] }[] => {
   const out: { pull: PullEntity; chain: Chain; method: ArmedEntry["method"] }[] = []
   for (const entry of entries) {
@@ -621,7 +652,7 @@ export const armedTargets = (
     const pull = chain.prs.find(
       (candidate) => candidate.number === entry.number && repoKey(candidate.repo) === repoKey(entry.repo),
     )
-    if (pull && mergeReady(chain, pull, waitForAllStatusChecks)) out.push({ pull, chain, method: entry.method })
+    if (pull && mergeReady(chain, pull, waitForAllStatusChecks, requireApproval, requireResolvedThreads)) out.push({ pull, chain, method: entry.method })
   }
   return out
 }
@@ -629,12 +660,13 @@ export const armedTargets = (
 /**
  * Worst-state helper for pill and history tones: failing runs, conflicts,
  * requested changes, and blocked merges are danger; pending and in-flight work
- * are warning; a fully green chain reads as success. Open/draft PRs never
+ * are warning; a fully green chain reads as success. With `requireApproval`
+ * on, a missing approval keeps an otherwise green chain warning. Open/draft PRs never
  * return undefined (they fall back to warning so pills never render the
  * host default black, which matches no status color); only settled
  * (closed/issue-only/run-settled) chains stay undefined.
  */
-export const chainTone = (chain: Chain, waitForAllStatusChecks = true): "success" | "warning" | "danger" | undefined => {
+export const chainTone = (chain: Chain, waitForAllStatusChecks = true, requireApproval = false, requireResolvedThreads = false): "success" | "warning" | "danger" | undefined => {
   const lead = chain.prs.find((pull) => pull.state === "open" || pull.state === "draft") ?? chain.prs[0]
   const relevantRuns = lead
     ? currentRunsForPull(chain, lead)
@@ -646,7 +678,7 @@ export const chainTone = (chain: Chain, waitForAllStatusChecks = true): "success
   if (lead?.state === "open" && lead.mergeState === "blocked") return "danger"
   if (relevantRuns.some((run) => run.status === "running" || run.status === "queued")) return "warning"
   if (lead?.state === "open" && lead.mergeState === "pending") return "warning"
-  if (lead?.state === "open" && mergeReady(chain, lead, waitForAllStatusChecks)) return "success"
+  if (lead?.state === "open" && mergeReady(chain, lead, waitForAllStatusChecks, requireApproval, requireResolvedThreads)) return "success"
   if (lead?.state === "merged") return "success"
   if (chain.prs.length === 0 && relevantRuns.some((run) => run.status === "succeeded")) return "success"
   // Open/draft work with no evidence yet (unknown merge state, no current
