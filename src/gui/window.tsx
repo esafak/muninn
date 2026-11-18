@@ -14,6 +14,7 @@ import {
   freshKeysFor,
   isOperationCurrent,
   isRefreshCurrent,
+  pollInterval,
   partitionRefs,
   planDiscovery,
   releaseReservations,
@@ -103,14 +104,33 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     })
     ctx.stores.cache.update((draft) => {
       const cutoff = Date.now() - retentionMs()
-      for (const [key, stamped] of Object.entries(draft.at)) if (stamped < cutoff) delete draft.entries[key]
+      for (const [key, stamped] of Object.entries(draft.at)) if (stamped < cutoff) { delete draft.entries[key]; delete draft.at[key] }
       for (const entity of hydrated) {
         draft.entries[entityKey(entity)] = entity
         draft.at[entityKey(entity)] = Date.now()
       }
     })
   }
-  const [runs, setRuns] = createStore<Record<string, readonly RunEntity[]>>({})
+  // Branch runs are durable too, keyed by repo+branch (the RPC is branch-scoped).
+  const branchRunsKey = (repo: RepoRef, branch: string): string => `${repoKey(repo)}#${branch}`
+  const cachedRuns = (): Record<string, readonly RunEntity[]> => {
+    const entries = ctx.stores.branchRuns.value.entries as Record<string, readonly RunEntity[]>
+    const { at } = ctx.stores.branchRuns.value
+    const cutoff = Date.now() - retentionMs()
+    const fresh: Record<string, readonly RunEntity[]> = {}
+    for (const [key, runs] of Object.entries(entries)) if ((at[key] ?? Date.now()) > cutoff) fresh[key] = runs
+    return fresh
+  }
+  const saveRuns = (repo: RepoRef, branch: string, runs: readonly RunEntity[]): void => {
+    const key = branchRunsKey(repo, branch)
+    ctx.stores.branchRuns.update((draft) => {
+      const cutoff = Date.now() - retentionMs()
+      for (const [stored, stamped] of Object.entries(draft.at)) if (stamped < cutoff) { delete draft.entries[stored]; delete draft.at[stored] }
+      draft.entries[key] = runs.slice()
+      draft.at[key] = Date.now()
+    })
+  }
+  const [runs, setRuns] = createStore<Record<string, readonly RunEntity[]>>(cachedRuns())
   const [chains, setChains] = createSignal<readonly Chain[]>([])
   const [sessionReady, setSessionReady] = createSignal(false)
   /** Sticky memory of PRs each session owned (branch/SHA matched while live):
@@ -340,7 +360,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
     // Branch runs are associated evidence too: a run the transcript never
     // mentioned still belongs to the PR whose head it tested. Those PRs are
     // pulled in below, not only for transcript runs.
-    const sessionRuns = repo ? (runs[repoKey(repo)] ?? []) : []
+    const sessionRuns = repo ? (runs[branchRunsKey(repo, meta.branch)] ?? []) : []
     const relevant = filteredRefs().flatMap((ref) => {
       if (ref.kind) {
         const entity = entities[refKey(ref)]
@@ -738,7 +758,8 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
             resumeInFlightBranch = undefined
             return false
           }
-          setRuns(repoKey(repo), branchRuns)
+          setRuns(branchRunsKey(repo, branch), branchRuns)
+          saveRuns(repo, branch, branchRuns)
           branchRunsBranch = branch
           if (resumeInFlightBranch === branch) resumeInFlightBranch = undefined
           merge(prs)
@@ -835,7 +856,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       // Entities persist across sessions (they are repo-keyed): reseed from the
       // durable cache rather than clearing.
       setEntities(cached())
-      setRuns({})
+      setRuns(cachedRuns())
       setChains([])
       // Created-PR memory is keyed by session identity + directory, so arriving
       // here needs no clearing: navigating back restores that session's set.
@@ -976,28 +997,43 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
   // The extra arms below let a cold start self-heal without the sidebar:
   // a gate mismatch (refresh never started for this session), a missing repo
   // after a failed refresh, or candidates with no chains yet all retry.
-  const poll = setInterval(() => {
-    const current = session()
-    if (!current) return
-    void ctx.client.vcs
-      .get({ location: { directory: current.directory } })
-      .then((vcs) => {
-        const branch = vcs?.data?.branch?.current ?? ""
-        if (current.id !== meta.sessionID) requestAutoRefresh()
-        else if (meta.repo === null) requestAutoRefresh()
-        else if (meta.error !== null) requestAutoRefresh()
-        else if (branch !== meta.branch && (meta.branch !== "" || branchLoaded)) requestAutoRefresh()
-        else if (chains().length > 0) requestAutoRefresh()
-        else if (refs().length > 0) requestAutoRefresh()
-      })
-      .catch(() => {
-        if (current.id !== meta.sessionID) requestAutoRefresh()
-        else if (chains().length > 0) requestAutoRefresh()
-        else if (refs().length > 0) requestAutoRefresh()
-      })
-  }, POLL_MS)
+  let pollTimer: ReturnType<typeof setTimeout> | undefined
+  let pollDisposed = false
+  // Self-rescheduling: each tick re-arms in `.finally` from the current state,
+  // so a rejected vcs.get cannot kill polling and cadence tracks run status.
+  // The disposed guard stops an in-flight tick from re-arming after cleanup.
+  const schedulePollAt = (ms: number): void => {
+    if (pollDisposed) return
+    pollTimer = setTimeout(() => {
+      if (pollDisposed) return
+      const current = session()
+      if (current) {
+        void ctx.client.vcs
+          .get({ location: { directory: current.directory } })
+          .then((vcs) => {
+            const branch = vcs?.data?.branch?.current ?? ""
+            if (current.id !== meta.sessionID) requestAutoRefresh()
+            else if (meta.repo === null) requestAutoRefresh()
+            else if (meta.error !== null) requestAutoRefresh()
+            else if (branch !== meta.branch && (meta.branch !== "" || branchLoaded)) requestAutoRefresh()
+            else if (chains().length > 0) requestAutoRefresh()
+            else if (refs().length > 0) requestAutoRefresh()
+          })
+          .catch(() => {
+            if (current.id !== meta.sessionID) requestAutoRefresh()
+            else if (chains().length > 0) requestAutoRefresh()
+            else if (refs().length > 0) requestAutoRefresh()
+          })
+          .finally(() => schedulePollAt(pollInterval(chains().flatMap((chain) => chain.runs))))
+      } else {
+        schedulePollAt(POLL_MS)
+      }
+    }, ms)
+  }
+  schedulePollAt(POLL_MS)
   onCleanup(() => {
-    clearInterval(poll)
+    pollDisposed = true
+    clearTimeout(pollTimer)
     clearTimeout(timer)
   })
 

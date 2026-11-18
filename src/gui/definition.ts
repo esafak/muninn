@@ -13,6 +13,23 @@ const StatusCheckSnapshot = Schema.Struct({
   contexts: Schema.Array(Schema.Struct({ name: Schema.String, status: RunStatus })),
 })
 
+/** Run shape shared by the entity union and the durable branch-run store. */
+const Run = Schema.Struct({
+  kind: Schema.Literal("run"),
+  provider: Schema.optional(Schema.String),
+  repo: Repo,
+  id: Schema.Number,
+  name: Schema.String,
+  headBranch: Schema.String,
+  headSha: Schema.String,
+  series: Schema.optional(Schema.Struct({ key: Schema.String, sequence: Schema.Number })),
+  status: RunStatus,
+  checks: Schema.Array(Schema.Struct({ name: Schema.String, status: RunStatus })),
+  pullRequests: Schema.Array(Schema.Number),
+  url: Schema.String,
+  updatedAt: Schema.Number,
+})
+
 const Entity = Schema.Union([
   Schema.Struct({
     kind: Schema.Literal("issue"),
@@ -25,21 +42,7 @@ const Entity = Schema.Union([
     url: Schema.String,
     updatedAt: Schema.Number,
   }),
-  Schema.Struct({
-    kind: Schema.Literal("run"),
-    provider: Schema.optional(Schema.String),
-    repo: Repo,
-    id: Schema.Number,
-    name: Schema.String,
-    headBranch: Schema.String,
-    headSha: Schema.String,
-    series: Schema.optional(Schema.Struct({ key: Schema.String, sequence: Schema.Number })),
-    status: RunStatus,
-    checks: Schema.Array(Schema.Struct({ name: Schema.String, status: RunStatus })),
-    pullRequests: Schema.Array(Schema.Number),
-    url: Schema.String,
-    updatedAt: Schema.Number,
-  }),
+  Run,
   Schema.Struct({
     kind: Schema.Literal("pr"),
     provider: Schema.optional(Schema.String),
@@ -73,6 +76,19 @@ export const definition = Plugin.define({
     cache: Store.global(
       Schema.Struct({
         entries: Schema.Record(Schema.String, Entity),
+        at: Schema.Record(Schema.String, Schema.Number),
+      }),
+      { entries: {}, at: {} },
+    ),
+    /**
+     * Branch-run listings, keyed by `host/owner/repo#branch` (the branchRuns RPC
+     * is branch-scoped). Persisted under `plugin.muninn.branchRuns` so a reopened
+     * session renders its branch's runs before the live fetch. Same retention
+     * lifecycle as the entity cache.
+     */
+    branchRuns: Store.global(
+      Schema.Struct({
+        entries: Schema.Record(Schema.String, Schema.Array(Run)),
         at: Schema.Record(Schema.String, Schema.Number),
       }),
       { entries: {}, at: {} },
