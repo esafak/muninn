@@ -15,6 +15,10 @@ import {
   isRefreshCurrent,
   ledgerKeyFor,
   partitionRefs,
+  pollInterval,
+  POLL_FAST_MS,
+  POLL_FAST_MAX_AGE_MS,
+  POLL_NORMAL_MS,
   planDiscovery,
   releaseReservations,
   safetyRefs,
@@ -394,6 +398,27 @@ describe("isRefreshCurrent", () => {
     expect(isRefreshCurrent(false, 7, 7)).toBe(false)
     expect(isRefreshCurrent(true, 7, 7)).toBe(true)
   });
+});
+
+describe("pollInterval", () => {
+  const NOW = 1_000_000_000
+  test("fast while a run is queued or running and recently updated", () => {
+    expect(pollInterval([{ status: "queued", updatedAt: NOW }], NOW)).toBe(POLL_FAST_MS)
+    expect(pollInterval([{ status: "running", updatedAt: NOW }], NOW)).toBe(POLL_FAST_MS)
+    expect(pollInterval([
+      { status: "succeeded", updatedAt: NOW },
+      { status: "running", updatedAt: NOW },
+    ], NOW)).toBe(POLL_FAST_MS)
+  })
+  test("normal once the in-flight run is stale, so a stuck amber decays", () => {
+    expect(pollInterval([{ status: "queued", updatedAt: NOW - POLL_FAST_MAX_AGE_MS }], NOW)).toBe(POLL_NORMAL_MS)
+    expect(pollInterval([{ status: "running", updatedAt: NOW - POLL_FAST_MAX_AGE_MS - 1 }], NOW)).toBe(POLL_NORMAL_MS)
+  })
+  test("normal for settled or empty runs; errors are not an input", () => {
+    expect(pollInterval([{ status: "succeeded", updatedAt: NOW }], NOW)).toBe(POLL_NORMAL_MS)
+    expect(pollInterval([{ status: "failed", updatedAt: NOW }], NOW)).toBe(POLL_NORMAL_MS)
+    expect(pollInterval([], NOW)).toBe(POLL_NORMAL_MS)
+  })
 });
 
 describe("planDiscovery duplicate keys", () => {
