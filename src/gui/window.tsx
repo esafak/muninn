@@ -989,6 +989,11 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
       if (!isDebounceCurrent() || opId !== lastSentOp) return
       publishFreshSafety(opId, freshKeysFor(completed.entities))
       rechain()
+      // An active transcript keeps admitting new hydrate ops, which supersede
+      // the refresh operations that normally drive armed merges. Drive from
+      // this operation's freshly published evidence too, so "merge when ready"
+      // still fires while the user is talking about the PR.
+      driveArmedMerges()
     }, HYDRATE_DEBOUNCE_MS)
   })
 
