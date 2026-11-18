@@ -1,0 +1,16 @@
+src/gui/hydration-policy.test.ts
+  h_ea91e2db23540f 18-21,403-423
+src/gui/hydration-policy.ts
+  h_ea91e2db23540f 19,35-53
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7688d6cb3f08afe9da15bb372b774e01a2f408dc",
+  "prompts": {},
+  "humans": {
+    "h_ea91e2db23540f": {
+      "author": "Emre Şafak <3928300+esafak@users.noreply.github.com>"
+    }
+  }
+}
