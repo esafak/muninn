@@ -2860,6 +2860,13 @@ const STYLES = `
 
 /* Pill dropdown (custom popover content; the host owns the popover chrome). */
 .mn-pop { display: flex; flex-direction: column; gap: 2px; min-width: 300px; max-width: 380px; max-height: 440px; overflow-y: auto; }
+/* The host portals the pill menu to <body> with the generic popover layer
+ * (z-index 50), which sits below the composer row and shell side regions
+ * (z-index 70). Lift both the popper positioner and its content so a dropdown
+ * opened near either sidebar is never tucked behind it. Scoped to our pill
+ * popover's data-slot so other popovers keep their own stacking. */
+[data-popper-positioner]:has([data-slot="session-plugin-pill-popover"]) { z-index: 100; }
+[data-component="popover-content"][data-slot="session-plugin-pill-popover"] { z-index: 100; }
 /* Accordion sections: one per PR group so long lists fit without cutoff.
  * First section open by default; the rest expand in place. Native details
  * keeps keyboard semantics; the caret rotates when open. */
