@@ -1,0 +1,40 @@
+src/providers/github.ts
+  s_588ebbbb4f2cf8::t_adbb7f0f784e0a 203-204,206-207,554-585,592-593,595
+  s_24f6cd0a7d8d85::t_e749590fca8794 599-600
+src/gui/window.tsx
+  s_9d33aacf9c3b82::t_154cd61a60da6e 1405-1408,1412,1444
+src/providers/github.test.ts
+  s_24f6cd0a7d8d85::t_18f64e1e6c3c7c 91-92
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "45517b5b886bb9ec70e77c936ad9fa89ee6d023e",
+  "prompts": {},
+  "sessions": {
+    "s_24f6cd0a7d8d85": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_e133929bfffe30HS2itffMD4uZ",
+        "model": "unknown"
+      },
+      "human_author": "Emre Şafak <3928300+esafak@users.noreply.github.com>"
+    },
+    "s_588ebbbb4f2cf8": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_e15a9f339ffeZMux07ni06cTlO",
+        "model": "unknown"
+      },
+      "human_author": "Emre Şafak <3928300+esafak@users.noreply.github.com>"
+    },
+    "s_9d33aacf9c3b82": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_e15b2b75bffeKujpjhy80Eb3BR",
+        "model": "unknown"
+      },
+      "human_author": "Emre Şafak <3928300+esafak@users.noreply.github.com>"
+    }
+  }
+}
