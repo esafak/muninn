@@ -315,6 +315,24 @@ describe("safetyRefs", () => {
     const keys = refs.map((r) => `${r.number}:${r.kind}`);
     for (const expected of ["30:pr", "31:pr", "32:pr", "33:pr", "10:pr", "20:pr", "201:run"]) expect(keys).toContain(expected);
   });
+  test("merged PRs in an active chain are not re-requested each poll; closed ones still are", () => {
+    const refs = safetyRefs({
+      chains: [chain({
+        key: "eligible",
+        prs: [pull({ number: 50, state: "open" }), pull({ number: 51, state: "merged" }), pull({ number: 52, state: "closed" })],
+      })],
+      eligibleKeys: new Set(["eligible"]),
+      pinnedKey: undefined,
+      armed: [],
+      recovery: [],
+      creation: [],
+      target: undefined,
+    });
+    const keys = refs.map((r) => `${r.number}:${r.kind}`);
+    expect(keys).toContain("50:pr");
+    expect(keys).not.toContain("51:pr");
+    expect(keys).toContain("52:pr");
+  });
   test("adds current-head runs of armed PRs and dedupes repeats", () => {
     const refs = safetyRefs({
       chains: [chain({ key: "a", prs: [pull({ number: 40, headSha: "sha" })], runs: [run({ id: 202, headSha: "sha" }), run({ id: 203, headSha: "other" })] })],

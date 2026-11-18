@@ -164,4 +164,11 @@ describe("associate", () => {
     const ties = associate([{ ...run(1, "abc123", 200), status: "failed" }], [run(1, "abc123", 200)])
     expect(ties[0]!.runs.map((run) => run.status)).toEqual(["succeeded"])
   })
+
+  test("a direct armed-run snapshot passed last wins an equal-timestamp tie", () => {
+    const branchRow = run(1, "abc123", 200)
+    const directFailure = { ...run(1, "abc123", 200), status: "failed" as const }
+    const tied = associate([branchRow, directFailure], [])
+    expect(tied[0]!.runs.map((run) => run.status)).toEqual(["failed"])
+  })
 })
