@@ -61,6 +61,7 @@ const Entity = Schema.Union([
     nodeId: Schema.optional(Schema.String),
     mergeState: Schema.optional(Schema.NullOr(Schema.Literals(["ready", "pending", "blocked", "conflict"]))),
     reviewState: Schema.optional(Schema.NullOr(Schema.Literals(["approved", "changes_requested", "pending"]))),
+    unresolvedThreads: Schema.optional(Schema.Number),
     autoMerge: Schema.optional(Schema.NullOr(Schema.Literals(["merge", "squash", "rebase"]))),
     statusChecks: Schema.optional(StatusCheckSnapshot),
   }),
@@ -104,6 +105,13 @@ export const definition = Plugin.define({
         /** Fast-forward the clean local base checkout after a successful merge. */
         fastForwardBase: Schema.optional(Schema.Boolean),
         waitForAllStatusChecks: Schema.optional(Schema.Boolean),
+        /** Require an explicit approval review before Muninn merges or arms a
+         * PR. Off (default): only requested changes block; comments and 👍
+         * reactions count as pass. On: no approval on record blocks and waits. */
+        requireApproval: Schema.optional(Schema.Boolean),
+        /** Block merging while unresolved, non-outdated review threads remain.
+         * Off (default): thread state is informational only. */
+        requireResolvedThreads: Schema.optional(Schema.Boolean),
         /** Toggle for the one-shot decision-model judge after hydration.
          * Off keeps today's heuristic tier rules; on relaxes the listing guard
          * and judges survivors semantically. Failures fall back to heuristic.
@@ -117,7 +125,7 @@ export const definition = Plugin.define({
         /** Pinned model ID for the judge (per-provider default when blank). */
         candidateModel: Schema.optional(Schema.String),
       }),
-      { retentionDays: 30, debugMode: true, mergeMethod: "squash", deleteBranch: true, fastForwardBase: false, waitForAllStatusChecks: true, decisionModelsEnabled: false, candidateProviderID: DEFAULT_DECISION_PROVIDER_ID },
+      { retentionDays: 30, debugMode: true, mergeMethod: "squash", deleteBranch: true, fastForwardBase: false, waitForAllStatusChecks: true, requireApproval: false, requireResolvedThreads: false, decisionModelsEnabled: false, candidateProviderID: DEFAULT_DECISION_PROVIDER_ID },
     ),
     /** Pull requests Muninn is driving to merge ("merge when ready"): armed
      * locally, fired by Muninn's refresh cycle once checks and reviews are green. */
@@ -192,6 +200,10 @@ export const definition = Plugin.define({
       "settings.debug.description": "Show the diagnostics footer (build SHAs, pill state, hydration stats) at the bottom of the panel.",
       "settings.waitForAllStatusChecks": "Wait for all status checks",
       "settings.waitForAllStatusChecks.description": "Wait for all check-runs and commit status contexts on the current pull request head. Neutral and skipped check-runs count as complete.",
+      "settings.requireApproval": "Require explicit approval",
+      "settings.requireApproval.description": "On: an explicit approval review is required before merging; comments and 👍 reactions don't count. Off: only requested changes block a merge.",
+      "settings.requireResolvedThreads": "Require resolved review threads",
+      "settings.requireResolvedThreads.description": "On: unresolved, non-outdated review threads block merging until they are resolved. Outdated threads don't count.",
       "settings.mergeMethod": "Merge method",
       "settings.mergeMethod.description": "How Muninn merges: squash, merge commit, or rebase.",
       "settings.deleteBranch": "Delete branch after merge",

@@ -75,6 +75,7 @@ export const PullEntity = z.object({
   nodeId: z.string().optional(),
   mergeState: z.enum(["ready", "pending", "blocked", "conflict"]).nullish(),
   reviewState: z.enum(["approved", "changes_requested", "pending"]).nullish(),
+  unresolvedThreads: z.number().optional(),
   autoMerge: z.enum(["merge", "squash", "rebase"]).nullish(),
   statusChecks: StatusCheckSnapshot.optional(),
 })

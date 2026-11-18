@@ -50,6 +50,20 @@ interface ReviewJson {
   submitted_at: string | null
 }
 
+interface ReviewThreadJson {
+  isResolved: boolean
+  isOutdated: boolean
+}
+
+interface ReviewThreadsJson {
+  node: { reviewThreads: { nodes: ReviewThreadJson[]; pageInfo: { hasNextPage: boolean; endCursor: string | null } } } | null
+}
+
+/** Threads that still need attention: unresolved and not outdated. Outdated
+ * threads are anchored to a superseded diff, so they never gate a current head. */
+export const unresolvedThreadCount = (threads: readonly ReviewThreadJson[]): number =>
+  threads.filter((thread) => !thread.isResolved && !thread.isOutdated).length
+
 interface RunJson {
   id: number
   workflow_id?: number | null
@@ -156,6 +170,42 @@ const graphql = async <T>(query: string, variables: Record<string, unknown>, aut
   const body = (await response.json()) as { data?: T; errors?: { message: string }[] }
   if (body.errors?.length) throw new Error(body.errors.map((error) => error.message).join("; "))
   return body.data as T
+}
+
+const REVIEW_THREADS_QUERY = `query($id: ID!, $after: String) {
+  node(id: $id) {
+    ... on PullRequest {
+      reviewThreads(first: 100, after: $after) {
+        nodes { isResolved isOutdated }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  }
+}`
+const REVIEW_THREAD_PAGES = 5
+
+/** Unresolved, non-outdated review threads for a PR. GraphQL-only: REST has no
+ * thread resolution state. Returns undefined when the fetch fails so the merge
+ * gate can fail closed on unknown state (an empty result must not be inferred
+ * from a transport error). Bounded pagination keeps one PR from dominating a
+ * hydration cycle. */
+const loadUnresolvedThreads = async (nodeId: string, auth: Auth): Promise<number | undefined> => {
+  try {
+    const threads: ReviewThreadJson[] = []
+    let after: string | null = null
+    for (let page = 0; page < REVIEW_THREAD_PAGES; page++) {
+      const data: ReviewThreadsJson = await graphql<ReviewThreadsJson>(REVIEW_THREADS_QUERY, { id: nodeId, after }, auth)
+      const connection = data.node?.reviewThreads
+      if (!connection) return undefined
+      threads.push(...connection.nodes)
+      if (!connection.pageInfo.hasNextPage) return unresolvedThreadCount(threads)
+      after = connection.pageInfo.endCursor
+      if (!after) return unresolvedThreadCount(threads)
+    }
+    return unresolvedThreadCount(threads)
+  } catch {
+    return undefined
+  }
 }
 
 const epoch = (iso: string): number => Date.parse(iso)
@@ -505,13 +555,19 @@ const hydratePull = async (repo: RepoRef, number: number, auth: Auth): Promise<P
   const entity = toPullEntity(repo, pull)
   // Reviews and commit statuses are extra reads per PR; a failing detail read
   // must not lose the PR itself, or one flaky endpoint hides the pill.
-  const [reviews, statusChecks] = await Promise.all([
+  const [reviews, statusChecks, unresolvedThreads] = await Promise.all([
     request<ReviewJson[]>(`/repos/${repo.owner}/${repo.repo}/pulls/${number}/reviews?per_page=30`, auth).catch(
       () => undefined,
     ),
     shouldLoadStatusChecks(entity) ? loadStatusChecks(repo, pull.head.sha, auth) : Promise.resolve(undefined),
+    entity.nodeId ? loadUnresolvedThreads(entity.nodeId, auth) : Promise.resolve(undefined),
   ])
-  return { ...entity, reviewState: reviewState(reviews), ...(statusChecks ? { statusChecks } : {}) }
+  return {
+    ...entity,
+    reviewState: reviewState(reviews),
+    ...(statusChecks ? { statusChecks } : {}),
+    ...(unresolvedThreads !== undefined ? { unresolvedThreads } : {}),
+  }
 }
 
 /**

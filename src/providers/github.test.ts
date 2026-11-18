@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { mergeResponse, staleHeadConflict, mergeAlreadyHandled, toPullEntity, runEntity, toIssueEntity, checkStatus, statusCheckSnapshot, combineStatusCheckResults, decodeStatusPage, collectStatusPages, cachedPromise, statusCheckCacheKey, shouldLoadStatusChecks, branchPullSnapshot, invalidatePullCacheEntries, repoFromUrl, repoFromFullName } from "./github"
+import { mergeResponse, staleHeadConflict, mergeAlreadyHandled, toPullEntity, runEntity, toIssueEntity, checkStatus, statusCheckSnapshot, combineStatusCheckResults, decodeStatusPage, collectStatusPages, cachedPromise, statusCheckCacheKey, shouldLoadStatusChecks, branchPullSnapshot, invalidatePullCacheEntries, repoFromUrl, repoFromFullName, unresolvedThreadCount } from "./github"
 import { PullEntity, RunEntity as RunEntitySchema } from "../rpc"
 
 describe("mergeResponse", () => {
@@ -86,6 +86,21 @@ describe("PullEntity RPC schema", () => {
     expect(PullEntity.parse(entity).mergedAt).toBeUndefined()
     const checks = { headSha: "abc", state: "available" as const, contexts: [{ name: "gate", status: "running" as const }] }
     expect(PullEntity.parse({ ...entity, statusChecks: checks }).statusChecks).toEqual(checks)
+    expect(PullEntity.parse({ ...entity, unresolvedThreads: 2 }).unresolvedThreads).toBe(2)
+    expect(PullEntity.parse(entity).unresolvedThreads).toBeUndefined()
+  })
+})
+
+describe("unresolvedThreadCount", () => {
+  test("counts only threads that are unresolved and not outdated", () => {
+    expect(unresolvedThreadCount([])).toBe(0)
+    expect(unresolvedThreadCount([
+      { isResolved: false, isOutdated: false },
+      { isResolved: false, isOutdated: true },
+      { isResolved: true, isOutdated: false },
+      { isResolved: true, isOutdated: true },
+      { isResolved: false, isOutdated: false },
+    ])).toBe(2)
   })
 })
 
