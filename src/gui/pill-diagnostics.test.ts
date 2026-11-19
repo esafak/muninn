@@ -34,4 +34,15 @@ describe("pillPullDiagnostics", () => {
     expect(pillPullDiagnostics(pull())).toBe("pr#42 state=open merge=unknown head=1234567 checks=missing")
     expect(pillPullDiagnostics(undefined)).toBeUndefined()
   })
+
+  test("names superseded queued checks so a bypass is visible in the footer", () => {
+    expect(pillPullDiagnostics(pull({
+      statusChecks: {
+        state: "available",
+        headSha: "1234567890abcdef",
+        contexts: [],
+        resolvedQueued: ["check-run:15368:Check commit author"],
+      },
+    }))).toBe("pr#42 state=open merge=unknown head=1234567 checks=available@1234567+resolved(check-run:15368:Check commit author)")
+  })
 })

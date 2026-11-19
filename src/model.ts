@@ -34,6 +34,9 @@ export interface StatusCheckSnapshot {
   headSha: string
   state: "available" | "unavailable" | "unsupported"
   contexts: { name: string; status: RunStatus }[]
+  /** Queued/pending duplicates superseded by a completed result for the same
+   * check on this exact head. Named so the bypass is visible, never silent. */
+  resolvedQueued?: string[]
 }
 
 /**
@@ -249,11 +252,18 @@ export const mergeWhy = (chain: Chain, pull = chain.prs[0], waitForAllStatusChec
   const currentRuns = pull ? currentRunsForPull(chain, pull) : []
   const failed = currentRuns.find((run) => run.status === "failed")
   if (failed) return `checks failed (run #${failed.id})`
+  const resolved = pull?.statusChecks?.resolvedQueued ?? []
+  const snapshot = pull?.statusChecks
+  const greenSnapshot = snapshot !== undefined && snapshot.state === "available" &&
+    snapshot.headSha === pull?.headSha && snapshot.contexts.length > 0 &&
+    snapshot.contexts.every((context) => context.status === "succeeded")
+  // A named bypass alongside an otherwise-green same-head snapshot means the
+  // queued run below was already superseded — don't call it "still running".
+  if (resolved.length > 0 && greenSnapshot) return `stale queued check resolved: ${resolved.join(", ")}`
   if (currentRuns.some((run) => run.status === "queued" || run.status === "running")) return "checks still running"
   const cancelled = currentRuns.find((run) => run.status === "cancelled")
   if (cancelled) return `checks cancelled (run #${cancelled.id})`
   if (waitForAllStatusChecks && pull) {
-    const snapshot = pull.statusChecks
     if (!snapshot || snapshot.headSha !== pull.headSha || snapshot.state === "unavailable") return "status checks unavailable"
     if (snapshot.state === "available") {
       if (snapshot.contexts.some((context) => context.status === "failed")) return "status checks failed"

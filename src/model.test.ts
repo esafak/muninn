@@ -67,6 +67,27 @@ describe("mergeReady", () => {
     expect(mergeReady(chain({ prs: [pull({ mergeState: "ready", reviewState: "approved" })] }))).toBe(true)
   })
 
+  test("a resolved queued duplicate clears both the run and wait-for-all gates", () => {
+    // Incident shape: a queued current-head run plus a queued check context,
+    // superseded by a completed success on this exact head (forge says clean).
+    const incident = chain({
+      prs: [pull({
+        mergeState: "ready",
+        statusChecks: {
+          headSha: "abc123",
+          state: "available",
+          contexts: [{ name: "check-run:15368:Check commit author", status: "succeeded" }],
+          resolvedQueued: ["check-run:15368:Check commit author"],
+        },
+      })],
+      runs: [run("succeeded"), run("queued")],
+    })
+    expect(mergeReady(incident)).toBe(true)
+    expect(mergeWhy(incident)).toBe("stale queued check resolved: check-run:15368:Check commit author")
+    const entry: ArmedEntry = { repo, number: 4821, method: "squash" }
+    expect(armedTargets([entry], [incident])).toHaveLength(1)
+  })
+
   test("unknown states (older cache) fall back to checks alone", () => {
     expect(mergeReady(chain())).toBe(true)
   })

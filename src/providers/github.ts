@@ -268,25 +268,49 @@ export const collectStatusPages = async <T>(fetchPage: (page: number) => Promise
   }
 }
 
-/** Exported for tests: latest status per context/attempt, already scoped to one head SHA. */
+/** Only a forge that reports the PR clean may supersede a queued duplicate.
+ * `clean`/`has_hooks` means every required check passed, so a still-queued
+ * duplicate cannot be a required check GitHub is waiting on. */
+export const shouldPreferCompletedOverQueued = (mergeState: MergeState | null): boolean => mergeState === "ready"
+
+/** Exported for tests: latest status per context/attempt, already scoped to one head SHA.
+ * With `preferCompletedOverQueued` (only for a clean forge verdict), a newer
+ * queued/pending duplicate no longer erases an older completed result for the
+ * same check on this exact commit. `in_progress`/`running` and failing results
+ * are never bypassed. Bypassed checks are named in `resolvedQueued`. */
 export const statusCheckSnapshot = (
   headSha: string,
   statuses: readonly CommitStatusJson[],
   checkRuns: readonly CheckRunJson[] = [],
+  preferCompletedOverQueued = false,
 ): NonNullable<PullEntity["statusChecks"]> => {
+  const resolvedQueued: string[] = []
   const latest = new Map<string, CommitStatusJson>()
   for (const status of statuses) {
     const previous = latest.get(status.context)
-    if (!previous || Date.parse(status.updated_at) > Date.parse(previous.updated_at) ||
-      (status.updated_at === previous.updated_at && status.id > previous.id)) latest.set(status.context, status)
+    if (!previous) { latest.set(status.context, status); continue }
+    const nextIsNewer = Date.parse(status.updated_at) > Date.parse(previous.updated_at) ||
+      (status.updated_at === previous.updated_at && status.id > previous.id)
+    const older = nextIsNewer ? previous : status
+    const newer = nextIsNewer ? status : previous
+    const superseded = preferCompletedOverQueued && newer.state === "pending" && older.state === "success"
+    const name = `status-context:${status.context}`
+    if (superseded && !resolvedQueued.includes(name)) resolvedQueued.push(name)
+    latest.set(status.context, superseded ? older : newer)
   }
   const latestChecks = new Map<string, CheckRunJson>()
   for (const check of checkRuns) {
     const key = `${check.app?.id ?? "unknown"}:${check.name}`
     const previous = latestChecks.get(key)
-    if (!previous || check.id > previous.id) latestChecks.set(key, check)
+    if (!previous) { latestChecks.set(key, check); continue }
+    const older = check.id > previous.id ? previous : check
+    const newer = check.id > previous.id ? check : previous
+    const superseded = preferCompletedOverQueued && newer.status === "queued" && older.status === "completed"
+    const name = `check-run:${key}`
+    if (superseded && !resolvedQueued.includes(name)) resolvedQueued.push(name)
+    latestChecks.set(key, superseded ? older : newer)
   }
-  return {
+  const snapshot: NonNullable<PullEntity["statusChecks"]> = {
     headSha,
     state: "available",
     contexts: [
@@ -294,6 +318,9 @@ export const statusCheckSnapshot = (
       ...[...latestChecks.entries()].map(([key, check]) => ({ name: `check-run:${key}`, status: checkRunStatus(check) })),
     ],
   }
+  if (resolvedQueued.length === 0) return snapshot
+  console.warn("[muninn] superseded queued checks with completed results", { headSha, contexts: resolvedQueued })
+  return { ...snapshot, resolvedQueued }
 }
 
 const unavailableStatusChecks = (headSha: string): NonNullable<PullEntity["statusChecks"]> => ({
@@ -306,8 +333,11 @@ export const combineStatusCheckResults = (
   headSha: string,
   statuses: readonly CommitStatusJson[] | undefined,
   checkRuns: readonly CheckRunJson[] | undefined,
+  preferCompletedOverQueued = false,
 ): NonNullable<PullEntity["statusChecks"]> =>
-  statuses && checkRuns ? statusCheckSnapshot(headSha, statuses, checkRuns) : unavailableStatusChecks(headSha)
+  statuses && checkRuns
+    ? statusCheckSnapshot(headSha, statuses, checkRuns, preferCompletedOverQueued)
+    : unavailableStatusChecks(headSha)
 
 const loadPages = async <T>(path: string, field: "statuses" | "check_runs", auth: Auth): Promise<T[] | undefined> => {
   try {
@@ -339,9 +369,14 @@ export const branchPullSnapshot = (
 })
 
 /** Opaque, auth-scoped status cache identity. Never stores or logs the raw token. */
-export const statusCheckCacheKey = (repo: RepoRef, headSha: string, token: string | undefined): string => {
+export const statusCheckCacheKey = (
+  repo: RepoRef,
+  headSha: string,
+  token: string | undefined,
+  preferCompletedOverQueued = false,
+): string => {
   const credential = token ? createHash("sha256").update(token).digest("hex") : "anonymous"
-  return JSON.stringify([repo.host, repo.owner, repo.repo, headSha, credential])
+  return JSON.stringify([repo.host, repo.owner, repo.repo, headSha, credential, preferCompletedOverQueued])
 }
 
 /** Auth-scoped identity for the branch-runs fan-out, so one window's poll
@@ -370,6 +405,7 @@ const fetchStatusChecks = async (
   repo: RepoRef,
   headSha: string,
   token: string | undefined,
+  preferCompletedOverQueued: boolean,
 ): Promise<NonNullable<PullEntity["statusChecks"]>> => {
   const base = `/repos/${repo.owner}/${repo.repo}/commits/${encodeURIComponent(headSha)}`
   const auth: Auth = async () => token
@@ -377,13 +413,14 @@ const fetchStatusChecks = async (
     loadPages<CommitStatusJson>(`${base}/statuses`, "statuses", auth),
     loadPages<CheckRunJson>(`${base}/check-runs?filter=latest`, "check_runs", auth),
   ])
-  return combineStatusCheckResults(headSha, statuses, checkRuns)
+  return combineStatusCheckResults(headSha, statuses, checkRuns, preferCompletedOverQueued)
 }
 
 const loadStatusChecks = async (
   repo: RepoRef,
   headSha: string,
   auth: Auth,
+  preferCompletedOverQueued = false,
 ): Promise<NonNullable<PullEntity["statusChecks"]>> => {
   let token: string | undefined
   try {
@@ -391,8 +428,9 @@ const loadStatusChecks = async (
   } catch {
     return unavailableStatusChecks(headSha)
   }
-  const key = statusCheckCacheKey(repo, headSha, token)
-  const snapshot = cachedPromise(statusCheckCache, key, STATUS_TTL_MS, () => fetchStatusChecks(repo, headSha, token))
+  const key = statusCheckCacheKey(repo, headSha, token, preferCompletedOverQueued)
+  const snapshot = cachedPromise(statusCheckCache, key, STATUS_TTL_MS, () =>
+    fetchStatusChecks(repo, headSha, token, preferCompletedOverQueued))
   if (statusCheckCache.size > STATUS_CACHE_MAX_ENTRIES) {
     const oldest = statusCheckCache.keys().next().value
     if (oldest) statusCheckCache.delete(oldest)
@@ -635,7 +673,9 @@ const hydratePull = async (repo: RepoRef, number: number, auth: Auth): Promise<P
   // must not lose the PR itself, or one flaky endpoint hides the pill.
   const [reviewHistory, statusChecks, unresolvedThreads] = await Promise.all([
     loadReviews(repo, number, auth),
-    shouldLoadStatusChecks(entity) ? loadStatusChecks(repo, pull.head.sha, auth) : Promise.resolve(undefined),
+    shouldLoadStatusChecks(entity)
+      ? loadStatusChecks(repo, pull.head.sha, auth, shouldPreferCompletedOverQueued(entity.mergeState ?? null))
+      : Promise.resolve(undefined),
     entity.state === "open" && entity.nodeId ? loadUnresolvedThreads(entity.nodeId, auth) : Promise.resolve(undefined),
   ])
   return {
