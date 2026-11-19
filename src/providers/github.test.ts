@@ -347,15 +347,37 @@ describe("statusCheckSnapshot", () => {
     ]
     expect(statusCheckSnapshot("head", [], checks, true).resolvedQueued).toEqual(["check-run:10:A"])
   })
-})
 
-describe("shouldPreferCompletedOverQueued", () => {
-  test("only a clean forge verdict licenses the bypass", () => {
-    expect(shouldPreferCompletedOverQueued("ready")).toBe(true)
-    expect(shouldPreferCompletedOverQueued("pending")).toBe(false)
-    expect(shouldPreferCompletedOverQueued("blocked")).toBe(false)
-    expect(shouldPreferCompletedOverQueued("conflict")).toBe(false)
-    expect(shouldPreferCompletedOverQueued(null)).toBe(false)
+  const permutations = <T>(items: readonly T[]): T[][] =>
+    items.length <= 1
+      ? [[...items]]
+      : items.flatMap((item, index) =>
+          permutations([...items.slice(0, index), ...items.slice(index + 1)]).map((rest) => [item, ...rest]))
+
+  test("commit-status selection is independent of API response order", () => {
+    const attempts = [
+      { id: 1, context: "gate", state: "success", updated_at: "2026-11-18T21:00:00Z" },
+      { id: 2, context: "gate", state: "error", updated_at: "2026-11-18T22:00:00Z" },
+      { id: 3, context: "gate", state: "pending", updated_at: "2026-11-18T23:00:00Z" },
+    ]
+    for (const order of permutations(attempts)) {
+      const snapshot = statusCheckSnapshot("head", order, [], true)
+      expect(snapshot.contexts).toEqual([{ name: "status-context:gate", status: "failed" }])
+      expect(snapshot.resolvedQueued).toBeUndefined()
+    }
+  })
+
+  test("a newer success clears an older queued marker regardless of response order", () => {
+    const attempts = [
+      { id: 1, name: "A", status: "completed", conclusion: "success", app: { id: 10 } },
+      { id: 2, name: "A", status: "queued", conclusion: null, app: { id: 10 } },
+      { id: 3, name: "A", status: "completed", conclusion: "success", app: { id: 10 } },
+    ]
+    for (const order of permutations(attempts)) {
+      const snapshot = statusCheckSnapshot("head", [], order, true)
+      expect(snapshot.contexts).toEqual([{ name: "check-run:10:A", status: "succeeded" }])
+      expect(snapshot.resolvedQueued).toBeUndefined()
+    }
   })
 
   test("decodes both GitHub response shapes and accumulates every page", async () => {
@@ -373,6 +395,16 @@ describe("shouldPreferCompletedOverQueued", () => {
     expect(combineStatusCheckResults("head", [], undefined)).toEqual({ headSha: "head", state: "unavailable", contexts: [] })
     expect(combineStatusCheckResults("head", undefined, [])).toEqual({ headSha: "head", state: "unavailable", contexts: [] })
     expect(combineStatusCheckResults("head", [], [])).toEqual({ headSha: "head", state: "available", contexts: [] })
+  })
+})
+
+describe("shouldPreferCompletedOverQueued", () => {
+  test("only a clean forge verdict licenses the bypass", () => {
+    expect(shouldPreferCompletedOverQueued("ready")).toBe(true)
+    expect(shouldPreferCompletedOverQueued("pending")).toBe(false)
+    expect(shouldPreferCompletedOverQueued("blocked")).toBe(false)
+    expect(shouldPreferCompletedOverQueued("conflict")).toBe(false)
+    expect(shouldPreferCompletedOverQueued(null)).toBe(false)
   })
 })
 

@@ -88,6 +88,35 @@ describe("mergeReady", () => {
     expect(armedTargets([entry], [incident])).toHaveLength(1)
   })
 
+  test("a named bypass never masks a hard blocker", () => {
+    const snapshot = {
+      headSha: "abc123",
+      state: "available" as const,
+      contexts: [{ name: "check-run:10:gate", status: "succeeded" as const }],
+      resolvedQueued: ["check-run:10:gate"],
+    }
+    const cancelled = chain({
+      prs: [pull({ mergeState: "ready", statusChecks: snapshot })],
+      runs: [run("queued"), run("cancelled")],
+    })
+    expect(mergeReady(cancelled)).toBe(false)
+    expect(mergeWhy(cancelled)).toBe("checks cancelled (run #906)")
+
+    const changesRequested = chain({
+      prs: [pull({ mergeState: "ready", reviewState: "changes_requested", statusChecks: snapshot })],
+      runs: [run("queued")],
+    })
+    expect(mergeReady(changesRequested)).toBe(false)
+    expect(mergeWhy(changesRequested)).toBe("changes requested")
+
+    const incompleteReviews = chain({
+      prs: [pull({ mergeState: "ready", reviewsIncomplete: true, statusChecks: snapshot })],
+      runs: [run("queued")],
+    })
+    expect(mergeReady(incompleteReviews)).toBe(false)
+    expect(mergeWhy(incompleteReviews)).toBe("review history unavailable")
+  })
+
   test("unknown states (older cache) fall back to checks alone", () => {
     expect(mergeReady(chain())).toBe(true)
   })

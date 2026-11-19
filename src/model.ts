@@ -252,17 +252,17 @@ export const mergeWhy = (chain: Chain, pull = chain.prs[0], waitForAllStatusChec
   const currentRuns = pull ? currentRunsForPull(chain, pull) : []
   const failed = currentRuns.find((run) => run.status === "failed")
   if (failed) return `checks failed (run #${failed.id})`
+  const cancelled = currentRuns.find((run) => run.status === "cancelled")
+  if (cancelled) return `checks cancelled (run #${cancelled.id})`
   const resolved = pull?.statusChecks?.resolvedQueued ?? []
   const snapshot = pull?.statusChecks
   const greenSnapshot = snapshot !== undefined && snapshot.state === "available" &&
     snapshot.headSha === pull?.headSha && snapshot.contexts.length > 0 &&
     snapshot.contexts.every((context) => context.status === "succeeded")
-  // A named bypass alongside an otherwise-green same-head snapshot means the
-  // queued run below was already superseded — don't call it "still running".
-  if (resolved.length > 0 && greenSnapshot) return `stale queued check resolved: ${resolved.join(", ")}`
-  if (currentRuns.some((run) => run.status === "queued" || run.status === "running")) return "checks still running"
-  const cancelled = currentRuns.find((run) => run.status === "cancelled")
-  if (cancelled) return `checks cancelled (run #${cancelled.id})`
+  // A named green bypass only suppresses the "still running" explanation.
+  // Hard blockers below still win before we show a positive message.
+  const bypass = resolved.length > 0 && greenSnapshot
+  if (!bypass && currentRuns.some((run) => run.status === "queued" || run.status === "running")) return "checks still running"
   if (waitForAllStatusChecks && pull) {
     if (!snapshot || snapshot.headSha !== pull.headSha || snapshot.state === "unavailable") return "status checks unavailable"
     if (snapshot.state === "available") {
@@ -284,6 +284,7 @@ export const mergeWhy = (chain: Chain, pull = chain.prs[0], waitForAllStatusChec
   // Mirror the evidence gate: this is the chain that just lost merge readiness.
   if (currentRuns.length === 0 && pull?.mergeState !== "ready")
     return "no checks on record for the current head"
+  if (bypass) return `stale queued check resolved: ${resolved.join(", ")}`
   return "not ready"
 }
 

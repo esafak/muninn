@@ -274,10 +274,11 @@ export const collectStatusPages = async <T>(fetchPage: (page: number) => Promise
 export const shouldPreferCompletedOverQueued = (mergeState: MergeState | null): boolean => mergeState === "ready"
 
 /** Exported for tests: latest status per context/attempt, already scoped to one head SHA.
- * With `preferCompletedOverQueued` (only for a clean forge verdict), a newer
- * queued/pending duplicate no longer erases an older completed result for the
- * same check on this exact commit. `in_progress`/`running` and failing results
- * are never bypassed. Bypassed checks are named in `resolvedQueued`. */
+ * With `preferCompletedOverQueued` (only for a clean forge verdict), trailing
+ * queued/pending attempts no longer erase the newest real verdict for the same
+ * check on this exact commit. `in_progress` and failing results still win;
+ * a bypassed success is named in `resolvedQueued`. Selection uses the full
+ * per-key chronology so API response order cannot change the outcome. */
 export const statusCheckSnapshot = (
   headSha: string,
   statuses: readonly CommitStatusJson[],
@@ -286,29 +287,62 @@ export const statusCheckSnapshot = (
 ): NonNullable<PullEntity["statusChecks"]> => {
   const resolvedQueued: string[] = []
   const latest = new Map<string, CommitStatusJson>()
+  const byContext = new Map<string, CommitStatusJson[]>()
   for (const status of statuses) {
-    const previous = latest.get(status.context)
-    if (!previous) { latest.set(status.context, status); continue }
-    const nextIsNewer = Date.parse(status.updated_at) > Date.parse(previous.updated_at) ||
-      (status.updated_at === previous.updated_at && status.id > previous.id)
-    const older = nextIsNewer ? previous : status
-    const newer = nextIsNewer ? status : previous
-    const superseded = preferCompletedOverQueued && newer.state === "pending" && older.state === "success"
-    const name = `status-context:${status.context}`
-    if (superseded && !resolvedQueued.includes(name)) resolvedQueued.push(name)
-    latest.set(status.context, superseded ? older : newer)
+    const group = byContext.get(status.context) ?? []
+    group.push(status)
+    byContext.set(status.context, group)
+  }
+  for (const [context, group] of byContext) {
+    const ordered = group.toSorted((a, b) =>
+      Date.parse(a.updated_at) - Date.parse(b.updated_at) || a.id - b.id)
+    const newest = ordered[ordered.length - 1]
+    if (!newest) continue
+    let selected = newest
+    let skippedQueued = false
+    if (preferCompletedOverQueued && selected.state === "pending") {
+      let i = ordered.length - 1
+      while (i >= 0) {
+        const candidate = ordered[i]
+        if (!candidate || candidate.state !== "pending") break
+        skippedQueued = true
+        i--
+      }
+      const predecessor = ordered[i]
+      if (predecessor) selected = predecessor
+    }
+    latest.set(context, selected)
+    if (skippedQueued && selected.state === "success") resolvedQueued.push(`status-context:${context}`)
   }
   const latestChecks = new Map<string, CheckRunJson>()
+  const byKey = new Map<string, CheckRunJson[]>()
   for (const check of checkRuns) {
     const key = `${check.app?.id ?? "unknown"}:${check.name}`
-    const previous = latestChecks.get(key)
-    if (!previous) { latestChecks.set(key, check); continue }
-    const older = check.id > previous.id ? previous : check
-    const newer = check.id > previous.id ? check : previous
-    const superseded = preferCompletedOverQueued && newer.status === "queued" && older.status === "completed"
-    const name = `check-run:${key}`
-    if (superseded && !resolvedQueued.includes(name)) resolvedQueued.push(name)
-    latestChecks.set(key, superseded ? older : newer)
+    const group = byKey.get(key) ?? []
+    group.push(check)
+    byKey.set(key, group)
+  }
+  for (const [key, group] of byKey) {
+    const ordered = group.toSorted((a, b) => a.id - b.id)
+    const newest = ordered[ordered.length - 1]
+    if (!newest) continue
+    let selected = newest
+    let skippedQueued = false
+    if (preferCompletedOverQueued && selected.status === "queued") {
+      let i = ordered.length - 1
+      while (i >= 0) {
+        const candidate = ordered[i]
+        if (!candidate || candidate.status !== "queued") break
+        skippedQueued = true
+        i--
+      }
+      const predecessor = ordered[i]
+      if (predecessor) selected = predecessor
+    }
+    latestChecks.set(key, selected)
+    if (skippedQueued && selected.status === "completed" &&
+      ["success", "neutral", "skipped"].includes(selected.conclusion ?? ""))
+      resolvedQueued.push(`check-run:${key}`)
   }
   const snapshot: NonNullable<PullEntity["statusChecks"]> = {
     headSha,
