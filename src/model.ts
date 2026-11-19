@@ -116,6 +116,9 @@ export interface PullEntity extends Base {
   autoMerge?: AutoMergeMethod | null
   /** Commit statuses and check-runs discovered for headSha; older cache entries omit it. */
   statusChecks?: StatusCheckSnapshot
+  /** Provider-specific page for this PR's review/diff. Optional so other forges
+   * and older cache entries fall back to `url` in the GUI. */
+  reviewUrl?: string
 }
 
 export type Entity = IssueEntity | PullEntity | RunEntity
@@ -288,23 +291,62 @@ export const mergeWhy = (chain: Chain, pull = chain.prs[0], waitForAllStatusChec
   return "not ready"
 }
 
-/** Whether a not-ready PR is hard-blocked (red) rather than merely waiting
- * (amber): a failed or cancelled check on the current head, failed/cancelled
- * status contexts, requested changes, conflicts, or branch-rule blocks. Running
- * checks, unavailable snapshots, and missing evidence stay amber — they can
- * still turn green without intervention. Returns false for ready or non-open
- * PRs, so callers check it only as the red branch before the amber fallback. */
-export const mergeFailed = (chain: Chain, pull = chain.prs[0], waitForAllStatusChecks = true, requireApproval = false, requireResolvedThreads = false): boolean => {
-  if (!pull || pull.state !== "open") return false
-  if (mergeReady(chain, pull, waitForAllStatusChecks, requireApproval, requireResolvedThreads)) return false
+/** The confirmed hard blocker for a not-ready PR, or undefined when it is only
+ * waiting. Failed/cancelled checks, requested changes, conflicts and branch-rule
+ * blocks are hard; running checks, unavailable snapshots and missing evidence are
+ * deliberately absent so a red label never says "fix this" about something that
+ * can turn green on its own. */
+export const mergeHardBlockWhy = (
+  chain: Chain,
+  pull = chain.prs[0],
+  waitForAllStatusChecks = true,
+  requireApproval = false,
+  requireResolvedThreads = false,
+): string | undefined => {
+  if (!pull || pull.state !== "open") return undefined
+  if (mergeReady(chain, pull, waitForAllStatusChecks, requireApproval, requireResolvedThreads)) return undefined
   const currentRuns = currentRunsForPull(chain, pull)
-  if (currentRuns.some((run) => run.status === "failed" || run.status === "cancelled")) return true
+  const failed = currentRuns.find((run) => run.status === "failed")
+  if (failed) return `checks failed (run #${failed.id})`
+  const cancelled = currentRuns.find((run) => run.status === "cancelled")
+  if (cancelled) return `checks cancelled (run #${cancelled.id})`
   if (waitForAllStatusChecks && pull.statusChecks?.state === "available" && pull.statusChecks.headSha === pull.headSha) {
-    if (pull.statusChecks.contexts.some((context) => context.status === "failed" || context.status === "cancelled")) return true
+    if (pull.statusChecks.contexts.some((context) => context.status === "failed")) return "status checks failed"
+    if (pull.statusChecks.contexts.some((context) => context.status === "cancelled")) return "status checks did not succeed"
   }
-  if (pull.reviewState === "changes_requested") return true
-  if (pull.mergeState === "conflict" || pull.mergeState === "blocked") return true
-  return false
+  if (pull.reviewState === "changes_requested") return "changes requested"
+  if (pull.mergeState === "conflict") return "merge conflicts with the base branch"
+  if (pull.mergeState === "blocked") return "blocked by branch rules or a missing review"
+  return undefined
+}
+
+/** Red-vs-amber: true only when a confirmed hard blocker exists. Returns false
+ * for ready and non-open PRs, so callers use it as the red branch. */
+export const mergeFailed = (chain: Chain, pull = chain.prs[0], waitForAllStatusChecks = true, requireApproval = false, requireResolvedThreads = false): boolean =>
+  mergeHardBlockWhy(chain, pull, waitForAllStatusChecks, requireApproval, requireResolvedThreads) !== undefined
+
+export type MergeDisplayState = "ready" | "pending" | "blocked" | "conflict" | "unknown" | "merged"
+
+/**
+ * Per-PR display state for the merge glyph. `chainTone` summarizes the lead PR
+ * and is not usable per row; this classifies the specific PR with the same
+ * predicates the action button uses, so a row's glyph and button cannot
+ * disagree. Current-head evidence can make a PR ready even when the raw forge
+ * merge state is still pending or absent.
+ */
+export const mergeDisplayState = (
+  chain: Chain,
+  pull = chain.prs[0],
+  waitForAllStatusChecks = true,
+  requireApproval = false,
+  requireResolvedThreads = false,
+): MergeDisplayState => {
+  if (!pull) return "unknown"
+  if (pull.state === "merged") return "merged"
+  if (pull.state !== "open") return pull.mergeState ?? "unknown"
+  if (mergeHardBlockWhy(chain, pull, waitForAllStatusChecks, requireApproval, requireResolvedThreads) !== undefined) return "blocked"
+  if (mergeReady(chain, pull, waitForAllStatusChecks, requireApproval, requireResolvedThreads)) return "ready"
+  return "pending"
 }
 
 /** Confirmation fragment for merge/arm dialogs when an explicit approval is

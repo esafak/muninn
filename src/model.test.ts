@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import type { Chain, IssueEntity, PullEntity, RepoRef, RunEntity } from "./model"
-import { chainTone, mergeFailed, mergeReady, mergeWhy, pendingReviewNotice, armedTargets, staleHeadRetryEligible, staleHeadEvidenceUsable, sessionAttemptCurrent, targetRefreshConfirmed, pillPick, pillPicks, pillDisplay, type ArmedEntry, pillEligible, eligibilityProvenance, eligibilityProvenances, pillLeadOf, rememberCreated, pullForRun, pullsForRun, jsonReady, prConflicted, isFreshBaseSession, entityKey } from "./model"
+import { chainTone, mergeDisplayState, mergeFailed, mergeHardBlockWhy, mergeReady, mergeWhy, pendingReviewNotice, armedTargets, staleHeadRetryEligible, staleHeadEvidenceUsable, sessionAttemptCurrent, targetRefreshConfirmed, pillPick, pillPicks, pillDisplay, type ArmedEntry, pillEligible, eligibilityProvenance, eligibilityProvenances, pillLeadOf, rememberCreated, pullForRun, pullsForRun, jsonReady, prConflicted, isFreshBaseSession, entityKey } from "./model"
 import { associate } from "./associate"
 
 const repo = { host: "github.com", owner: "sst", repo: "opencode" }
@@ -60,6 +60,60 @@ const chain = (over: Partial<Chain> = {}): Chain => ({
   runs: [run("succeeded")],
   updatedAt: 0,
   ...over,
+})
+
+const greenSnapshot = (headSha: string): NonNullable<PullEntity["statusChecks"]> => ({
+  headSha,
+  state: "available",
+  contexts: [{ name: "gate", status: "succeeded" }],
+})
+
+describe("mergeHardBlockWhy", () => {
+  test("transient conditions have no hard reason", () => {
+    const c = chain({
+      prs: [pull({ mergeState: "pending", statusChecks: { headSha: "abc123", state: "available", contexts: [{ name: "gate", status: "running" }] } })],
+      runs: [run("running")],
+    })
+    expect(mergeHardBlockWhy(c)).toBeUndefined()
+    expect(mergeFailed(c)).toBe(false)
+  })
+
+  test("only confirmed blockers produce a reason", () => {
+    expect(mergeHardBlockWhy(chain({ prs: [pull({ mergeState: "ready", reviewState: "changes_requested" })], runs: [run("running")] }))).toBe("changes requested")
+    expect(mergeHardBlockWhy(chain({ prs: [pull({ mergeState: "conflict" })] }))).toBe("merge conflicts with the base branch")
+    expect(mergeHardBlockWhy(chain({ prs: [pull({ mergeState: "blocked" })] }))).toBe("blocked by branch rules or a missing review")
+    expect(mergeHardBlockWhy(chain({ prs: [pull({ mergeState: "ready" })], runs: [run("succeeded"), run("failed")] }))).toBe("checks failed (run #906)")
+  })
+})
+
+describe("mergeDisplayState", () => {
+  const blocked = pull({ number: 1, headBranch: "a", headSha: "a1", mergeState: "ready", reviewState: "changes_requested", statusChecks: greenSnapshot("a1") })
+  const clean = pull({ number: 2, headBranch: "b", headSha: "b1", mergeState: "ready", statusChecks: greenSnapshot("b1") })
+  const runs = [
+    { ...run("succeeded"), headSha: "a1", pullRequests: [1] },
+    { ...run("succeeded"), headSha: "b1", pullRequests: [2] },
+  ]
+
+  test("each PR is classified by its own evidence in both lead orders", () => {
+    for (const prs of [[blocked, clean], [clean, blocked]]) {
+      const c = chain({ prs, runs })
+      expect(mergeDisplayState(c, blocked)).toBe("blocked")
+      expect(mergeDisplayState(c, clean)).toBe("ready")
+    }
+  })
+
+  test("green current-head evidence makes display ready despite raw pending or absent merge state", () => {
+    for (const mergeState of ["pending", null] as const) {
+      const c = chain({ prs: [pull({ mergeState, statusChecks: greenSnapshot("abc123") })], runs: [run("succeeded")] })
+      expect(mergeDisplayState(c)).toBe("ready")
+    }
+  })
+
+  test("non-open PRs keep their own state rather than inheriting a chain override", () => {
+    expect(mergeDisplayState(chain({ prs: [pull({ state: "merged", mergeState: "ready" })] }))).toBe("merged")
+    expect(mergeDisplayState(chain({ prs: [pull({ state: "closed", mergeState: "blocked", reviewState: "changes_requested" })] }))).toBe("blocked")
+    expect(mergeDisplayState(chain({ prs: [pull({ state: "draft", reviewState: "changes_requested" })] }))).toBe("unknown")
+  })
 })
 
 describe("mergeReady", () => {

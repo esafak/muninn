@@ -135,6 +135,28 @@ export const MergeGlyph = (): JSX.Element =>
     </>,
   )
 
+/** Review requested changes: a speech bubble with a cross. Collapses the
+ * `changes requested` blocker badge to a single glyph without losing its
+ * meaning — the reason stays in the label for hover and assistive tech. */
+export const ReviewChangesGlyph = (): JSX.Element =>
+  svg(
+    <g fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M13.5 7.6c0 2.8-2.5 5-5.6 5-.7 0-1.4-.1-2-.3L2.5 13.5l1-2.7A4.6 4.6 0 0 1 2.3 7.6c0-2.8 2.5-5 5.6-5s5.6 2.2 5.6 5Z" />
+      <path d="m6 6 3 3m0-3-3 3" />
+    </g>,
+  )
+
+/** Generic hard blocker: a circle with an exclamation, for blockers other
+ * than requested changes (failed checks, conflict, branch rules). */
+export const BlockerGlyph = (): JSX.Element =>
+  svg(
+    <g fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+      <circle cx="8" cy="8" r="6" />
+      <path d="M8 4.8v4" />
+      <circle cx="8" cy="11" r=".6" fill="currentColor" stroke="none" />
+    </g>,
+  )
+
 /** Two overlapping sheets: copy. */
 export const CopyGlyph = (): JSX.Element =>
   svg(

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { pillStatusIcon, pillStatusTone } from "./pill-status"
+import { mergeGlyphDisplay, pillStatusIcon, pillStatusTone } from "./pill-status"
 
 describe("pillStatusIcon", () => {
   test("uses a distinct branch icon for merged PRs", () => {
@@ -49,6 +49,20 @@ describe("pillStatusIcon", () => {
     expect(pillStatusIcon("closed", undefined, undefined)).toBe("circle-xmark")
     expect(pillStatusIcon(undefined, undefined, "success")).toBe("circle-check")
     expect(pillStatusIcon(undefined, undefined, undefined)).toBe("circle-exclamation")
+  })
+})
+
+describe("mergeGlyphDisplay", () => {
+  test("maps the per-PR display state to a glyph", () => {
+    const cases = [
+      ["ready", { state: "ready", cross: false }],
+      ["pending", { state: "pending", cross: false }],
+      ["blocked", { state: "blocked", cross: true }],
+      ["conflict", { state: "conflict", cross: true }],
+      ["unknown", { state: "unknown", cross: false }],
+      ["merged", { state: "merged", cross: false }],
+    ] as const
+    for (const [state, expected] of cases) expect(mergeGlyphDisplay(state)).toEqual(expected)
   })
 })
 

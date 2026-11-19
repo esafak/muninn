@@ -80,6 +80,7 @@ export const PullEntity = z.object({
   unresolvedThreads: z.number().optional(),
   autoMerge: z.enum(["merge", "squash", "rebase"]).nullish(),
   statusChecks: StatusCheckSnapshot.optional(),
+  reviewUrl: z.string().optional(),
 })
 
 export const Entity = z.discriminatedUnion("kind", [IssueEntity, PullEntity, RunEntity])

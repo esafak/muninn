@@ -664,6 +664,7 @@ export const toPullEntity = (repo: RepoRef, pull: PullJson): PullEntity => ({
   mergeState: mergeState(pull),
   autoMerge: pull.auto_merge?.merge_method ?? null,
   url: pull.html_url,
+  reviewUrl: `${pull.html_url}/files`,
   updatedAt: epoch(pull.updated_at),
 })
 

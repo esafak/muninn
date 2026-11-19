@@ -36,7 +36,7 @@ import {
 import { CUSTOM_PROVIDER, mergeProviderOptions, resolveCustomCommit } from "./provider-options"
 import { validateModelSyntax } from "../candidates/model-id"
 import type { ArmedEntry, Chain, Entity, PillReason, Pin, PullEntity, RepoRef, RunEntity, RunStatus } from "../model"
-import { chainTone, armedTargets, staleHeadRetryEligible, staleHeadEvidenceUsable, sessionAttemptCurrent, targetRefreshConfirmed, pillPick, pillDisplay, pillEligible, eligibilityProvenances, pillLeadOf, pinnedChain, pinForChain, rememberCreated, isFreshBaseSession, mergeReady, mergeWhy, pendingReviewNotice, latestRun, pullForRun, pullsForRun, prConflicted, refKey, repoKey, entityKey } from "../model"
+import { chainTone, armedTargets, staleHeadRetryEligible, staleHeadEvidenceUsable, sessionAttemptCurrent, targetRefreshConfirmed, pillPick, pillDisplay, pillEligible, eligibilityProvenances, pillLeadOf, pinnedChain, pinForChain, rememberCreated, isFreshBaseSession, mergeDisplayState, mergeReady, mergeWhy, pendingReviewNotice, latestRun, pullForRun, pullsForRun, prConflicted, refKey, repoKey, entityKey } from "../model"
 import { mentionEvidence } from "../candidates/mention-evidence"
 import { prCreateBranchLinks, prCreateRefs, validateCreateLinks } from "../candidates/created"
 import { githubLexicon } from "../providers/github/lexicon"
@@ -49,6 +49,7 @@ import { CancelledGlyph, CheckGlyph, CopyGlyph, CrossGlyph, IssueGlyph, MergeGly
 import { pillIcon } from "./marks"
 import { applyDismissal, lastMenuIndex, mergedActionView, overflowCount, overflowLabel, pickableChains, pillViewForPick, type PillView } from "./pill-view"
 import { pillPullDiagnostics } from "./pill-diagnostics"
+import { mergeGlyphDisplay } from "./pill-status"
 import { refreshKeyFor, shouldClearActiveRefresh, shouldRunAutoRefresh } from "./refresh-guard"
 
 /** Debounce for scan → hydrate while a message streams in. */
@@ -2189,7 +2190,9 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
   const pillChainRows = (chain: Chain, input: ComposerPillMenuProps): JSX.Element => (
         <div class="mn-pop-chain" data-tone={chainTone(chain, waitForAllStatusChecks(), requireApproval(), requireResolvedThreads())}>
           <For each={chain.prs}>
-            {(pull) => (
+            {(pull) => {
+              const glyph = () => mergeGlyphDisplay(mergeDisplayState(chain, pull, waitForAllStatusChecks(), requireApproval(), requireResolvedThreads()))
+              return (
               <div class="mn-pop-row" onClick={() => { input.close(); open(pull.url) }}>
                 <span
                   class="mn-kind"
@@ -2200,11 +2203,11 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
                 </span>
                 <span
                   class="mn-merge-state"
-                  data-state={pull.state === "merged" ? "merged" : pull.mergeState ?? "unknown"}
+                  data-state={glyph().state}
                   data-armed={isArmed(pull) ? "" : undefined}
-                  title={`merge: ${pull.state === "merged" ? "merged" : pull.mergeState ?? "unknown"}${pull.reviewState ? ` · reviews: ${pull.reviewState}` : ""}${isArmed(pull) ? " · Muninn is watching" : ""}`}
+                  title={`merge: ${glyph().state}${pull.reviewState ? ` · reviews: ${pull.reviewState}` : ""}${isArmed(pull) ? " · Muninn is watching" : ""}`}
                 >
-                  {(pull.state === "open" || pull.state === "draft") && pull.mergeState == null ? <UnknownGlyph /> : <MergeGlyph />}
+                  {glyph().cross ? <CrossGlyph /> : glyph().state === "unknown" ? <UnknownGlyph /> : <MergeGlyph />}
                 </span>
                 <span class="mn-pop-id">#{pull.number}</span>
                 <span class="mn-pop-title">{pull.title}</span>
@@ -2212,6 +2215,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
                   chain={chain}
                   pull={pull}
                   isArmed={isArmed}
+                  onOpen={(url) => { input.close(); open(url) }}
                   waitForAllStatusChecks={waitForAllStatusChecks}
                   requireApproval={requireApproval}
                   requireResolvedThreads={requireResolvedThreads}
@@ -2220,7 +2224,8 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
                 />
                 <button class="mn-copy-link" type="button" title="Copy PR link" aria-label="Copy PR link" onClick={(event) => copyLink(event, pull.url)}><CopyGlyph /></button>
               </div>
-            )}
+              )
+            }}
           </For>
           <For each={chain.issues}>
             {(issue) => (
@@ -3100,10 +3105,9 @@ const STYLES = `
   .mn-merge { background: #238636; }
 }
 .mn-merge:hover { filter: brightness(1.1); }
-.mn-merge.failed:disabled { opacity: .65; cursor: not-allowed; filter: none; pointer-events: none; }
-/* Wrapper is the real pointer target: the disabled button is click-through,
- * so tooltip, row-click suppression, and cursor all live here. */
-.mn-wrap-fail { display: inline-flex; flex: none; cursor: not-allowed; }
+/* The hard-blocker button is a live link to the review, so the button keeps
+ * its pointer cursor; only the wrapper stops the row's own click handler. */
+.mn-wrap-fail { display: inline-flex; flex: none; }
 .mn-merge.pending {
   background: #9a6700;
   color: #fff;
@@ -3115,6 +3119,9 @@ const STYLES = `
 @media (prefers-color-scheme: dark) {
   .mn-merge.failed { background: #da3633; }
 }
+/* Hard blocker: the disabled merge button carries the reason-specific glyph
+ * (review bubble or alert); the full reason stays in its label. */
+.mn-merge.icon { display: inline-flex; align-items: center; justify-content: center; padding: 4px 6px; }
 .mn-merge.armed {
   background: none; color: var(--v2-state-fg-warning, #9a6700);
   box-shadow: inset 0 0 0 .5px var(--v2-state-border-warning, #9a6700);
@@ -3153,8 +3160,9 @@ const STYLES = `
 @media (prefers-color-scheme: dark) {
   .mn-kind[data-state="pr-merged"], .mn-kind[data-state="merged"], .mn-merge-state[data-state="merged"], .mn-state[data-state="merged"] { color: #a371f7; }
 }
-/* Armed: Muninn is watching — the dot pulses until the merge fires. */
-.mn-merge-state[data-armed] { color: var(--v2-state-fg-warning, #9a6700); animation: mn-pulse 1.6s ease-in-out infinite; }
+/* Armed: Muninn is watching — keep the pulse but let the per-PR state color
+ * show through, so a blocked armed PR stays red and a ready one stays green. */
+.mn-merge-state[data-armed] { animation: mn-pulse 1.6s ease-in-out infinite; }
 @keyframes mn-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
 
 /* Merged action pills: hover swaps the green branch for an active pin whose
