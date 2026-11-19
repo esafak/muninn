@@ -67,6 +67,56 @@ describe("mergeReady", () => {
     expect(mergeReady(chain({ prs: [pull({ mergeState: "ready", reviewState: "approved" })] }))).toBe(true)
   })
 
+  test("a resolved queued duplicate clears both the run and wait-for-all gates", () => {
+    // Incident shape: a queued current-head run plus a queued check context,
+    // superseded by a completed success on this exact head (forge says clean).
+    const incident = chain({
+      prs: [pull({
+        mergeState: "ready",
+        statusChecks: {
+          headSha: "abc123",
+          state: "available",
+          contexts: [{ name: "check-run:15368:Check commit author", status: "succeeded" }],
+          resolvedQueued: ["check-run:15368:Check commit author"],
+        },
+      })],
+      runs: [run("succeeded"), run("queued")],
+    })
+    expect(mergeReady(incident)).toBe(true)
+    expect(mergeWhy(incident)).toBe("stale queued check resolved: check-run:15368:Check commit author")
+    const entry: ArmedEntry = { repo, number: 4821, method: "squash" }
+    expect(armedTargets([entry], [incident])).toHaveLength(1)
+  })
+
+  test("a named bypass never masks a hard blocker", () => {
+    const snapshot = {
+      headSha: "abc123",
+      state: "available" as const,
+      contexts: [{ name: "check-run:10:gate", status: "succeeded" as const }],
+      resolvedQueued: ["check-run:10:gate"],
+    }
+    const cancelled = chain({
+      prs: [pull({ mergeState: "ready", statusChecks: snapshot })],
+      runs: [run("queued"), run("cancelled")],
+    })
+    expect(mergeReady(cancelled)).toBe(false)
+    expect(mergeWhy(cancelled)).toBe("checks cancelled (run #906)")
+
+    const changesRequested = chain({
+      prs: [pull({ mergeState: "ready", reviewState: "changes_requested", statusChecks: snapshot })],
+      runs: [run("queued")],
+    })
+    expect(mergeReady(changesRequested)).toBe(false)
+    expect(mergeWhy(changesRequested)).toBe("changes requested")
+
+    const incompleteReviews = chain({
+      prs: [pull({ mergeState: "ready", reviewsIncomplete: true, statusChecks: snapshot })],
+      runs: [run("queued")],
+    })
+    expect(mergeReady(incompleteReviews)).toBe(false)
+    expect(mergeWhy(incompleteReviews)).toBe("review history unavailable")
+  })
+
   test("unknown states (older cache) fall back to checks alone", () => {
     expect(mergeReady(chain())).toBe(true)
   })

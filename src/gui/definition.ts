@@ -11,6 +11,7 @@ const StatusCheckSnapshot = Schema.Struct({
   headSha: Schema.String,
   state: Schema.Literals(["available", "unavailable", "unsupported"]),
   contexts: Schema.Array(Schema.Struct({ name: Schema.String, status: RunStatus })),
+  resolvedQueued: Schema.optional(Schema.Array(Schema.String)),
 })
 
 /** Run shape shared by the entity union and the durable branch-run store. */

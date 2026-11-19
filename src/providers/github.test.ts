@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { mergeResponse, staleHeadConflict, mergeAlreadyHandled, toPullEntity, runEntity, toIssueEntity, checkStatus, statusCheckSnapshot, combineStatusCheckResults, decodeStatusPage, collectStatusPages, cachedPromise, statusCheckCacheKey, shouldLoadStatusChecks, branchPullSnapshot, invalidatePullCacheEntries, entityTtlFor, repoFromUrl, repoFromFullName, unresolvedThreadCount } from "./github"
+import { mergeResponse, staleHeadConflict, mergeAlreadyHandled, toPullEntity, runEntity, toIssueEntity, checkStatus, statusCheckSnapshot, combineStatusCheckResults, decodeStatusPage, collectStatusPages, cachedPromise, statusCheckCacheKey, shouldLoadStatusChecks, shouldPreferCompletedOverQueued, branchPullSnapshot, invalidatePullCacheEntries, entityTtlFor, repoFromUrl, repoFromFullName, unresolvedThreadCount } from "./github"
 import { PullEntity, RunEntity as RunEntitySchema } from "../rpc"
 
 describe("mergeResponse", () => {
@@ -287,6 +287,99 @@ describe("statusCheckSnapshot", () => {
     ])
   })
 
+  test("a queued duplicate cannot erase a completed result when the forge is clean", () => {
+    const checks = [
+      { id: 135160777193, name: "Check commit author", status: "completed", conclusion: "success", app: { id: 15368 } },
+      { id: 135209849612, name: "Check commit author", status: "queued", conclusion: null, app: { id: 15368 } },
+    ]
+    const bypassed = statusCheckSnapshot("head", [], checks, true)
+    expect(bypassed.contexts).toEqual([{ name: "check-run:15368:Check commit author", status: "succeeded" }])
+    expect(bypassed.resolvedQueued).toEqual(["check-run:15368:Check commit author"])
+    // Without the clean-forge flag the current, conservative behavior is pinned.
+    const conservative = statusCheckSnapshot("head", [], checks)
+    expect(conservative.contexts).toEqual([{ name: "check-run:15368:Check commit author", status: "queued" }])
+    expect(conservative.resolvedQueued).toBeUndefined()
+  })
+
+  test("in_progress duplicates are never bypassed", () => {
+    const checks = [
+      { id: 1, name: "Build", status: "completed", conclusion: "success", app: { id: 10 } },
+      { id: 2, name: "Build", status: "in_progress", conclusion: null, app: { id: 10 } },
+    ]
+    expect(statusCheckSnapshot("head", [], checks, true).contexts).toEqual([{ name: "check-run:10:Build", status: "running" }])
+  })
+
+  test("a queued duplicate never hides a failing completed result", () => {
+    const checks = [
+      { id: 1, name: "Build", status: "completed", conclusion: "failure", app: { id: 10 } },
+      { id: 2, name: "Build", status: "queued", conclusion: null, app: { id: 10 } },
+    ]
+    expect(statusCheckSnapshot("head", [], checks, true).contexts).toEqual([{ name: "check-run:10:Build", status: "failed" }])
+  })
+
+  test("pending commit-status duplicates are superseded the same way", () => {
+    const statuses = [
+      { id: 1, context: "gate", state: "success", updated_at: "2026-11-18T21:00:00Z" },
+      { id: 2, context: "gate", state: "pending", updated_at: "2026-11-18T22:00:00Z" },
+    ]
+    const snapshot = statusCheckSnapshot("head", statuses, [], true)
+    expect(snapshot.contexts).toEqual([{ name: "status-context:gate", status: "succeeded" }])
+    expect(snapshot.resolvedQueued).toEqual(["status-context:gate"])
+  })
+
+  test("a resolved duplicate leaves other checks untouched", () => {
+    const checks = [
+      { id: 1, name: "A", status: "completed", conclusion: "success", app: { id: 10 } },
+      { id: 2, name: "A", status: "queued", conclusion: null, app: { id: 10 } },
+      { id: 3, name: "B", status: "queued", conclusion: null, app: { id: 10 } },
+    ]
+    expect(statusCheckSnapshot("head", [], checks, true).contexts).toEqual([
+      { name: "check-run:10:A", status: "succeeded" },
+      { name: "check-run:10:B", status: "queued" },
+    ])
+  })
+
+  test("a check bypassed by several queued duplicates is named once", () => {
+    const checks = [
+      { id: 1, name: "A", status: "completed", conclusion: "success", app: { id: 10 } },
+      { id: 2, name: "A", status: "queued", conclusion: null, app: { id: 10 } },
+      { id: 3, name: "A", status: "queued", conclusion: null, app: { id: 10 } },
+    ]
+    expect(statusCheckSnapshot("head", [], checks, true).resolvedQueued).toEqual(["check-run:10:A"])
+  })
+
+  const permutations = <T>(items: readonly T[]): T[][] =>
+    items.length <= 1
+      ? [[...items]]
+      : items.flatMap((item, index) =>
+          permutations([...items.slice(0, index), ...items.slice(index + 1)]).map((rest) => [item, ...rest]))
+
+  test("commit-status selection is independent of API response order", () => {
+    const attempts = [
+      { id: 1, context: "gate", state: "success", updated_at: "2026-11-18T21:00:00Z" },
+      { id: 2, context: "gate", state: "error", updated_at: "2026-11-18T22:00:00Z" },
+      { id: 3, context: "gate", state: "pending", updated_at: "2026-11-18T23:00:00Z" },
+    ]
+    for (const order of permutations(attempts)) {
+      const snapshot = statusCheckSnapshot("head", order, [], true)
+      expect(snapshot.contexts).toEqual([{ name: "status-context:gate", status: "failed" }])
+      expect(snapshot.resolvedQueued).toBeUndefined()
+    }
+  })
+
+  test("a newer success clears an older queued marker regardless of response order", () => {
+    const attempts = [
+      { id: 1, name: "A", status: "completed", conclusion: "success", app: { id: 10 } },
+      { id: 2, name: "A", status: "queued", conclusion: null, app: { id: 10 } },
+      { id: 3, name: "A", status: "completed", conclusion: "success", app: { id: 10 } },
+    ]
+    for (const order of permutations(attempts)) {
+      const snapshot = statusCheckSnapshot("head", [], order, true)
+      expect(snapshot.contexts).toEqual([{ name: "check-run:10:A", status: "succeeded" }])
+      expect(snapshot.resolvedQueued).toBeUndefined()
+    }
+  })
+
   test("decodes both GitHub response shapes and accumulates every page", async () => {
     const first = Array.from({ length: 100 }, (_, id) => ({ id }))
     const last = [{ id: 100 }]
@@ -302,6 +395,16 @@ describe("statusCheckSnapshot", () => {
     expect(combineStatusCheckResults("head", [], undefined)).toEqual({ headSha: "head", state: "unavailable", contexts: [] })
     expect(combineStatusCheckResults("head", undefined, [])).toEqual({ headSha: "head", state: "unavailable", contexts: [] })
     expect(combineStatusCheckResults("head", [], [])).toEqual({ headSha: "head", state: "available", contexts: [] })
+  })
+})
+
+describe("shouldPreferCompletedOverQueued", () => {
+  test("only a clean forge verdict licenses the bypass", () => {
+    expect(shouldPreferCompletedOverQueued("ready")).toBe(true)
+    expect(shouldPreferCompletedOverQueued("pending")).toBe(false)
+    expect(shouldPreferCompletedOverQueued("blocked")).toBe(false)
+    expect(shouldPreferCompletedOverQueued("conflict")).toBe(false)
+    expect(shouldPreferCompletedOverQueued(null)).toBe(false)
   })
 })
 
@@ -337,6 +440,11 @@ describe("status-check caching", () => {
     expect(statusCheckCacheKey(repo, "sha-2", "secret-token-one")).not.toBe(first)
     expect(statusCheckCacheKey({ ...repo, host: "ghe.example" }, "sha-1", "secret-token-one")).not.toBe(first)
     expect(first).not.toContain("secret-token-one")
+    // The queued-supersession flag is part of identity: two PRs on one head with
+    // different forge merge states must never share a cached snapshot.
+    expect(statusCheckCacheKey(repo, "sha-1", "secret-token-one", true)).not.toBe(first)
+    expect(statusCheckCacheKey(repo, "sha-1", "secret-token-one", true)).toBe(
+      statusCheckCacheKey(repo, "sha-1", "secret-token-one", true))
   })
 
   test("only open pull requests need status discovery", () => {

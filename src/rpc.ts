@@ -28,6 +28,7 @@ export const StatusCheckSnapshot = z.object({
   headSha: z.string(),
   state: z.enum(["available", "unavailable", "unsupported"]),
   contexts: z.array(z.object({ name: z.string(), status: z.enum(["queued", "running", "succeeded", "failed", "cancelled"]) })),
+  resolvedQueued: z.array(z.string()).optional(),
 })
 
 export const RunEntity = z.object({

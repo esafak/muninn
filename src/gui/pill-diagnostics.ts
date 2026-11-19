@@ -9,5 +9,8 @@ export const pillPullDiagnostics = (pull: PullEntity | undefined): string | unde
   const checkEvidence = checks
     ? `${checks.state}@${shortSha(checks.headSha)}`
     : "missing"
-  return `pr#${pull.number} state=${pull.state} merge=${pull.mergeState ?? "unknown"} head=${shortSha(pull.headSha)} checks=${checkEvidence}`
+  const resolved = checks?.resolvedQueued?.length
+    ? `+resolved(${checks.resolvedQueued.join(", ")})`
+    : ""
+  return `pr#${pull.number} state=${pull.state} merge=${pull.mergeState ?? "unknown"} head=${shortSha(pull.headSha)} checks=${checkEvidence}${resolved}`
 }
