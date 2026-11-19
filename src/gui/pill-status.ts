@@ -1,6 +1,31 @@
 import type { IconName, ComposerPillTone } from "@opencode/plugin/gui"
 import type { MergeState, PullState } from "../model"
 
+export type MergeGlyphDisplay = {
+  state: "ready" | "pending" | "blocked" | "conflict" | "unknown" | "merged"
+  /** Render the cross glyph instead of the optimistic merge dot. */
+  cross: boolean
+}
+
+/**
+ * Display state for the merge-status glyph in the sidebar and pill popover.
+ * Mirrors `pillStatusIcon`'s override policy: an adverse chain tone must not
+ * leave an optimistic green ready dot on a PR Muninn won't merge (changes
+ * requested, failed checks, conflict, or blocked merge state). Keeping the
+ * policy here means the capsule and its detail rows cannot disagree.
+ */
+export const mergeGlyphDisplay = (
+  state: PullState | undefined,
+  mergeState: MergeState | null | undefined,
+  tone: ComposerPillTone | undefined,
+): MergeGlyphDisplay => {
+  if (state === "merged") return { state: "merged", cross: false }
+  if (tone === "danger") return { state: "blocked", cross: true }
+  const shown = mergeState ?? "unknown"
+  if (tone === "warning" && shown === "ready") return { state: "pending", cross: false }
+  return { state: shown, cross: false }
+}
+
 // No fallback: a pill only renders when there is something to show (a PR
 // lead or a run), so the icon is always a status circle/branch. PR presence
 // alone decides the circle — tone/mergeState only pick which one.

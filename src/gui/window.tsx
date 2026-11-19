@@ -49,6 +49,7 @@ import { CancelledGlyph, CheckGlyph, CopyGlyph, CrossGlyph, IssueGlyph, MergeGly
 import { pillIcon } from "./marks"
 import { applyDismissal, lastMenuIndex, mergedActionView, overflowCount, overflowLabel, pickableChains, pillViewForPick, type PillView } from "./pill-view"
 import { pillPullDiagnostics } from "./pill-diagnostics"
+import { mergeGlyphDisplay } from "./pill-status"
 import { refreshKeyFor, shouldClearActiveRefresh, shouldRunAutoRefresh } from "./refresh-guard"
 
 /** Debounce for scan → hydrate while a message streams in. */
@@ -2189,7 +2190,9 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
   const pillChainRows = (chain: Chain, input: ComposerPillMenuProps): JSX.Element => (
         <div class="mn-pop-chain" data-tone={chainTone(chain, waitForAllStatusChecks(), requireApproval(), requireResolvedThreads())}>
           <For each={chain.prs}>
-            {(pull) => (
+            {(pull) => {
+              const glyph = () => mergeGlyphDisplay(pull.state, pull.mergeState, chainTone(chain, waitForAllStatusChecks(), requireApproval(), requireResolvedThreads()))
+              return (
               <div class="mn-pop-row" onClick={() => { input.close(); open(pull.url) }}>
                 <span
                   class="mn-kind"
@@ -2200,11 +2203,11 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
                 </span>
                 <span
                   class="mn-merge-state"
-                  data-state={pull.state === "merged" ? "merged" : pull.mergeState ?? "unknown"}
+                  data-state={glyph().state}
                   data-armed={isArmed(pull) ? "" : undefined}
                   title={`merge: ${pull.state === "merged" ? "merged" : pull.mergeState ?? "unknown"}${pull.reviewState ? ` · reviews: ${pull.reviewState}` : ""}${isArmed(pull) ? " · Muninn is watching" : ""}`}
                 >
-                  {(pull.state === "open" || pull.state === "draft") && pull.mergeState == null ? <UnknownGlyph /> : <MergeGlyph />}
+                  {glyph().cross ? <CrossGlyph /> : (pull.state === "open" || pull.state === "draft") && pull.mergeState == null ? <UnknownGlyph /> : <MergeGlyph />}
                 </span>
                 <span class="mn-pop-id">#{pull.number}</span>
                 <span class="mn-pop-title">{pull.title}</span>
@@ -2212,6 +2215,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
                   chain={chain}
                   pull={pull}
                   isArmed={isArmed}
+                  onOpen={open}
                   waitForAllStatusChecks={waitForAllStatusChecks}
                   requireApproval={requireApproval}
                   requireResolvedThreads={requireResolvedThreads}
@@ -2220,7 +2224,8 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
                 />
                 <button class="mn-copy-link" type="button" title="Copy PR link" aria-label="Copy PR link" onClick={(event) => copyLink(event, pull.url)}><CopyGlyph /></button>
               </div>
-            )}
+              )
+            }}
           </For>
           <For each={chain.issues}>
             {(issue) => (
@@ -3100,10 +3105,9 @@ const STYLES = `
   .mn-merge { background: #238636; }
 }
 .mn-merge:hover { filter: brightness(1.1); }
-.mn-merge.failed:disabled { opacity: .65; cursor: not-allowed; filter: none; pointer-events: none; }
-/* Wrapper is the real pointer target: the disabled button is click-through,
- * so tooltip, row-click suppression, and cursor all live here. */
-.mn-wrap-fail { display: inline-flex; flex: none; cursor: not-allowed; }
+/* The hard-blocker button is a live link to the review, so the button keeps
+ * its pointer cursor; only the wrapper stops the row's own click handler. */
+.mn-wrap-fail { display: inline-flex; flex: none; }
 .mn-merge.pending {
   background: #9a6700;
   color: #fff;
@@ -3115,6 +3119,9 @@ const STYLES = `
 @media (prefers-color-scheme: dark) {
   .mn-merge.failed { background: #da3633; }
 }
+/* Hard blocker: the disabled merge button carries the reason-specific glyph
+ * (review bubble or alert); the full reason stays in its label. */
+.mn-merge.icon { display: inline-flex; align-items: center; justify-content: center; padding: 4px 6px; }
 .mn-merge.armed {
   background: none; color: var(--v2-state-fg-warning, #9a6700);
   box-shadow: inset 0 0 0 .5px var(--v2-state-border-warning, #9a6700);

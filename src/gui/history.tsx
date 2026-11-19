@@ -5,7 +5,8 @@ import type { Chain, PullEntity, RepoRef, RunEntity, RunStatus } from "../model"
 import { chainTone, mergeFailed, mergeReady, mergeWhy, prConflicted } from "../model"
 import type { definition } from "./definition"
 import { Mark } from "./marks"
-import { CancelledGlyph, CheckGlyph, CrossGlyph, IssueGlyph, MergeGlyph, MergedGlyph, PinGlyph, PullConflictGlyph, PullGlyph, QueuedGlyph, UnknownGlyph } from "./icons"
+import { BlockerGlyph, CancelledGlyph, CheckGlyph, CrossGlyph, IssueGlyph, MergeGlyph, MergedGlyph, PinGlyph, PullConflictGlyph, PullGlyph, QueuedGlyph, ReviewChangesGlyph, UnknownGlyph } from "./icons"
+import { mergeGlyphDisplay } from "./pill-status"
 import { auditTitle, time } from "./audit-title"
 
 const DAY_MS = 24 * 60 * 60 * 1000
@@ -41,12 +42,13 @@ export interface HistoryProps {
 
 /**
  * The PR action button, shared by the sidebar and the pill's dropdown — GitHub's
- * states: green "Merge" when it can merge now; red disabled "Merge when ready"
- * when checks failed, changes were requested, or the branch conflicts/is
- * blocked (fix it first — it can't be armed); amber "Merge when ready" while
- * something is still running or unavailable; a state-tinted "Merging when ready"
- * once watched (green = merging next check, red = blocked, amber = still
- * waiting — click stops it). Nothing renders for merged/closed PRs.
+ * states: a green check when it can merge now; a red reason icon linking to the
+ * review when checks failed, changes were requested, or the branch conflicts/is
+ * blocked (fix it first — it can't be armed); an amber clock while something is
+ * still running or unavailable (click to arm); a state-tinted spinner once
+ * watched (green = merging next check, red = blocked, amber = still waiting —
+ * click stops it). Every state is icon-only; the full description lives in the
+ * label. Nothing renders for merged/closed PRs.
  */
 export const MergeButton = (props: {
   chain: Chain
@@ -55,6 +57,8 @@ export const MergeButton = (props: {
   requireApproval: () => boolean
   requireResolvedThreads: () => boolean
   isArmed: (pull: PullEntity) => boolean
+  /** Opens a URL in the host browser — the blocker icon links to the review. */
+  onOpen: (url: string) => void
   onMerge: (pull: PullEntity) => Promise<void>
   onArm: (pull: PullEntity, enable: boolean) => Promise<void>
 }): JSX.Element => {
@@ -74,12 +78,17 @@ export const MergeButton = (props: {
     return `Merging when ready${forge}: ${state}. Click to stop.`
   }
   const failedTitle = () => `${mergeWhy(props.chain, props.pull, wait(), approval(), threads())} — fix this before it can merge`
+  const reviewUrl = () => props.pull.reviewState === "changes_requested" ? `${props.pull.url}/files` : props.pull.url
+  const failedLabel = () => `${failedTitle()} · click to open ${props.pull.reviewState === "changes_requested" ? "the review" : "the PR"}`
+  const pendingLabel = () => `${mergeWhy(props.chain, props.pull, wait(), approval(), threads())} — click to merge when ready (auto-merge)`
+  const readyLabel = "Merge now — method and delete-branch follow the pill menu's choices"
   return (
   <Show when={props.pull.state === "open"}>
     <Switch>
       <Match when={props.isArmed(props.pull)}>
         <button
-          class={watchedClass()}
+          class={`${watchedClass()} icon`}
+          aria-label={watchedTitle()}
           title={watchedTitle()}
           onClick={(event) => {
             event.stopPropagation()
@@ -87,46 +96,51 @@ export const MergeButton = (props: {
           }}
         >
           <span class="mn-spin" />
-          Merging when ready
         </button>
       </Match>
       <Match when={mergeReady(props.chain, props.pull, props.waitForAllStatusChecks(), props.requireApproval(), props.requireResolvedThreads())}>
         <button
-          class="mn-merge"
-          title="Merge now — method and delete-branch follow the pill menu's choices"
+          class="mn-merge icon"
+          aria-label={readyLabel}
+          title={readyLabel}
           onClick={(event) => {
             event.stopPropagation()
             void props.onMerge(props.pull)
           }}
         >
-          Merge
+          <CheckGlyph />
         </button>
       </Match>
       <Match when={props.pull.state === "open" && mergeFailed(props.chain, props.pull, props.waitForAllStatusChecks(), props.requireApproval(), props.requireResolvedThreads())}>
         <span
           class="mn-wrap-fail"
-          title={failedTitle()}
+          title={failedLabel()}
           onClick={(event) => event.stopPropagation()}
         >
           <button
-            class="mn-merge failed"
-            disabled
-            title={failedTitle()}
+            class="mn-merge failed icon"
+            aria-label={failedLabel()}
+            title={failedLabel()}
+            onClick={(event) => {
+              event.stopPropagation()
+              props.onOpen(reviewUrl())
+            }}
           >
-            Merge when ready
+            {props.pull.reviewState === "changes_requested" ? <ReviewChangesGlyph /> : <BlockerGlyph />}
           </button>
         </span>
       </Match>
       <Match when={props.pull.state === "open"}>
         <button
-          class="mn-merge pending"
-          title={`${mergeWhy(props.chain, props.pull, props.waitForAllStatusChecks(), props.requireApproval(), props.requireResolvedThreads())} — click to merge when ready (auto-merge)`}
+          class="mn-merge pending icon"
+          aria-label={pendingLabel()}
+          title={pendingLabel()}
           onClick={(event) => {
             event.stopPropagation()
             void props.onArm(props.pull, true)
           }}
         >
-          Merge when ready
+          <QueuedGlyph />
         </button>
       </Match>
     </Switch>
@@ -255,6 +269,7 @@ export const History = (props: HistoryProps) => {
                     // A getter, not a snapshot: ledger writes must refresh
                     // tooltips and reveal closed-PR icons without a rechain.
                     const audit = () => auditTitle(ctx.stores.activity.value.entries, pull)
+                    const glyph = () => mergeGlyphDisplay(pull.state, pull.mergeState, chainTone(chain, props.waitForAllStatusChecks(), props.requireApproval(), props.requireResolvedThreads()))
                     return (
                     <div
                       class="mn-row"
@@ -282,14 +297,14 @@ export const History = (props: HistoryProps) => {
                       <Show when={pull.state === "open" || pull.state === "draft" || pull.state === "merged" || audit() !== undefined}>
                         <span
                           class="mn-merge-state"
-                          data-state={pull.state === "merged" ? "merged" : pull.mergeState ?? "unknown"}
+                          data-state={glyph().state}
                           data-armed={props.isArmed(pull) ? "" : undefined}
                           title={
                             audit() ??
                             `merge: ${pull.state === "merged" ? "merged" : pull.mergeState ?? "unknown"}${pull.reviewState ? ` · reviews: ${pull.reviewState}` : ""}${props.isArmed(pull) ? " · Muninn is watching" : ""}`
                           }
                         >
-                          {pull.state === "open" || pull.state === "draft" ? (
+                          {glyph().cross ? <CrossGlyph /> : pull.state === "open" || pull.state === "draft" ? (
                             pull.mergeState == null ? <UnknownGlyph /> : <MergeGlyph />
                           ) : (
                             <MergeGlyph />
@@ -305,7 +320,7 @@ export const History = (props: HistoryProps) => {
                         {copied() === `p${chain.key}${pull.number}` ? "✓" : `#${pull.number}`}
                       </span>
                       <span class="mn-title" title={pull.title || `#${pull.number}`}>{pull.title || `#${pull.number}`}</span>
-                      <MergeButton chain={chain} pull={pull} isArmed={props.isArmed} waitForAllStatusChecks={props.waitForAllStatusChecks} requireApproval={props.requireApproval} requireResolvedThreads={props.requireResolvedThreads} onMerge={props.onMerge} onArm={props.onArm} />
+                      <MergeButton chain={chain} pull={pull} isArmed={props.isArmed} onOpen={props.onOpen} waitForAllStatusChecks={props.waitForAllStatusChecks} requireApproval={props.requireApproval} requireResolvedThreads={props.requireResolvedThreads} onMerge={props.onMerge} onArm={props.onArm} />
                       <Show when={prIndex() === 0}>
                         <PinButton
                           pinned={props.isPinned(chain)}
