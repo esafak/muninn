@@ -31,6 +31,14 @@ describe("cache schema", () => {
     expect(withChecks.entries.pull?.kind === "pr" && withChecks.entries.pull.statusChecks).toEqual(statusChecks)
   })
 
+  test("preserves the provider review URL and accepts caches without it", () => {
+    const reviewUrl = "https://github.com/octo/repo/pull/1/files"
+    const withReview = decodeCache({ entries: { pull: { ...basePull, reviewUrl } }, at: {} })
+    expect(withReview.entries.pull?.kind === "pr" && withReview.entries.pull.reviewUrl).toBe(reviewUrl)
+    const oldCache = decodeCache({ entries: { pull: basePull }, at: {} })
+    expect(oldCache.entries.pull?.kind === "pr" && oldCache.entries.pull.reviewUrl).toBeUndefined()
+  })
+
   test("accepts cached run snapshots with and without workflow-series metadata", () => {
     const baseRun = {
       kind: "run",

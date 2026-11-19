@@ -66,6 +66,7 @@ const Entity = Schema.Union([
     unresolvedThreads: Schema.optional(Schema.Number),
     autoMerge: Schema.optional(Schema.NullOr(Schema.Literals(["merge", "squash", "rebase"]))),
     statusChecks: Schema.optional(StatusCheckSnapshot),
+    reviewUrl: Schema.optional(Schema.String),
   }),
 ])
 

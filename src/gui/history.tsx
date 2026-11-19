@@ -2,7 +2,7 @@ import { For, Match, Show, Switch, createSignal } from "solid-js"
 import type { Accessor, JSX } from "solid-js"
 import { usePlugin } from "@opencode/plugin/gui"
 import type { Chain, PullEntity, RepoRef, RunEntity, RunStatus } from "../model"
-import { chainTone, mergeFailed, mergeReady, mergeWhy, prConflicted } from "../model"
+import { chainTone, mergeDisplayState, mergeFailed, mergeHardBlockWhy, mergeReady, mergeWhy, prConflicted } from "../model"
 import type { definition } from "./definition"
 import { Mark } from "./marks"
 import { BlockerGlyph, CancelledGlyph, CheckGlyph, CrossGlyph, IssueGlyph, MergeGlyph, MergedGlyph, PinGlyph, PullConflictGlyph, PullGlyph, QueuedGlyph, ReviewChangesGlyph, UnknownGlyph } from "./icons"
@@ -77,9 +77,17 @@ export const MergeButton = (props: {
       : `${mergeWhy(props.chain, props.pull, wait(), approval(), threads())} — will merge when green`
     return `Merging when ready${forge}: ${state}. Click to stop.`
   }
-  const failedTitle = () => `${mergeWhy(props.chain, props.pull, wait(), approval(), threads())} — fix this before it can merge`
-  const reviewUrl = () => props.pull.reviewState === "changes_requested" ? `${props.pull.url}/files` : props.pull.url
-  const failedLabel = () => `${failedTitle()} · click to open ${props.pull.reviewState === "changes_requested" ? "the review" : "the PR"}`
+  // The red branch is a confirmed hard blocker: don't tell the user to "fix"
+  // a transient "checks still running" ahead of the actual block.
+  const failedTitle = () => `${mergeHardBlockWhy(props.chain, props.pull, wait(), approval(), threads()) ?? mergeWhy(props.chain, props.pull, wait(), approval(), threads())} — fix this before it can merge`
+  const blockerLink = (): { url: string; noun: string } =>
+    props.pull.reviewState === "changes_requested" && props.pull.reviewUrl
+      ? { url: props.pull.reviewUrl, noun: "the review" }
+      : { url: props.pull.url, noun: "the PR" }
+  const failedLabel = () => {
+    const link = blockerLink()
+    return `${failedTitle()} · click to open ${link.noun}`
+  }
   const pendingLabel = () => `${mergeWhy(props.chain, props.pull, wait(), approval(), threads())} — click to merge when ready (auto-merge)`
   const readyLabel = "Merge now — method and delete-branch follow the pill menu's choices"
   return (
@@ -123,7 +131,7 @@ export const MergeButton = (props: {
             title={failedLabel()}
             onClick={(event) => {
               event.stopPropagation()
-              props.onOpen(reviewUrl())
+              props.onOpen(blockerLink().url)
             }}
           >
             {props.pull.reviewState === "changes_requested" ? <ReviewChangesGlyph /> : <BlockerGlyph />}
@@ -269,7 +277,7 @@ export const History = (props: HistoryProps) => {
                     // A getter, not a snapshot: ledger writes must refresh
                     // tooltips and reveal closed-PR icons without a rechain.
                     const audit = () => auditTitle(ctx.stores.activity.value.entries, pull)
-                    const glyph = () => mergeGlyphDisplay(pull.state, pull.mergeState, chainTone(chain, props.waitForAllStatusChecks(), props.requireApproval(), props.requireResolvedThreads()))
+                    const glyph = () => mergeGlyphDisplay(mergeDisplayState(chain, pull, props.waitForAllStatusChecks(), props.requireApproval(), props.requireResolvedThreads()))
                     return (
                     <div
                       class="mn-row"
@@ -301,14 +309,10 @@ export const History = (props: HistoryProps) => {
                           data-armed={props.isArmed(pull) ? "" : undefined}
                           title={
                             audit() ??
-                            `merge: ${pull.state === "merged" ? "merged" : pull.mergeState ?? "unknown"}${pull.reviewState ? ` · reviews: ${pull.reviewState}` : ""}${props.isArmed(pull) ? " · Muninn is watching" : ""}`
+                            `merge: ${glyph().state}${pull.reviewState ? ` · reviews: ${pull.reviewState}` : ""}${props.isArmed(pull) ? " · Muninn is watching" : ""}`
                           }
                         >
-                          {glyph().cross ? <CrossGlyph /> : pull.state === "open" || pull.state === "draft" ? (
-                            pull.mergeState == null ? <UnknownGlyph /> : <MergeGlyph />
-                          ) : (
-                            <MergeGlyph />
-                          )}
+                          {glyph().cross ? <CrossGlyph /> : glyph().state === "unknown" ? <UnknownGlyph /> : <MergeGlyph />}
                         </span>
                       </Show>
                       <span

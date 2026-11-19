@@ -160,6 +160,10 @@ describe("toPullEntity", () => {
     expect(entity.state).toBe("merged")
   })
 
+  test("carries a provider-specific review URL for the GUI blocker link", () => {
+    expect(toPullEntity(repo, { ...basePull }).reviewUrl).toBe("https://github.com/octo/repo/pull/7/files")
+  })
+
   test("list-shaped pull responses may omit mergeability", () => {
     const listPull = { ...basePull, mergeable: undefined, mergeable_state: undefined }
     expect(toPullEntity(repo, listPull).mergeState).toBeNull()

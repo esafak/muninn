@@ -36,7 +36,7 @@ import {
 import { CUSTOM_PROVIDER, mergeProviderOptions, resolveCustomCommit } from "./provider-options"
 import { validateModelSyntax } from "../candidates/model-id"
 import type { ArmedEntry, Chain, Entity, PillReason, Pin, PullEntity, RepoRef, RunEntity, RunStatus } from "../model"
-import { chainTone, armedTargets, staleHeadRetryEligible, staleHeadEvidenceUsable, sessionAttemptCurrent, targetRefreshConfirmed, pillPick, pillDisplay, pillEligible, eligibilityProvenances, pillLeadOf, pinnedChain, pinForChain, rememberCreated, isFreshBaseSession, mergeReady, mergeWhy, pendingReviewNotice, latestRun, pullForRun, pullsForRun, prConflicted, refKey, repoKey, entityKey } from "../model"
+import { chainTone, armedTargets, staleHeadRetryEligible, staleHeadEvidenceUsable, sessionAttemptCurrent, targetRefreshConfirmed, pillPick, pillDisplay, pillEligible, eligibilityProvenances, pillLeadOf, pinnedChain, pinForChain, rememberCreated, isFreshBaseSession, mergeDisplayState, mergeReady, mergeWhy, pendingReviewNotice, latestRun, pullForRun, pullsForRun, prConflicted, refKey, repoKey, entityKey } from "../model"
 import { mentionEvidence } from "../candidates/mention-evidence"
 import { prCreateBranchLinks, prCreateRefs, validateCreateLinks } from "../candidates/created"
 import { githubLexicon } from "../providers/github/lexicon"
@@ -2191,7 +2191,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
         <div class="mn-pop-chain" data-tone={chainTone(chain, waitForAllStatusChecks(), requireApproval(), requireResolvedThreads())}>
           <For each={chain.prs}>
             {(pull) => {
-              const glyph = () => mergeGlyphDisplay(pull.state, pull.mergeState, chainTone(chain, waitForAllStatusChecks(), requireApproval(), requireResolvedThreads()))
+              const glyph = () => mergeGlyphDisplay(mergeDisplayState(chain, pull, waitForAllStatusChecks(), requireApproval(), requireResolvedThreads()))
               return (
               <div class="mn-pop-row" onClick={() => { input.close(); open(pull.url) }}>
                 <span
@@ -2205,9 +2205,9 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
                   class="mn-merge-state"
                   data-state={glyph().state}
                   data-armed={isArmed(pull) ? "" : undefined}
-                  title={`merge: ${pull.state === "merged" ? "merged" : pull.mergeState ?? "unknown"}${pull.reviewState ? ` · reviews: ${pull.reviewState}` : ""}${isArmed(pull) ? " · Muninn is watching" : ""}`}
+                  title={`merge: ${glyph().state}${pull.reviewState ? ` · reviews: ${pull.reviewState}` : ""}${isArmed(pull) ? " · Muninn is watching" : ""}`}
                 >
-                  {glyph().cross ? <CrossGlyph /> : (pull.state === "open" || pull.state === "draft") && pull.mergeState == null ? <UnknownGlyph /> : <MergeGlyph />}
+                  {glyph().cross ? <CrossGlyph /> : glyph().state === "unknown" ? <UnknownGlyph /> : <MergeGlyph />}
                 </span>
                 <span class="mn-pop-id">#{pull.number}</span>
                 <span class="mn-pop-title">{pull.title}</span>
@@ -2215,7 +2215,7 @@ export const setup: Plugin.Setup<typeof definition> = (ctx) => {
                   chain={chain}
                   pull={pull}
                   isArmed={isArmed}
-                  onOpen={open}
+                  onOpen={(url) => { input.close(); open(url) }}
                   waitForAllStatusChecks={waitForAllStatusChecks}
                   requireApproval={requireApproval}
                   requireResolvedThreads={requireResolvedThreads}
@@ -3160,8 +3160,9 @@ const STYLES = `
 @media (prefers-color-scheme: dark) {
   .mn-kind[data-state="pr-merged"], .mn-kind[data-state="merged"], .mn-merge-state[data-state="merged"], .mn-state[data-state="merged"] { color: #a371f7; }
 }
-/* Armed: Muninn is watching — the dot pulses until the merge fires. */
-.mn-merge-state[data-armed] { color: var(--v2-state-fg-warning, #9a6700); animation: mn-pulse 1.6s ease-in-out infinite; }
+/* Armed: Muninn is watching — keep the pulse but let the per-PR state color
+ * show through, so a blocked armed PR stays red and a ready one stays green. */
+.mn-merge-state[data-armed] { animation: mn-pulse 1.6s ease-in-out infinite; }
 @keyframes mn-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
 
 /* Merged action pills: hover swaps the green branch for an active pin whose

@@ -53,33 +53,16 @@ describe("pillStatusIcon", () => {
 })
 
 describe("mergeGlyphDisplay", () => {
-  test("a danger tone never leaves an optimistic ready dot (changes requested, failed checks)", () => {
-    expect(mergeGlyphDisplay("open", "ready", "danger")).toEqual({ state: "blocked", cross: true })
-    expect(mergeGlyphDisplay("draft", "pending", "danger")).toEqual({ state: "blocked", cross: true })
-    expect(mergeGlyphDisplay("open", "blocked", "danger")).toEqual({ state: "blocked", cross: true })
-  })
-
-  test("a warning tone downgrades ready to pending, without a cross", () => {
-    expect(mergeGlyphDisplay("open", "ready", "warning")).toEqual({ state: "pending", cross: false })
-    expect(mergeGlyphDisplay("draft", "ready", "warning")).toEqual({ state: "pending", cross: false })
-  })
-
-  test("without adverse tone the forge merge state shows through", () => {
+  test("maps the per-PR display state to a glyph", () => {
     const cases = [
       ["ready", { state: "ready", cross: false }],
       ["pending", { state: "pending", cross: false }],
-      ["blocked", { state: "blocked", cross: false }],
-      ["conflict", { state: "conflict", cross: false }],
-      [null, { state: "unknown", cross: false }],
-      [undefined, { state: "unknown", cross: false }],
+      ["blocked", { state: "blocked", cross: true }],
+      ["conflict", { state: "conflict", cross: true }],
+      ["unknown", { state: "unknown", cross: false }],
+      ["merged", { state: "merged", cross: false }],
     ] as const
-    for (const [mergeState, expected] of cases)
-      expect(mergeGlyphDisplay("open", mergeState, undefined)).toEqual(expected)
-  })
-
-  test("merged PRs keep their merged glyph even under an adverse tone", () => {
-    expect(mergeGlyphDisplay("merged", "ready", "danger")).toEqual({ state: "merged", cross: false })
-    expect(mergeGlyphDisplay("merged", null, undefined)).toEqual({ state: "merged", cross: false })
+    for (const [state, expected] of cases) expect(mergeGlyphDisplay(state)).toEqual(expected)
   })
 })
 
