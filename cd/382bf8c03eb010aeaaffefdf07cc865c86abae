@@ -1,0 +1,33 @@
+src/gui/definition.ts
+  s_8c78cbfcb8df5d::t_09ac6cee6e0051 14
+src/gui/pill-diagnostics.test.ts
+  s_8c78cbfcb8df5d::t_345d8289904659 37-47
+src/gui/pill-diagnostics.ts
+  s_8c78cbfcb8df5d::t_dfd214634b9e44 12-15
+src/model.test.ts
+  s_8c78cbfcb8df5d::t_eb252401bf6ffc 70-90
+src/model.ts
+  s_8c78cbfcb8df5d::t_c0a23dda6293e4 37-39,255-262
+src/providers/github.test.ts
+  s_8c78cbfcb8df5d::t_d4e8c8afe80b5c 2,290-360,411-415
+src/providers/github.ts
+  s_8c78cbfcb8df5d::t_a047bc556f9662 271-280,285,287,291-299,305-311,313,321-323,336,338-340,372-377,379,408,416,423,431-433,676-678
+src/rpc.ts
+  s_8c78cbfcb8df5d::t_9713415a56a0c8 31
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "cd382bf8c03eb010aeaaffefdf07cc865c86abae",
+  "prompts": {},
+  "sessions": {
+    "s_8c78cbfcb8df5d": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_e0f05b9a9ffdncjyGjqx07Abs3",
+        "model": "unknown"
+      },
+      "human_author": "Emre Şafak <3928300+esafak@users.noreply.github.com>"
+    }
+  }
+}
