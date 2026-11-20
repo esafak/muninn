@@ -512,9 +512,12 @@ const MERGE_TTL_MS = 10 * 60_000
 const STATUS_TTL_MS = 20_000
 const STATUS_CACHE_MAX_ENTRIES = 512
 // branchRuns fans out (runs list + jobs per run + branch PRs). Every window
-// polls it on each refresh, so without a shared short TTL N windows cost N×
-// the REST calls and exhaust GitHub's hourly core quota.
-const BRANCH_RUNS_TTL_MS = 20_000
+// polls it on each refresh, so without a shared TTL N windows cost N× the REST
+// calls and exhaust GitHub's hourly core quota. One minute spans both the 30s
+// normal and 5s fast polls, so a tick reuses the fan-out instead of repeating
+// it; branch rows are display/association only (merge evidence is hydrated
+// directly), so bounded staleness is safe.
+const BRANCH_RUNS_TTL_MS = 60_000
 const BRANCH_RUNS_CACHE_MAX_ENTRIES = 256
 
 type BranchRunsResult = { runs: RunEntity[]; prs: PullEntity[] }
