@@ -408,21 +408,21 @@ export const branchPullSnapshot = (
 })
 
 /** Opaque, auth-scoped status cache identity. Never stores or logs the raw token. */
-export const statusCheckCacheKey = (
-  repo: RepoRef,
-  headSha: string,
-  token: string | undefined,
-  preferCompletedOverQueued = false,
-): string => {
+export const statusCheckCacheKey = (repo: RepoRef, headSha: string, token: string | undefined): string => {
   const credential = token ? createHash("sha256").update(token).digest("hex") : "anonymous"
-  return JSON.stringify([repo.host, repo.owner, repo.repo, headSha, credential, preferCompletedOverQueued])
+  return JSON.stringify([repo.host, repo.owner, repo.repo, headSha, credential])
 }
 
 /** Status identity for one immutable head. The queued-supersession preference
  * changes only how the raw results are combined, never which results are
- * fetched, so it must not split the cache for the same head SHA. */
-export const statusSnapshotCacheKey = (repo: RepoRef, headSha: string, token: string | undefined): string =>
-  statusCheckCacheKey(repo, headSha, token)
+ * fetched, so it is deliberately absent from the key. */
+export const statusSnapshotCacheKey = statusCheckCacheKey
+
+/** The two status endpoints, cached before client-side combination. */
+interface StatusCheckRaw {
+  statuses: readonly CommitStatusJson[] | undefined
+  checkRuns: readonly CheckRunJson[] | undefined
+}
 
 /** Auth-scoped identity for the branch-runs fan-out, so one window's poll
  * collapses into the shared in-flight result for every other window. */
@@ -445,20 +445,20 @@ export const cachedPromise = <T>(
   return promise
 }
 
-/** Fetch both complete API surfaces; a partial response must never authorize a merge. */
+/** Fetch both complete API surfaces; a partial response must stay distinguishable
+ * from an empty one so the caller fails closed on unknown check state. */
 const fetchStatusChecks = async (
   repo: RepoRef,
   headSha: string,
   token: string | undefined,
-  preferCompletedOverQueued: boolean,
-): Promise<NonNullable<PullEntity["statusChecks"]>> => {
+): Promise<StatusCheckRaw> => {
   const base = `/repos/${repo.owner}/${repo.repo}/commits/${encodeURIComponent(headSha)}`
   const auth: Auth = async () => token
   const [statuses, checkRuns] = await Promise.all([
     loadPages<CommitStatusJson>(`${base}/statuses`, "statuses", auth),
     loadPages<CheckRunJson>(`${base}/check-runs?filter=latest`, "check_runs", auth),
   ])
-  return combineStatusCheckResults(headSha, statuses, checkRuns, preferCompletedOverQueued)
+  return { statuses, checkRuns }
 }
 
 const loadStatusChecks = async (
@@ -473,14 +473,15 @@ const loadStatusChecks = async (
   } catch {
     return unavailableStatusChecks(headSha)
   }
-  const key = statusCheckCacheKey(repo, headSha, token, preferCompletedOverQueued)
-  const snapshot = cachedPromise(statusCheckCache, key, STATUS_TTL_MS, () =>
-    fetchStatusChecks(repo, headSha, token, preferCompletedOverQueued))
+  const key = statusSnapshotCacheKey(repo, headSha, token)
+  const raw = cachedPromise(statusCheckCache, key, STATUS_TTL_MS, () =>
+    fetchStatusChecks(repo, headSha, token))
   if (statusCheckCache.size > STATUS_CACHE_MAX_ENTRIES) {
     const oldest = statusCheckCache.keys().next().value
     if (oldest) statusCheckCache.delete(oldest)
   }
-  return snapshot
+  const { statuses, checkRuns } = await raw
+  return combineStatusCheckResults(headSha, statuses, checkRuns, preferCompletedOverQueued)
 }
 
 const mergeMethods = (repo: RepoJson): MergeSettings => {
@@ -519,7 +520,7 @@ const BRANCH_RUNS_CACHE_MAX_ENTRIES = 256
 type BranchRunsResult = { runs: RunEntity[]; prs: PullEntity[] }
 
 const cache = new Map<string, { at: number; entity?: Entity }>()
-const statusCheckCache = new Map<string, { at: number; promise: Promise<NonNullable<PullEntity["statusChecks"]>> }>()
+const statusCheckCache = new Map<string, { at: number; promise: Promise<StatusCheckRaw> }>()
 const branchRunsCache = new Map<string, { at: number; promise: Promise<BranchRunsResult> }>()
 const repositoryEpochs = new Map<string, number>()
 const repositoryCacheKey = (repo: RepoRef): string => `${repo.owner.toLowerCase()}/${repo.repo.toLowerCase()}`

@@ -444,11 +444,6 @@ describe("status-check caching", () => {
     expect(statusCheckCacheKey(repo, "sha-2", "secret-token-one")).not.toBe(first)
     expect(statusCheckCacheKey({ ...repo, host: "ghe.example" }, "sha-1", "secret-token-one")).not.toBe(first)
     expect(first).not.toContain("secret-token-one")
-    // The queued-supersession flag is part of identity: two PRs on one head with
-    // different forge merge states must never share a cached snapshot.
-    expect(statusCheckCacheKey(repo, "sha-1", "secret-token-one", true)).not.toBe(first)
-    expect(statusCheckCacheKey(repo, "sha-1", "secret-token-one", true)).toBe(
-      statusCheckCacheKey(repo, "sha-1", "secret-token-one", true))
   })
 
   test("only open pull requests need status discovery", () => {
