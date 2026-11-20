@@ -916,11 +916,27 @@ const loadBranchRuns = async (repo: RepoRef, branch: string, auth: Auth, retries
   // indistinguishable from a branch with no runs. Log the failure; an
   // empty but successful response is normal and must stay silent.
   if (runs === undefined) console.warn("[muninn] branchRuns: runs request failed", { owner: repo.owner, repo: repo.repo, branch })
+  // A run hydrated directly this cycle is already in the entity cache. The GUI
+  // replaces the branch-listed copy with it (window.tsx), so its `/jobs` read
+  // would be thrown away. Count only fresh entries; a stale one must not lend
+  // stale checks to a fresh runs-list row.
+  const repoKey = repositoryCacheKey(repo)
+  const cachedRunKeys = new Set(
+    [...cache.entries()]
+      .filter(([, entry]) => entry.entity?.kind === "run" && Date.now() - entry.at < entityTtlFor(entry.entity))
+      .map(([key]) => key),
+  )
   const runEntities = (
     await Promise.all(
-      (runs?.workflow_runs ?? []).map((run) =>
-        runEntity(repo, run, auth, true).catch(() => undefined),
-      ),
+      (runs?.workflow_runs ?? []).map((run) => {
+        const cachedRun = directRunKeys(repoKey, run.id)
+          .map((key) => (cachedRunKeys.has(key) ? cache.get(key)?.entity : undefined))
+          .find((entity): entity is RunEntity => entity?.kind === "run")
+        const withChecks = shouldFetchBranchJobs(repoKey, run.id, cachedRunKeys)
+        return runEntity(repo, run, auth, withChecks)
+          .then((fresh) => withCachedChecks(fresh, cachedRun))
+          .catch(() => undefined)
+      }),
     )
   ).filter((entity): entity is RunEntity => entity !== undefined)
   // Branch runs are push-triggered: their pull_requests array comes back empty,
