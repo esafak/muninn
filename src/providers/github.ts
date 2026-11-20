@@ -15,6 +15,11 @@ const exec = promisify(execFile)
 
 const API = "https://api.github.com"
 
+/** A fixed auth function built from an already-resolved token. Each top-level
+ * provider method resolves `auth()` once and threads this down, so the many
+ * REST/GraphQL reads in one operation never re-resolve the credential. */
+export const tokenAuth = (token: string | undefined): Auth => async () => token
+
 // ── REST ────────────────────────────────────────────────────────────────────
 
 interface IssueJson {
@@ -403,14 +408,20 @@ export const branchPullSnapshot = (
 })
 
 /** Opaque, auth-scoped status cache identity. Never stores or logs the raw token. */
-export const statusCheckCacheKey = (
-  repo: RepoRef,
-  headSha: string,
-  token: string | undefined,
-  preferCompletedOverQueued = false,
-): string => {
+export const statusCheckCacheKey = (repo: RepoRef, headSha: string, token: string | undefined): string => {
   const credential = token ? createHash("sha256").update(token).digest("hex") : "anonymous"
-  return JSON.stringify([repo.host, repo.owner, repo.repo, headSha, credential, preferCompletedOverQueued])
+  return JSON.stringify([repo.host, repo.owner, repo.repo, headSha, credential])
+}
+
+/** Status identity for one immutable head. The queued-supersession preference
+ * changes only how the raw results are combined, never which results are
+ * fetched, so it is deliberately absent from the key. */
+export const statusSnapshotCacheKey = statusCheckCacheKey
+
+/** The two status endpoints, cached before client-side combination. */
+interface StatusCheckRaw {
+  statuses: readonly CommitStatusJson[] | undefined
+  checkRuns: readonly CheckRunJson[] | undefined
 }
 
 /** Auth-scoped identity for the branch-runs fan-out, so one window's poll
@@ -434,20 +445,20 @@ export const cachedPromise = <T>(
   return promise
 }
 
-/** Fetch both complete API surfaces; a partial response must never authorize a merge. */
+/** Fetch both complete API surfaces; a partial response must stay distinguishable
+ * from an empty one so the caller fails closed on unknown check state. */
 const fetchStatusChecks = async (
   repo: RepoRef,
   headSha: string,
   token: string | undefined,
-  preferCompletedOverQueued: boolean,
-): Promise<NonNullable<PullEntity["statusChecks"]>> => {
+): Promise<StatusCheckRaw> => {
   const base = `/repos/${repo.owner}/${repo.repo}/commits/${encodeURIComponent(headSha)}`
   const auth: Auth = async () => token
   const [statuses, checkRuns] = await Promise.all([
     loadPages<CommitStatusJson>(`${base}/statuses`, "statuses", auth),
     loadPages<CheckRunJson>(`${base}/check-runs?filter=latest`, "check_runs", auth),
   ])
-  return combineStatusCheckResults(headSha, statuses, checkRuns, preferCompletedOverQueued)
+  return { statuses, checkRuns }
 }
 
 const loadStatusChecks = async (
@@ -462,14 +473,15 @@ const loadStatusChecks = async (
   } catch {
     return unavailableStatusChecks(headSha)
   }
-  const key = statusCheckCacheKey(repo, headSha, token, preferCompletedOverQueued)
-  const snapshot = cachedPromise(statusCheckCache, key, STATUS_TTL_MS, () =>
-    fetchStatusChecks(repo, headSha, token, preferCompletedOverQueued))
+  const key = statusSnapshotCacheKey(repo, headSha, token)
+  const raw = cachedPromise(statusCheckCache, key, STATUS_TTL_MS, () =>
+    fetchStatusChecks(repo, headSha, token))
   if (statusCheckCache.size > STATUS_CACHE_MAX_ENTRIES) {
     const oldest = statusCheckCache.keys().next().value
     if (oldest) statusCheckCache.delete(oldest)
   }
-  return snapshot
+  const { statuses, checkRuns } = await raw
+  return combineStatusCheckResults(headSha, statuses, checkRuns, preferCompletedOverQueued)
 }
 
 const mergeMethods = (repo: RepoJson): MergeSettings => {
@@ -500,18 +512,24 @@ const MERGE_TTL_MS = 10 * 60_000
 const STATUS_TTL_MS = 20_000
 const STATUS_CACHE_MAX_ENTRIES = 512
 // branchRuns fans out (runs list + jobs per run + branch PRs). Every window
-// polls it on each refresh, so without a shared short TTL N windows cost N×
-// the REST calls and exhaust GitHub's hourly core quota.
-const BRANCH_RUNS_TTL_MS = 20_000
+// polls it on each refresh, so without a shared TTL N windows cost N× the REST
+// calls and exhaust GitHub's hourly core quota. One minute spans both the 30s
+// normal and 5s fast polls, so a tick reuses the fan-out instead of repeating
+// it; branch rows are display/association only (merge evidence is hydrated
+// directly), so bounded staleness is safe.
+const BRANCH_RUNS_TTL_MS = 60_000
 const BRANCH_RUNS_CACHE_MAX_ENTRIES = 256
 
 type BranchRunsResult = { runs: RunEntity[]; prs: PullEntity[] }
 
 const cache = new Map<string, { at: number; entity?: Entity }>()
-const statusCheckCache = new Map<string, { at: number; promise: Promise<NonNullable<PullEntity["statusChecks"]>> }>()
+const statusCheckCache = new Map<string, { at: number; promise: Promise<StatusCheckRaw> }>()
 const branchRunsCache = new Map<string, { at: number; promise: Promise<BranchRunsResult> }>()
 const repositoryEpochs = new Map<string, number>()
 const repositoryCacheKey = (repo: RepoRef): string => `${repo.owner.toLowerCase()}/${repo.repo.toLowerCase()}`
+/** Shared identity for the single `/repos/{owner}/{repo}` payload read by both
+ * merge-settings and canonical-repo resolution. */
+export const repoMetadataCacheKey = (repo: RepoRef): string => repositoryCacheKey(repo)
 const repositoryEpoch = (repo: RepoRef): number => repositoryEpochs.get(repositoryCacheKey(repo)) ?? 0
 export const invalidatePullCacheEntries = <EntityEntry, BranchEntry>(
   entityCache: Map<string, EntityEntry>,
@@ -563,9 +581,24 @@ const runPullsCache = new Map<string, number[]>()
 
 const branchPullsCache = new Map<string, { at: number; prs: PullEntity[] }>()
 
-const mergeSettingsCache = new Map<string, { at: number; settings?: MergeSettings }>()
+/** One `/repos/{owner}/{repo}` payload per repo per window, shared by merge
+ * settings and canonical-repo resolution. The promise cache also collapses a
+ * concurrent pair of callers into a single REST read. A genuine 404 becomes a
+ * cached `undefined`; a transport failure is evicted so the next tick retries. */
+const repoMetadataCache = new Map<string, { at: number; promise: Promise<RepoJson | undefined> }>()
 
-const canonicalRepoCache = new Map<string, { at: number; repo?: RepoRef }>()
+const loadRepoMetadata = (repo: RepoRef, auth: Auth): Promise<RepoJson | undefined> => {
+  const key = repoMetadataCacheKey(repo)
+  return cachedPromise(repoMetadataCache, key, MERGE_TTL_MS, async () => {
+    const resolved = tokenAuth(await auth())
+    try {
+      return await request<RepoJson>(`/repos/${repo.owner}/${repo.repo}`, resolved)
+    } catch {
+      repoMetadataCache.delete(key)
+      return undefined
+    }
+  })
+}
 
 const hydrateOne = async (ref: Ref & { repo: RepoRef }, auth: Auth): Promise<Entity | undefined> => {
   const base = `/repos/${ref.repo.owner}/${ref.repo.repo}`
@@ -772,6 +805,23 @@ export const runEntity = async (repo: RepoRef, run: RunJson, auth: Auth, withChe
   }
 }
 
+/** A directly hydrated run is cached under the ref's kind (`#run<id>`), or
+ * under `#any<id>` when the transcript ref was bare. Both mean "already read". */
+export const directRunKeys = (repoKey: string, id: number): readonly string[] => [
+  `${repoKey}#run${id}`,
+  `${repoKey}#any${id}`,
+]
+
+/** Branch-listed runs whose direct counterpart was already hydrated get their
+ * checks from that entity instead of paying for a fresh `/jobs` read. */
+export const shouldFetchBranchJobs = (repoKey: string, id: number, cachedKeys: ReadonlySet<string>): boolean =>
+  !directRunKeys(repoKey, id).some((key) => cachedKeys.has(key))
+
+/** Take only `checks` from the cached entity. Jobs change under a stable run
+ * id; identity, status, head and time must come from the fresh list payload. */
+export const withCachedChecks = (fresh: RunEntity, cached: RunEntity | undefined): RunEntity =>
+  cached ? { ...fresh, checks: cached.checks } : fresh
+
 const hydrateRun = async (repo: RepoRef, id: number, auth: Auth): Promise<RunEntity | undefined> => {
   const run = await request<RunJson>(`/repos/${repo.owner}/${repo.repo}/actions/runs/${id}`, auth)
   if (!run) return undefined
@@ -874,11 +924,27 @@ const loadBranchRuns = async (repo: RepoRef, branch: string, auth: Auth, retries
   // indistinguishable from a branch with no runs. Log the failure; an
   // empty but successful response is normal and must stay silent.
   if (runs === undefined) console.warn("[muninn] branchRuns: runs request failed", { owner: repo.owner, repo: repo.repo, branch })
+  // A run hydrated directly this cycle is already in the entity cache. The GUI
+  // replaces the branch-listed copy with it (window.tsx), so its `/jobs` read
+  // would be thrown away. Count only fresh entries; a stale one must not lend
+  // stale checks to a fresh runs-list row.
+  const repoKey = repositoryCacheKey(repo)
+  const cachedRunKeys = new Set(
+    [...cache.entries()]
+      .filter(([, entry]) => entry.entity?.kind === "run" && Date.now() - entry.at < entityTtlFor(entry.entity))
+      .map(([key]) => key),
+  )
   const runEntities = (
     await Promise.all(
-      (runs?.workflow_runs ?? []).map((run) =>
-        runEntity(repo, run, auth, true).catch(() => undefined),
-      ),
+      (runs?.workflow_runs ?? []).map((run) => {
+        const cachedRun = directRunKeys(repoKey, run.id)
+          .map((key) => (cachedRunKeys.has(key) ? cache.get(key)?.entity : undefined))
+          .find((entity): entity is RunEntity => entity?.kind === "run")
+        const withChecks = shouldFetchBranchJobs(repoKey, run.id, cachedRunKeys)
+        return runEntity(repo, run, auth, withChecks)
+          .then((fresh) => withCachedChecks(fresh, cachedRun))
+          .catch(() => undefined)
+      }),
     )
   ).filter((entity): entity is RunEntity => entity !== undefined)
   // Branch runs are push-triggered: their pull_requests array comes back empty,
@@ -912,31 +978,18 @@ export const github: SourceProvider = {
   auth: (ctx) => resolveToken(ctx as Plugin.Context),
 
   mergeSettings: async (repo, auth) => {
-    const key = `merge:${repo.owner}/${repo.repo}`
-    const hit = mergeSettingsCache.get(key)
-    if (hit && Date.now() - hit.at < MERGE_TTL_MS) return hit.settings
-
-    const json = await request<RepoJson>(`/repos/${repo.owner}/${repo.repo}`, auth)
-    const settings = json ? mergeMethods(json) : undefined
-    mergeSettingsCache.set(key, { at: Date.now(), settings })
-    return settings
+    const json = await loadRepoMetadata(repo, auth)
+    return json ? mergeMethods(json) : undefined
   },
 
   canonicalRepo: async (repo, auth) => {
-    const key = repositoryCacheKey(repo)
-    const hit = canonicalRepoCache.get(key)
-    if (hit && Date.now() - hit.at < MERGE_TTL_MS) return hit.repo
-    const json = await request<RepoJson>(`/repos/${repo.owner}/${repo.repo}`, auth).catch(() => undefined)
-    if (!json?.full_name) {
-      canonicalRepoCache.set(key, { at: Date.now(), repo: undefined })
-      return undefined
-    }
-    const canonical = repoFromFullName(json.full_name, repo)
-    canonicalRepoCache.set(key, { at: Date.now(), repo: canonical })
-    return canonical
+    const json = await loadRepoMetadata(repo, auth)
+    if (!json?.full_name) return undefined
+    return repoFromFullName(json.full_name, repo)
   },
 
   hydrate: async (refs, _sessionRepo, auth) => {
+    const resolved = tokenAuth(await auth())
     const unique = new Map<string, Ref & { repo: RepoRef }>()
     for (const ref of refs) unique.set(`${ref.repo.owner}/${ref.repo.repo}#${ref.number}`, ref)
     const epochs = new Map<string, number>()
@@ -949,7 +1002,7 @@ export const github: SourceProvider = {
           const entity = await cached(
             `${repositoryCacheKey(ref.repo)}#${ref.kind ?? "any"}${ref.number}`,
             ref.repo,
-            () => hydrateOne(ref, auth),
+            () => hydrateOne(ref, resolved),
           )
           return { ref, entity }
         } catch (cause) {
@@ -980,7 +1033,7 @@ export const github: SourceProvider = {
       const runKey = `${entity.repo.owner}/${entity.repo.repo}:${entity.id}`
       let numbers = entity.pullRequests.length > 0 ? entity.pullRequests : runPullsCache.get(runKey)
       if (!numbers) {
-        const prs = await pullsForBranch(entity.repo, entity.headBranch, auth).catch((cause: unknown) => {
+        const prs = await pullsForBranch(entity.repo, entity.headBranch, resolved).catch((cause: unknown) => {
           error ??= cause instanceof Error ? cause.message : String(cause)
           return []
         })
@@ -999,7 +1052,7 @@ export const github: SourceProvider = {
           const entity = await cached(
             `${repositoryCacheKey(ref.repo)}#pr${ref.number}`,
             ref.repo,
-            () => hydratePull(ref.repo, ref.number, auth),
+            () => hydratePull(ref.repo, ref.number, resolved),
           )
           return { entity }
         } catch (cause) {
@@ -1038,15 +1091,17 @@ export const github: SourceProvider = {
       branchRunsCache,
       branchRunsCacheKey(repo, branch, token),
       BRANCH_RUNS_TTL_MS,
-      () => loadBranchRuns(repo, branch, async () => token),
+      () => loadBranchRuns(repo, branch, tokenAuth(token)),
     )
   },
 
   merge: async (repo, number, method, expectedHeadSha, auth) => {
+    const token = await auth()
+    const resolved = tokenAuth(token)
     const headers = {
       accept: "application/vnd.github+json",
       "user-agent": "muninn",
-      ...(await auth() ? { authorization: `Bearer ${await auth()}` } : {}),
+      ...(token ? { authorization: `Bearer ${token}` } : {}),
     }
     const merge = await fetch(`https://api.github.com/repos/${repo.owner}/${repo.repo}/pulls/${number}/merge`, {
       method: "PUT",
@@ -1057,7 +1112,7 @@ export const github: SourceProvider = {
     if (!merge.ok) {
       const detail = await merge.json().catch(() => ({ message: merge.statusText }))
       const latest = merge.status === 409 || merge.status === 405
-        ? await request<PullJson>(`/repos/${repo.owner}/${repo.repo}/pulls/${number}`, auth).catch(() => undefined)
+        ? await request<PullJson>(`/repos/${repo.owner}/${repo.repo}/pulls/${number}`, resolved).catch(() => undefined)
         : undefined
       const headChanged = staleHeadConflict(merge.status, expectedHeadSha, latest?.head.sha)
       if (headChanged && latest) invalidatePullCaches(repo, number)
@@ -1080,20 +1135,21 @@ export const github: SourceProvider = {
   /** Arms or disarms auto-merge — merge when CI is green and required reviews pass.
    * GraphQL-only on GitHub's side; needs the PR's node id. */
   setAutoMerge: async (repo, number, enable, method, auth) => {
-    const pull = await request<PullJson>(`/repos/${repo.owner}/${repo.repo}/pulls/${number}`, auth)
+    const resolved = tokenAuth(await auth())
+    const pull = await request<PullJson>(`/repos/${repo.owner}/${repo.repo}/pulls/${number}`, resolved)
     if (!pull?.node_id) return { armed: false, message: "pull request not found" }
     try {
       if (enable) {
         await graphql(
           "mutation($id: ID!, $method: PullRequestMergeMethod!) { enablePullRequestAutoMerge(input: { pullRequestId: $id, mergeMethod: $method }) { clientMutationId } }",
           { id: pull.node_id, method },
-          auth,
+          resolved,
         )
       } else {
         await graphql(
           "mutation($id: ID!) { disablePullRequestAutoMerge(input: { pullRequestId: $id }) { clientMutationId } }",
           { id: pull.node_id },
-          auth,
+          resolved,
         )
       }
       return { armed: enable }
