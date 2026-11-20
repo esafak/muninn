@@ -577,9 +577,16 @@ const runPullsCache = new Map<string, number[]>()
 
 const branchPullsCache = new Map<string, { at: number; prs: PullEntity[] }>()
 
-const mergeSettingsCache = new Map<string, { at: number; settings?: MergeSettings }>()
+/** One `/repos/{owner}/{repo}` payload per repo per window, shared by merge
+ * settings and canonical-repo resolution. The promise cache also collapses a
+ * concurrent pair of callers into a single REST read. */
+const repoMetadataCache = new Map<string, { at: number; promise: Promise<RepoJson | undefined> }>()
 
-const canonicalRepoCache = new Map<string, { at: number; repo?: RepoRef }>()
+const loadRepoMetadata = (repo: RepoRef, auth: Auth): Promise<RepoJson | undefined> =>
+  cachedPromise(repoMetadataCache, repoMetadataCacheKey(repo), MERGE_TTL_MS, async () => {
+    const resolved = tokenAuth(await auth())
+    return request<RepoJson>(`/repos/${repo.owner}/${repo.repo}`, resolved).catch(() => undefined)
+  })
 
 const hydrateOne = async (ref: Ref & { repo: RepoRef }, auth: Auth): Promise<Entity | undefined> => {
   const base = `/repos/${ref.repo.owner}/${ref.repo.repo}`
@@ -943,30 +950,14 @@ export const github: SourceProvider = {
   auth: (ctx) => resolveToken(ctx as Plugin.Context),
 
   mergeSettings: async (repo, auth) => {
-    const key = `merge:${repo.owner}/${repo.repo}`
-    const hit = mergeSettingsCache.get(key)
-    if (hit && Date.now() - hit.at < MERGE_TTL_MS) return hit.settings
-
-    const resolved = tokenAuth(await auth())
-    const json = await request<RepoJson>(`/repos/${repo.owner}/${repo.repo}`, resolved)
-    const settings = json ? mergeMethods(json) : undefined
-    mergeSettingsCache.set(key, { at: Date.now(), settings })
-    return settings
+    const json = await loadRepoMetadata(repo, auth)
+    return json ? mergeMethods(json) : undefined
   },
 
   canonicalRepo: async (repo, auth) => {
-    const key = repositoryCacheKey(repo)
-    const hit = canonicalRepoCache.get(key)
-    if (hit && Date.now() - hit.at < MERGE_TTL_MS) return hit.repo
-    const resolved = tokenAuth(await auth())
-    const json = await request<RepoJson>(`/repos/${repo.owner}/${repo.repo}`, resolved).catch(() => undefined)
-    if (!json?.full_name) {
-      canonicalRepoCache.set(key, { at: Date.now(), repo: undefined })
-      return undefined
-    }
-    const canonical = repoFromFullName(json.full_name, repo)
-    canonicalRepoCache.set(key, { at: Date.now(), repo: canonical })
-    return canonical
+    const json = await loadRepoMetadata(repo, auth)
+    if (!json?.full_name) return undefined
+    return repoFromFullName(json.full_name, repo)
   },
 
   hydrate: async (refs, _sessionRepo, auth) => {
