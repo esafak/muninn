@@ -947,7 +947,8 @@ export const github: SourceProvider = {
     const hit = mergeSettingsCache.get(key)
     if (hit && Date.now() - hit.at < MERGE_TTL_MS) return hit.settings
 
-    const json = await request<RepoJson>(`/repos/${repo.owner}/${repo.repo}`, auth)
+    const resolved = tokenAuth(await auth())
+    const json = await request<RepoJson>(`/repos/${repo.owner}/${repo.repo}`, resolved)
     const settings = json ? mergeMethods(json) : undefined
     mergeSettingsCache.set(key, { at: Date.now(), settings })
     return settings
@@ -957,7 +958,8 @@ export const github: SourceProvider = {
     const key = repositoryCacheKey(repo)
     const hit = canonicalRepoCache.get(key)
     if (hit && Date.now() - hit.at < MERGE_TTL_MS) return hit.repo
-    const json = await request<RepoJson>(`/repos/${repo.owner}/${repo.repo}`, auth).catch(() => undefined)
+    const resolved = tokenAuth(await auth())
+    const json = await request<RepoJson>(`/repos/${repo.owner}/${repo.repo}`, resolved).catch(() => undefined)
     if (!json?.full_name) {
       canonicalRepoCache.set(key, { at: Date.now(), repo: undefined })
       return undefined
@@ -968,6 +970,7 @@ export const github: SourceProvider = {
   },
 
   hydrate: async (refs, _sessionRepo, auth) => {
+    const resolved = tokenAuth(await auth())
     const unique = new Map<string, Ref & { repo: RepoRef }>()
     for (const ref of refs) unique.set(`${ref.repo.owner}/${ref.repo.repo}#${ref.number}`, ref)
     const epochs = new Map<string, number>()
@@ -980,7 +983,7 @@ export const github: SourceProvider = {
           const entity = await cached(
             `${repositoryCacheKey(ref.repo)}#${ref.kind ?? "any"}${ref.number}`,
             ref.repo,
-            () => hydrateOne(ref, auth),
+            () => hydrateOne(ref, resolved),
           )
           return { ref, entity }
         } catch (cause) {
@@ -1011,7 +1014,7 @@ export const github: SourceProvider = {
       const runKey = `${entity.repo.owner}/${entity.repo.repo}:${entity.id}`
       let numbers = entity.pullRequests.length > 0 ? entity.pullRequests : runPullsCache.get(runKey)
       if (!numbers) {
-        const prs = await pullsForBranch(entity.repo, entity.headBranch, auth).catch((cause: unknown) => {
+        const prs = await pullsForBranch(entity.repo, entity.headBranch, resolved).catch((cause: unknown) => {
           error ??= cause instanceof Error ? cause.message : String(cause)
           return []
         })
@@ -1030,7 +1033,7 @@ export const github: SourceProvider = {
           const entity = await cached(
             `${repositoryCacheKey(ref.repo)}#pr${ref.number}`,
             ref.repo,
-            () => hydratePull(ref.repo, ref.number, auth),
+            () => hydratePull(ref.repo, ref.number, resolved),
           )
           return { entity }
         } catch (cause) {
@@ -1069,15 +1072,17 @@ export const github: SourceProvider = {
       branchRunsCache,
       branchRunsCacheKey(repo, branch, token),
       BRANCH_RUNS_TTL_MS,
-      () => loadBranchRuns(repo, branch, async () => token),
+      () => loadBranchRuns(repo, branch, tokenAuth(token)),
     )
   },
 
   merge: async (repo, number, method, expectedHeadSha, auth) => {
+    const token = await auth()
+    const resolved = tokenAuth(token)
     const headers = {
       accept: "application/vnd.github+json",
       "user-agent": "muninn",
-      ...(await auth() ? { authorization: `Bearer ${await auth()}` } : {}),
+      ...(token ? { authorization: `Bearer ${token}` } : {}),
     }
     const merge = await fetch(`https://api.github.com/repos/${repo.owner}/${repo.repo}/pulls/${number}/merge`, {
       method: "PUT",
@@ -1088,7 +1093,7 @@ export const github: SourceProvider = {
     if (!merge.ok) {
       const detail = await merge.json().catch(() => ({ message: merge.statusText }))
       const latest = merge.status === 409 || merge.status === 405
-        ? await request<PullJson>(`/repos/${repo.owner}/${repo.repo}/pulls/${number}`, auth).catch(() => undefined)
+        ? await request<PullJson>(`/repos/${repo.owner}/${repo.repo}/pulls/${number}`, resolved).catch(() => undefined)
         : undefined
       const headChanged = staleHeadConflict(merge.status, expectedHeadSha, latest?.head.sha)
       if (headChanged && latest) invalidatePullCaches(repo, number)
@@ -1111,20 +1116,21 @@ export const github: SourceProvider = {
   /** Arms or disarms auto-merge — merge when CI is green and required reviews pass.
    * GraphQL-only on GitHub's side; needs the PR's node id. */
   setAutoMerge: async (repo, number, enable, method, auth) => {
-    const pull = await request<PullJson>(`/repos/${repo.owner}/${repo.repo}/pulls/${number}`, auth)
+    const resolved = tokenAuth(await auth())
+    const pull = await request<PullJson>(`/repos/${repo.owner}/${repo.repo}/pulls/${number}`, resolved)
     if (!pull?.node_id) return { armed: false, message: "pull request not found" }
     try {
       if (enable) {
         await graphql(
           "mutation($id: ID!, $method: PullRequestMergeMethod!) { enablePullRequestAutoMerge(input: { pullRequestId: $id, mergeMethod: $method }) { clientMutationId } }",
           { id: pull.node_id, method },
-          auth,
+          resolved,
         )
       } else {
         await graphql(
           "mutation($id: ID!) { disablePullRequestAutoMerge(input: { pullRequestId: $id }) { clientMutationId } }",
           { id: pull.node_id },
-          auth,
+          resolved,
         )
       }
       return { armed: enable }

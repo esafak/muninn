@@ -219,8 +219,11 @@ export default Plugin.define({
         const source = sourceFor(remote.host)
         if (!source) return { provider: null, repo: remote, authenticated: false, headSha: null, merge: null }
 
-        const auth = () => source.auth(ctx)
-        const authenticated = (await auth()) !== undefined
+        // Resolve the credential once per RPC. mergeSettings and canonicalRepo
+        // both receive it, so a tick never pays for three token resolutions.
+        const token = await source.auth(ctx)
+        const auth = () => Promise.resolve(token)
+        const authenticated = token !== undefined
         const [merge, canonical, headSha] = await Promise.all([
           source.mergeSettings(remote, auth).catch(() => undefined),
           source.canonicalRepo?.(remote, auth).catch(() => undefined),
