@@ -1,0 +1,14 @@
+src/providers/github.ts
+  h_ea91e2db23540f 515-520
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6ec00726a0292d4dd4ce18e2994017bb37433f09",
+  "prompts": {},
+  "humans": {
+    "h_ea91e2db23540f": {
+      "author": "Emre Şafak <3928300+esafak@users.noreply.github.com>"
+    }
+  }
+}
