@@ -583,14 +583,22 @@ const branchPullsCache = new Map<string, { at: number; prs: PullEntity[] }>()
 
 /** One `/repos/{owner}/{repo}` payload per repo per window, shared by merge
  * settings and canonical-repo resolution. The promise cache also collapses a
- * concurrent pair of callers into a single REST read. */
+ * concurrent pair of callers into a single REST read. A genuine 404 becomes a
+ * cached `undefined`; a transport failure is evicted so the next tick retries. */
 const repoMetadataCache = new Map<string, { at: number; promise: Promise<RepoJson | undefined> }>()
 
-const loadRepoMetadata = (repo: RepoRef, auth: Auth): Promise<RepoJson | undefined> =>
-  cachedPromise(repoMetadataCache, repoMetadataCacheKey(repo), MERGE_TTL_MS, async () => {
+const loadRepoMetadata = (repo: RepoRef, auth: Auth): Promise<RepoJson | undefined> => {
+  const key = repoMetadataCacheKey(repo)
+  return cachedPromise(repoMetadataCache, key, MERGE_TTL_MS, async () => {
     const resolved = tokenAuth(await auth())
-    return request<RepoJson>(`/repos/${repo.owner}/${repo.repo}`, resolved).catch(() => undefined)
+    try {
+      return await request<RepoJson>(`/repos/${repo.owner}/${repo.repo}`, resolved)
+    } catch {
+      repoMetadataCache.delete(key)
+      return undefined
+    }
   })
+}
 
 const hydrateOne = async (ref: Ref & { repo: RepoRef }, auth: Auth): Promise<Entity | undefined> => {
   const base = `/repos/${ref.repo.owner}/${ref.repo.repo}`
