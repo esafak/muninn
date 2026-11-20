@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { mergeResponse, staleHeadConflict, mergeAlreadyHandled, toPullEntity, runEntity, toIssueEntity, checkStatus, statusCheckSnapshot, combineStatusCheckResults, decodeStatusPage, collectStatusPages, cachedPromise, statusCheckCacheKey, shouldLoadStatusChecks, shouldPreferCompletedOverQueued, branchPullSnapshot, invalidatePullCacheEntries, entityTtlFor, repoFromUrl, repoFromFullName, unresolvedThreadCount } from "./github"
+import { mergeResponse, staleHeadConflict, mergeAlreadyHandled, toPullEntity, runEntity, toIssueEntity, checkStatus, statusCheckSnapshot, combineStatusCheckResults, decodeStatusPage, collectStatusPages, cachedPromise, statusCheckCacheKey, statusSnapshotCacheKey, tokenAuth, repoMetadataCacheKey, directRunKeys, shouldFetchBranchJobs, withCachedChecks, shouldLoadStatusChecks, shouldPreferCompletedOverQueued, branchPullSnapshot, invalidatePullCacheEntries, entityTtlFor, repoFromUrl, repoFromFullName, unresolvedThreadCount } from "./github"
 import { PullEntity, RunEntity as RunEntitySchema } from "../rpc"
 
 describe("mergeResponse", () => {
@@ -456,6 +456,68 @@ describe("status-check caching", () => {
     expect(shouldLoadStatusChecks({ state: "draft" })).toBe(false)
     expect(shouldLoadStatusChecks({ state: "closed" })).toBe(false)
     expect(shouldLoadStatusChecks({ state: "merged" })).toBe(false)
+  })
+})
+
+describe("tokenAuth", () => {
+  test("carries an already-resolved token without re-resolving it", async () => {
+    expect(await tokenAuth("secret")()).toBe("secret")
+    expect(await tokenAuth(undefined)()).toBeUndefined()
+  })
+})
+
+describe("repoMetadataCacheKey", () => {
+  test("is case-insensitive and shared by settings and canonical resolution", () => {
+    const repo = { host: "github.com", owner: "Octo", repo: "Repo" }
+    expect(repoMetadataCacheKey(repo)).toBe("octo/repo")
+    expect(repoMetadataCacheKey({ ...repo, owner: "octo", repo: "repo" })).toBe(repoMetadataCacheKey(repo))
+  })
+})
+
+describe("statusSnapshotCacheKey", () => {
+  test("ignores the client-side queued-supersession preference", () => {
+    const repo = { host: "github.com", owner: "octo", repo: "repo" }
+    const first = statusSnapshotCacheKey(repo, "sha-1", "secret-token")
+    expect(statusSnapshotCacheKey(repo, "sha-1", "secret-token")).toBe(first)
+    expect(statusSnapshotCacheKey(repo, "sha-1", "other-token")).not.toBe(first)
+    expect(statusSnapshotCacheKey(repo, "sha-2", "secret-token")).not.toBe(first)
+    expect(first).not.toContain("secret-token")
+  })
+})
+
+describe("branch-run job discovery", () => {
+  test("recognizes both direct-cache key forms", () => {
+    expect(directRunKeys("octo/repo", 42)).toEqual(["octo/repo#run42", "octo/repo#any42"])
+    expect(shouldFetchBranchJobs("octo/repo", 42, new Set(["octo/repo#run42"]))).toBe(false)
+    expect(shouldFetchBranchJobs("octo/repo", 42, new Set(["octo/repo#any42"]))).toBe(false)
+    expect(shouldFetchBranchJobs("octo/repo", 42, new Set(["octo/repo#run43"]))).toBe(true)
+    expect(shouldFetchBranchJobs("octo/repo", 42, new Set())).toBe(true)
+  })
+
+  test("keeps cached checks but takes every other field from the fresh list", () => {
+    const fresh = {
+      kind: "run" as const,
+      provider: "github",
+      repo: { host: "github.com", owner: "octo", repo: "repo" },
+      id: 42,
+      name: "CI",
+      headBranch: "feat",
+      headSha: "new-sha",
+      status: "running" as const,
+      checks: [],
+      pullRequests: [7],
+      url: "https://github.com/octo/repo/actions/runs/42",
+      updatedAt: 200,
+    }
+    const cached = {
+      ...fresh,
+      headSha: "old-sha",
+      status: "queued" as const,
+      updatedAt: 100,
+      checks: [{ name: "test", status: "succeeded" as const }],
+    }
+    expect(withCachedChecks(fresh, cached)).toEqual({ ...fresh, checks: cached.checks })
+    expect(withCachedChecks(fresh, undefined)).toEqual(fresh)
   })
 })
 

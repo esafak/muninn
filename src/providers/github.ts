@@ -15,6 +15,11 @@ const exec = promisify(execFile)
 
 const API = "https://api.github.com"
 
+/** A fixed auth function built from an already-resolved token. Each top-level
+ * provider method resolves `auth()` once and threads this down, so the many
+ * REST/GraphQL reads in one operation never re-resolve the credential. */
+export const tokenAuth = (token: string | undefined): Auth => async () => token
+
 // ── REST ────────────────────────────────────────────────────────────────────
 
 interface IssueJson {
@@ -413,6 +418,12 @@ export const statusCheckCacheKey = (
   return JSON.stringify([repo.host, repo.owner, repo.repo, headSha, credential, preferCompletedOverQueued])
 }
 
+/** Status identity for one immutable head. The queued-supersession preference
+ * changes only how the raw results are combined, never which results are
+ * fetched, so it must not split the cache for the same head SHA. */
+export const statusSnapshotCacheKey = (repo: RepoRef, headSha: string, token: string | undefined): string =>
+  statusCheckCacheKey(repo, headSha, token)
+
 /** Auth-scoped identity for the branch-runs fan-out, so one window's poll
  * collapses into the shared in-flight result for every other window. */
 export const branchRunsCacheKey = (repo: RepoRef, branch: string, token: string | undefined): string => {
@@ -512,6 +523,9 @@ const statusCheckCache = new Map<string, { at: number; promise: Promise<NonNulla
 const branchRunsCache = new Map<string, { at: number; promise: Promise<BranchRunsResult> }>()
 const repositoryEpochs = new Map<string, number>()
 const repositoryCacheKey = (repo: RepoRef): string => `${repo.owner.toLowerCase()}/${repo.repo.toLowerCase()}`
+/** Shared identity for the single `/repos/{owner}/{repo}` payload read by both
+ * merge-settings and canonical-repo resolution. */
+export const repoMetadataCacheKey = (repo: RepoRef): string => repositoryCacheKey(repo)
 const repositoryEpoch = (repo: RepoRef): number => repositoryEpochs.get(repositoryCacheKey(repo)) ?? 0
 export const invalidatePullCacheEntries = <EntityEntry, BranchEntry>(
   entityCache: Map<string, EntityEntry>,
@@ -771,6 +785,23 @@ export const runEntity = async (repo: RepoRef, run: RunJson, auth: Auth, withChe
     updatedAt: epoch(run.updated_at),
   }
 }
+
+/** A directly hydrated run is cached under the ref's kind (`#run<id>`), or
+ * under `#any<id>` when the transcript ref was bare. Both mean "already read". */
+export const directRunKeys = (repoKey: string, id: number): readonly string[] => [
+  `${repoKey}#run${id}`,
+  `${repoKey}#any${id}`,
+]
+
+/** Branch-listed runs whose direct counterpart was already hydrated get their
+ * checks from that entity instead of paying for a fresh `/jobs` read. */
+export const shouldFetchBranchJobs = (repoKey: string, id: number, cachedKeys: ReadonlySet<string>): boolean =>
+  !directRunKeys(repoKey, id).some((key) => cachedKeys.has(key))
+
+/** Take only `checks` from the cached entity. Jobs change under a stable run
+ * id; identity, status, head and time must come from the fresh list payload. */
+export const withCachedChecks = (fresh: RunEntity, cached: RunEntity | undefined): RunEntity =>
+  cached ? { ...fresh, checks: cached.checks } : fresh
 
 const hydrateRun = async (repo: RepoRef, id: number, auth: Auth): Promise<RunEntity | undefined> => {
   const run = await request<RunJson>(`/repos/${repo.owner}/${repo.repo}/actions/runs/${id}`, auth)
